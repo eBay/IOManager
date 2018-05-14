@@ -1,8 +1,8 @@
-from conans import ConanFile, CMake
+from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "0.1.0"
+    version = "0.1.1"
     license = "Proprietary"
     description = "iomgr"
 
@@ -27,7 +27,4 @@ class IOMgrConan(ConanFile):
         self.copy("*.so", dst="lib", keep_path=False)
 
     def package_info(self):
-        if self.options.shared:
-            self.cpp_info.libs = ['libiomgr.so']
-        else:
-            self.cpp_info.libs = ['libiomgr.a']
+        self.cpp_info.libs = tools.collect_libs(self)
