@@ -333,7 +333,7 @@ void* homeio::iothread(void *obj) {
           */
          num_fds = epoll_wait(iomgr->epollfd_pri[i], events, 
                               MAX_EVENTS, 0);
-         if (num_fds < 1) {
+         if (num_fds < 0) {
             LOGERROR("epoll wait failed: {}", errno);
             continue;
          }
