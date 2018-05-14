@@ -36,7 +36,7 @@ ioMgr::start() {
    for (auto i = 0u; i < num_threads; i++) {
       int rc = pthread_create(&(threads[i].tid), NULL, iothread, this);
       assert(!rc);
-      if (!rc) {
+      if (rc) {
          LOGCRITICAL("Failed to create thread: {}", rc);
          continue;
       }
