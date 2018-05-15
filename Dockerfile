@@ -9,6 +9,7 @@ ENV CONAN_CHANNEL=${CONAN_CHANNEL:-dev}
 
 COPY conanfile.py /tmp/source/
 COPY cmake/ /tmp/source/cmake
+COPY test_package/ /tmp/source/test_package
 COPY CMakeLists.txt /tmp/source/
 COPY src/ /tmp/source/src
 

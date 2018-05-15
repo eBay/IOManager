@@ -2,26 +2,45 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
-#include "iomgr.hpp"
+#include "iomgr_impl.hpp"
 
+extern "C" {
+#include <sys/eventfd.h>
+#include <sys/epoll.h>
+#include <sys/types.h>
+}
+
+#include <cerrno>
 #include <ctime>
 #include <chrono>
 #include <functional>
-#include <sys/types.h>
+#include <vector>
+
 #include <sds_logging/logging.h>
 
-using namespace homeio;
+#include "io_thread.hpp"
 
-using namespace std; 
+namespace iomgr
+{
 
+thread_local int ioMgrImpl::epollfd = 0;
+thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
+   
+struct fd_info {
+   enum {READ = 0, WRITE};
 
-thread_local int ioMgr::epollfd = 0;
-thread_local int ioMgr::epollfd_pri[MAX_PRI] = {};
+   ev_callback cb;
+   int fd;
+   std::atomic<int> is_running[2];
+   int ev;
+   bool is_global;
+   int pri;
+   std::vector<int> ev_fd;
+   std::vector<int> event;
+   void *cookie;
+};
 
-EndPoint::EndPoint(class ioMgr *iomgr):iomgr(iomgr) {
-}
-
-ioMgr::ioMgr(size_t num_ep, size_t num_threads) :
+ioMgrImpl::ioMgrImpl(size_t num_ep, size_t num_threads) :
     num_ep(num_ep),
     num_threads(num_threads),
     threads(num_threads)
@@ -32,33 +51,35 @@ ioMgr::ioMgr(size_t num_ep, size_t num_threads) :
 }
 
 void
-ioMgr::start() {
-   for (auto i = 0u; i < num_threads; i++) {
+ioMgrImpl::start() {
+   for (auto i = 0u; i < num_threads; ++i) {
       int rc = pthread_create(&(threads[i].tid), NULL, iothread, this);
       assert(!rc);
       if (rc) {
          LOGCRITICAL("Failed to create thread: {}", rc);
          continue;
       }
+      LOGDEBUG("Created thread {}", i);
       threads[i].id = i;
       threads[i].inited = false;
    }
 }
 
 void 
-ioMgr::local_init() {
+ioMgrImpl::local_init() {
    struct epoll_event ev;
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
 
    epollfd = epoll_create1(0);
+   LOGDEBUG("EPoll created: {}", epollfd);
 
    if (epollfd < 1) {
       assert(0);
       LOGERROR("epoll_ctl failed: {}", strerror(errno));
    }
 
-   for (auto i = 0; i < MAX_PRI; i++) {
+   for (auto i = 0ul; i < MAX_PRI; ++i) {
       epollfd_pri[i] = epoll_create1(0);
       ev.events = EPOLLET | EPOLLIN | EPOLLOUT;
       ev.data.fd = epollfd_pri[i];
@@ -73,7 +94,7 @@ ioMgr::local_init() {
    info->inited = true;
    info->epollfd_pri = epollfd_pri;
 
-   for(auto i = 0u; i < global_fd.size(); i++) {
+   for(auto i = 0u; i < global_fd.size(); ++i) {
       /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
        * some events can be missed.
        */
@@ -86,45 +107,46 @@ ioMgr::local_init() {
       }
 
       add_local_fd(global_fd[i]->ev_fd[info->id], 
-                   std::bind(&ioMgr::process_evfd, this, std::placeholders::_1, 
+                   std::bind(&ioMgrImpl::process_evfd, this, std::placeholders::_1, 
                              std::placeholders::_2, std::placeholders::_3),
                    EPOLLIN, 1, global_fd[i]);
 
-      LOGERROR("registered global fds");
+      LOGDEBUG("registered global fds");
    }
 
    assert(num_ep == ep_list.size());
    /* initialize all the thread local variables in end point */
-   for (auto i = 0u; i < num_ep; i++) {
+   for (auto i = 0u; i < num_ep; ++i) {
       ep_list[i]->init_local();
    }
 }
 
 void
-ioMgr::wait_for_ready() {
+ioMgrImpl::wait_for_ready() {
    std::unique_lock<std::mutex> lck(cv_mtx);
-   while(!ready) cv.wait(lck);
+   cv.wait(lck, [this] { return ready; });
 }
 
 void 
-ioMgr::add_ep(class EndPoint *ep) {
+ioMgrImpl::add_ep(class EndPoint *ep) {
    ep_list.push_back(ep);
    if (ep_list.size() == num_ep) {
       /* allow threads to run */
       std::unique_lock<std::mutex> lck(cv_mtx);
       ready = true;
-      cv.notify_all();
    }
+   cv.notify_all();
+   LOGDEBUG("Added Endpoint.");
 }
 
 void
-ioMgr::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
+ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
    struct fd_info* info = new struct fd_info;
 
    fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
    info->cb = cb;
-   info->is_running[0] = 0;
-   info->is_running[1] = 0;
+   info->is_running[fd_info::READ] = 0;
+   info->is_running[fd_info::WRITE] = 0;
    info->fd = fd;
    info->ev = iomgr_ev;
    info->is_global = true;
@@ -132,7 +154,7 @@ ioMgr::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
    info->cookie = cookie;
    info->ev_fd.resize(num_threads);
    info->event.resize(num_threads);
-   for (auto i = 0u; i < num_threads; i++) {
+   for (auto i = 0u; i < num_threads; ++i) {
       info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
       info->event[i] = 0;
    }
@@ -141,7 +163,7 @@ ioMgr::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
 
    struct epoll_event ev;
    /* add it to all the threads */
-   for (auto i = 0u; i < num_threads; i++) {
+   for (auto i = 0u; i < num_threads; ++i) {
       ev.events = EPOLLET | info->ev;
       ev.data.ptr = info;
       if (!threads[i].inited) {
@@ -152,14 +174,14 @@ ioMgr::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
          assert(0);
       }
       add_fd_to_thread(i, info->ev_fd[i],
-                       std::bind(&ioMgr::process_evfd, this,
+                       std::bind(&ioMgrImpl::process_evfd, this,
                                  std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
                        EPOLLIN, 1, info);
    }
 }
 
 void
-ioMgr::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
+ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
    /* get local id */
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
@@ -168,7 +190,7 @@ ioMgr::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie)
 }
 
 void 
-ioMgr::add_fd_to_thread(int i, int fd, ev_callback cb, 
+ioMgrImpl::add_fd_to_thread(int i, int fd, ev_callback cb, 
                         int iomgr_ev, int pri, void *cookie) {
    struct epoll_event ev;
    struct fd_info* info = new struct fd_info;
@@ -176,8 +198,8 @@ ioMgr::add_fd_to_thread(int i, int fd, ev_callback cb,
    fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
 
    info->cb = cb;
-   info->is_running[0] = 0;
-   info->is_running[1] = 0;
+   info->is_running[fd_info::READ] = 0;
+   info->is_running[fd_info::WRITE] = 0;
    info->fd = fd;
    info->ev = iomgr_ev;
    info->is_global = false;
@@ -190,27 +212,28 @@ ioMgr::add_fd_to_thread(int i, int fd, ev_callback cb,
                  fd, &ev) == -1) {
       assert(0);
    }
+   LOGDEBUG("Added FD: {}", fd);
    return;
 }
 
 void 
-ioMgr::callback(void *data, uint32_t event) {
+ioMgrImpl::callback(void *data, uint32_t event) {
    struct fd_info *info = (struct fd_info *)data;
    info->cb(info->fd, info->cookie, event);
 }
 
 bool
-ioMgr::can_process(void *data, uint32_t ev) {
+ioMgrImpl::can_process(void *data, uint32_t ev) {
    struct fd_info *info = (struct fd_info *)data;
    int expected = 0;
    int desired = 1;
    bool ret = false;
    if (ev == EPOLLIN) { 
-      ret = info->is_running[READ].compare_exchange_strong(expected, desired, 
+      ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired, 
                                                            std::memory_order_acquire, 
                                                            std::memory_order_acquire);
    } else if (ev == EPOLLOUT) {
-      ret = info->is_running[WRITE].compare_exchange_strong(expected, desired, 
+      ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired, 
                                                             std::memory_order_acquire, 
                                                             std::memory_order_acquire);
    } else {
@@ -225,7 +248,7 @@ ioMgr::can_process(void *data, uint32_t ev) {
 }
 
 void
-ioMgr::fd_reschedule(int fd, uint32_t event) {
+ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
    /* XXX: we might need to take a lock, if we 
     * support dynamic add/remove of FDs. To make  it lockless
     * we should consider fd_info in fd_reschedule.
@@ -238,7 +261,7 @@ ioMgr::fd_reschedule(int fd, uint32_t event) {
    uint64_t min_cnt = UINTMAX_MAX;
    int min_id = 0;
 
-   for(auto i = 0u; i < num_threads; i++) {
+   for(auto i = 0u; i < num_threads; ++i) {
       if (threads[i].count < min_cnt) {
          min_id = i;
          min_cnt = threads[i].count;
@@ -250,7 +273,7 @@ ioMgr::fd_reschedule(int fd, uint32_t event) {
 }
 
 void
-ioMgr::process_evfd(int fd, void *data, uint32_t event) {
+ioMgrImpl::process_evfd(int fd, void *data, uint32_t event) {
    struct fd_info *info = (struct fd_info *)data;
    uint64_t temp;
    pthread_t t = pthread_self();
@@ -269,7 +292,7 @@ ioMgr::process_evfd(int fd, void *data, uint32_t event) {
 }
 
 void
-ioMgr::process_done(int fd, int ev) {
+ioMgrImpl::process_done(int fd, int ev) {
    std::map<int, fd_info*>::iterator it;
    it = fd_info_map.find(fd);
    assert(it->first == fd);
@@ -280,20 +303,20 @@ ioMgr::process_done(int fd, int ev) {
 }
 
 void 
-ioMgr::process_done_impl(void *data, int ev) {
+ioMgrImpl::process_done_impl(void *data, int ev) {
    struct fd_info *info = (struct fd_info *)data;
    if (ev == EPOLLIN) {
-      info->is_running[READ].fetch_sub(1, std::memory_order_release);
+      info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
    } else if (ev == EPOLLOUT) {
-      info->is_running[WRITE].fetch_sub(1, std::memory_order_release);
+      info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
    } else {
       assert(0);
    }
 }
 
 struct thread_info * 
-ioMgr::get_tid_info(pthread_t &tid) {
-   for (auto i = 0u; i < num_threads; i++) {
+ioMgrImpl::get_tid_info(pthread_t &tid) {
+   for (auto i = 0u; i < num_threads; ++i) {
       if (threads[i].tid == tid) {
          return &threads[i];
       }
@@ -302,60 +325,9 @@ ioMgr::get_tid_info(pthread_t &tid) {
    return NULL;
 }
 
-uint64_t 
-get_elapsed_time_ns(homeio::Clock::time_point startTime) {
-   std::chrono::nanoseconds ns = std::chrono::duration_cast
-       < std::chrono::nanoseconds >(Clock::now() - startTime);
-   return ns.count();
-}
-
-#define MAX_EVENTS 20
-void* homeio::iothread(void *obj) {
-   pthread_t t = pthread_self();
-   ioMgr* iomgr = static_cast<ioMgr *>(obj);
-   thread_info *info = iomgr->get_tid_info(t);
-   struct epoll_event fd_events[MAX_PRI];
-   struct epoll_event events[MAX_EVENTS];
-   int num_fds;
-
-   iomgr->wait_for_ready();
-   /* initialize the variables local to a thread */
-   iomgr->local_init();
-
-   info->count = 0;
-   info->time_spent_ns = 0;
-   while (1) {
-      //	LOG(INFO) << "waiting " << info->id;
-      num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
-      for (auto i = 0; i < MAX_PRI; i++) {
-         /* XXX: should it be  go through only
-          * those fds which has the events.
-          */
-         num_fds = epoll_wait(iomgr->epollfd_pri[i], events, 
-                              MAX_EVENTS, 0);
-         if (num_fds < 0) {
-            LOGERROR("epoll wait failed: {}", errno);
-            continue;
-         }
-         //			LOG(INFO) << "waking" << info->id;
-         for (auto i = 0; i < num_fds; i++) {
-            if (iomgr->can_process(events[i].data.ptr, events[i].events)) {
-               Clock::time_point write_startTime = Clock::now();
-               info->count++;
-               iomgr->callback(events[i].data.ptr, 
-                               events[i].events);
-               info->time_spent_ns += get_elapsed_time_ns(write_startTime);
-            } else {
-               //		LOG(INFO) << "can not process in thread" << info->id;
-            }
-         }
-      }
-   }
-}
-
 void
-ioMgr::print_perf_cntrs() {
-   for(auto i = 0u; i < num_threads; i++) {
+ioMgrImpl::print_perf_cntrs() {
+   for(auto i = 0u; i < num_threads; ++i) {
       LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms",
               i,
               threads[i].count,
@@ -365,3 +337,5 @@ ioMgr::print_perf_cntrs() {
       ep->print_perf();
    }
 }
+
+} /* iomgr */ 
