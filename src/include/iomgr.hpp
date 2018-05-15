@@ -3,99 +3,41 @@
 //
 #pragma once
 
-extern "C" {
-#include <sys/eventfd.h>
-#include <sys/epoll.h>
-#include <errno.h>
-}
-
-#include <atomic>
-#include <cassert>
-#include <condition_variable>
+#include <memory>
 #include <functional>
-#include <iostream>
-#include <pthread.h>
-#include <map>
-#include <stdio.h>
-#include <thread>
-#include <vector>
 
-using std::vector;
-namespace homeio {
+namespace iomgr {
 
-typedef std::chrono::steady_clock Clock;
-typedef std::function< void (int fd, void *cookie, uint32_t events) > ev_callback;
+struct ioMgr;
+struct ioMgrImpl;
+using ev_callback = std::function<void(int fd, void *cookie, uint32_t events)>;
 
-class ioMgr;
-void *iothread(void *iomgr);
 class EndPoint {
+ protected:
+   ioMgr *iomgr;
+
  public:
-  ioMgr *iomgr;
-  EndPoint(class ioMgr *iomgr);
-  virtual void init_local() = 0;
-  virtual void print_perf() = 0;
+   explicit EndPoint(ioMgr* iomgr) : iomgr(iomgr) {}
+   virtual ~EndPoint() = default;
+
+   virtual void init_local() = 0;
+   virtual void print_perf() = 0;
 };
 
-struct thread_info {
-   pthread_t tid;
-   uint64_t count;
-   uint64_t time_spent_ns;
-   int id;
-   int ev_fd;
-   int inited;
-   int *epollfd_pri;
-};
+struct ioMgr {
+   ioMgr(size_t const num_ep, size_t const num_threads);
+   ~ioMgr();
 
-#define READ 0
-#define WRITE 1
-struct fd_info {
-   ev_callback cb;
-   int fd;
-   std::atomic<int> is_running[2];
-   int ev;
-   bool is_global;
-   int pri;
-   vector<int> ev_fd;
-   vector<int> event;
-   void *cookie;
-};
+   void start();
+   void add_ep(EndPoint *ep);
+   void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
+   void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
+   void print_perf_cntrs();
+   void fd_reschedule(int const fd, uint32_t const event);
+   void process_done(int const fd, int const ev);
 
-#define MAX_PRI 10
-
-class ioMgr {
  private:
-
-  size_t num_ep;
-  size_t num_threads;
-  vector<class EndPoint *> ep_list;
-  std::map<int, fd_info *> fd_info_map;
-  std::mutex map_mtx;
-  std::mutex cv_mtx;
-  std::condition_variable cv;
-  bool ready;
- public: 
-  vector<thread_info> threads;
-  vector <struct fd_info *>global_fd; /* fds shared between the threads */
-  static thread_local int epollfd_pri[MAX_PRI];
-  static thread_local int epollfd;
-
-  ioMgr(size_t num_ep, size_t num_threads);
-  void start();
-  void local_init();
-  void add_ep(class EndPoint *ep);
-  void add_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
-  void add_local_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
-  void add_fd_to_thread(int id, int fd, ev_callback cb, int ev, 
-                        int pri, void *cookie);
-  void callback(void *data, uint32_t ev);
-  void process_done_impl(void *data,int ev);
-  struct thread_info *get_thread_info(pthread_t &tid);
-  void print_perf_cntrs();
-  bool can_process(void *data, uint32_t event);
-  void fd_reschedule(int fd, uint32_t event);
-  void process_evfd(int fd, void *data, uint32_t event);
-  struct thread_info *get_tid_info(pthread_t &tid);
-  void process_done(int fd, int ev);
-  void wait_for_ready();
+   std::unique_ptr<ioMgrImpl> _impl;
 };
-}
+
+} /* iomgr */

@@ -18,7 +18,7 @@ int main(int argc, char* argv[]) {
    spdlog::set_level(log_level::trace);
    logger_ = spdlog::stdout_color_mt("example");
 
-   homeio::ioMgr io_mgr(2, 2);
+   iomgr::ioMgr io_mgr(2, 2);
    io_mgr.print_perf_cntrs();
    LOGINFO("success...");
 
