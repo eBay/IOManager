@@ -2,17 +2,17 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "1.0.0"
+    version = "1.0.1"
     license = "Proprietary"
     description = "iomgr"
 
     settings = "os", "compiler", "build_type", "arch"
-    options = {"shared": [True, False]}
+    options = {"shared": [True, False], "fPIC": [True]}
 
     build_requires = (("sds_logging/[>=0.1.2,<1.0]@demo/dev"))
 
     generators = "cmake"
-    default_options = "shared=False"
+    default_options = "shared=False", "fPIC=True"
     exports_sources = "*"
 
     def build(self):
