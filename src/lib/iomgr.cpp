@@ -41,9 +41,9 @@ struct fd_info {
 };
 
 ioMgrImpl::ioMgrImpl(size_t num_ep, size_t num_threads) :
+    threads(num_threads),
     num_ep(num_ep),
-    num_threads(num_threads),
-    threads(num_threads)
+    num_threads(num_threads)
 {
    ready = false;
    global_fd.reserve(num_ep * 10);

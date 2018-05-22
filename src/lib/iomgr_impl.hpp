@@ -33,17 +33,7 @@ struct thread_info {
 };
 
 
-class ioMgrImpl {
-  size_t num_ep;
-  size_t num_threads;
-  std::vector<class EndPoint *> ep_list;
-  std::map<int, fd_info *> fd_info_map;
-  std::mutex map_mtx;
-  std::mutex cv_mtx;
-  std::condition_variable cv;
-  bool ready;
-
- public: 
+struct ioMgrImpl {
   std::vector<thread_info> threads;
   std::vector <struct fd_info *>global_fd; /* fds shared between the threads */
   static thread_local int epollfd_pri[MAX_PRI];
@@ -67,6 +57,16 @@ class ioMgrImpl {
   struct thread_info *get_tid_info(pthread_t &tid);
   void process_done(int fd, int ev);
   void wait_for_ready();
+
+ private:
+  size_t num_ep;
+  size_t num_threads;
+  std::vector<class EndPoint *> ep_list;
+  std::map<int, fd_info *> fd_info_map;
+  std::mutex map_mtx;
+  std::mutex cv_mtx;
+  std::condition_variable cv;
+  bool ready;
 };
 
 } /* iomgr */ 
