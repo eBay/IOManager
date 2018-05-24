@@ -15,6 +15,7 @@ COPY src/ /tmp/source/src
 
 RUN conan create /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
 RUN conan create -pr debug /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
+RUN conan create -pr clang-default /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
 
 ARG CONAN_PASS=${CONAN_USER}
 RUN conan user -r origin -p "${CONAN_PASS}" sds;
