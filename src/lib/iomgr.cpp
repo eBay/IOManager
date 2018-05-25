@@ -228,15 +228,18 @@ ioMgrImpl::can_process(void *data, uint32_t ev) {
    int expected = 0;
    int desired = 1;
    bool ret = false;
-   if (ev == EPOLLIN) { 
+   if (ev & EPOLLIN) {
       ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired, 
                                                            std::memory_order_acquire, 
                                                            std::memory_order_acquire);
-   } else if (ev == EPOLLOUT) {
+   } else if (ev & EPOLLOUT) {
       ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired, 
                                                             std::memory_order_acquire, 
                                                             std::memory_order_acquire);
+   } else if (ev & EPOLLERR) {
+      LOGDEBUG("Ignoring EPOLLERR");
    } else {
+      LOGCRITICAL("Unknown event: {}", ev);
       assert(0);
    }
    if (ret) {
@@ -305,9 +308,9 @@ ioMgrImpl::process_done(int fd, int ev) {
 void 
 ioMgrImpl::process_done_impl(void *data, int ev) {
    struct fd_info *info = (struct fd_info *)data;
-   if (ev == EPOLLIN) {
+   if (ev & EPOLLIN) {
       info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
-   } else if (ev == EPOLLOUT) {
+   } else if (ev & EPOLLOUT) {
       info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
    } else {
       assert(0);
