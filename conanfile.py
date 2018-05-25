@@ -2,14 +2,14 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "1.0.2"
+    version = "1.0.3"
     license = "Proprietary"
     description = "iomgr"
 
     settings = "os", "compiler", "build_type", "arch"
     options = {"shared": [True, False], "fPIC": [True]}
 
-    build_requires = (("sds_logging/[>=0.1.2,<1.0]@demo/dev"))
+    build_requires = (("sds_logging/[>=0.1.4,<1.0]@demo/dev"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
