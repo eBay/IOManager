@@ -236,8 +236,9 @@ ioMgrImpl::can_process(void *data, uint32_t ev) {
       ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired, 
                                                             std::memory_order_acquire, 
                                                             std::memory_order_acquire);
-   } else if (ev & EPOLLERR) {
-      LOGDEBUG("Ignoring EPOLLERR");
+   } else if (ev & EPOLLERR || ev & EPOLLHUP) {
+      LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
+      assert(0);
    } else {
       LOGCRITICAL("Unknown event: {}", ev);
       assert(0);
