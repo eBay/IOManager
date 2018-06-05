@@ -12,6 +12,9 @@ ioMgr::~ioMgr() = default;
 void ioMgr::start()
 {_impl->start();}
 
+void ioMgr::stop()
+{_impl->stop();}
+
 void ioMgr::add_ep(EndPoint *ep)
 {_impl->add_ep(ep);}
 

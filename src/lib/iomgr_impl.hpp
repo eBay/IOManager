@@ -8,6 +8,7 @@ extern "C" {
 #include <event.h>
 #include <sys/time.h>
 }
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -39,13 +40,15 @@ struct ioMgrImpl {
   static thread_local int epollfd_pri[MAX_PRI];
   static thread_local int epollfd;
 
-  ioMgrImpl(size_t num_ep, size_t num_threads);
+  ioMgrImpl(size_t const num_ep, size_t const num_threads);
+  ~ioMgrImpl();
   void start();
+  void stop();
   void local_init();
   void add_ep(class EndPoint *ep);
   void add_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
   void add_local_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
-  void add_fd_to_thread(int id, int fd, ev_callback cb, int ev, 
+  void add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb, int ev,
                         int pri, void *cookie);
   void callback(void *data, uint32_t ev);
   void process_done_impl(void *data,int ev);
@@ -56,16 +59,17 @@ struct ioMgrImpl {
   void process_evfd(int fd, void *data, uint32_t event);
   struct thread_info *get_tid_info(pthread_t &tid);
   void process_done(int fd, int ev);
+  bool is_running();
   void wait_for_ready();
 
  private:
   size_t num_ep;
-  size_t num_threads;
   std::vector<class EndPoint *> ep_list;
   std::map<int, fd_info *> fd_info_map;
   std::mutex map_mtx;
   std::mutex cv_mtx;
   std::condition_variable cv;
+  std::atomic_bool running;
   bool ready;
 };
 

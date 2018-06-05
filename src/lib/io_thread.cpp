@@ -13,6 +13,8 @@ extern "C" {
 
 #include "iomgr_impl.hpp"
 
+#define unlikely(x)     __builtin_expect((x),0)
+
 namespace iomgr
 {
 
@@ -42,10 +44,10 @@ void* iothread(void *obj) {
 
    info->count = 0;
    info->time_spent_ns = 0;
-   while (1) {
+   while (iomgr->is_running()) {
       LOGTRACE("Waiting");
-      //	LOG(INFO) << "waiting " << info->id;
       num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
+      if (unlikely(!iomgr->is_running())) break;
       for (auto i = 0ul; i < MAX_PRI; ++i) {
          /* XXX: should it be  go through only
           * those fds which has the events.
@@ -56,7 +58,6 @@ void* iothread(void *obj) {
             LOGERROR("epoll wait failed: {}", errno);
             continue;
          }
-         //			LOG(INFO) << "waking" << info->id;
          for (auto i = 0; i < num_fds; ++i) {
             LOGTRACE("Checking: {}", i);
             if (iomgr->can_process(events[i].data.ptr, events[i].events)) {
@@ -68,11 +69,11 @@ void* iothread(void *obj) {
                info->time_spent_ns += get_elapsed_time_ns(write_startTime);
                LOGTRACE("Call took: {}ns", info->time_spent_ns);
             } else {
-               //		LOG(INFO) << "can not process in thread" << info->id;
             }
          }
       }
    }
+   return nullptr;
 }
 
 } /* iomgr */ 

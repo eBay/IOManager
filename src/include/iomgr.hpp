@@ -29,6 +29,7 @@ struct ioMgr {
    ~ioMgr();
 
    void start();
+   void stop();
    void add_ep(EndPoint *ep);
    void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
    void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
