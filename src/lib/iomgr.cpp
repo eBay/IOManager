@@ -75,7 +75,11 @@ ioMgrImpl::stop() {
    LOGDEBUG("Terminating threadpool");
    // Set running to false and notify all epoll waits
    running.store(false, std::memory_order_relaxed);
-   if (0 != epollfd) write(epollfd, &ready, sizeof(ready));
+   if (0 != epollfd) {
+      auto rc = write(epollfd, &ready, sizeof(ready));
+      if (!rc) LOGCRITICAL("Failed to wake up io threads!");
+      assert(0 != rc);
+   }
 
    // Re-join threads
    for (auto const& t_info : threads) {
