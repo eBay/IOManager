@@ -26,6 +26,7 @@ namespace iomgr
 thread_local int ioMgrImpl::epollfd = 0;
 thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
 static std::shared_ptr<ioMgrImpl> singleton;
+static std::atomic_bool running;
 
 struct fd_info {
    enum {READ = 0, WRITE};
@@ -46,6 +47,7 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
     num_ep(num_ep)
 {
    assert(!singleton);
+   running.store(false, std::memory_order_relaxed);
    ready = num_ep == 0;
    global_fd.reserve(num_ep * 10);
    LOGDEBUG("Starting ready: {}", ready);
@@ -65,6 +67,7 @@ ioMgrImpl::~ioMgrImpl() = default;
 
 void
 ioMgrImpl::start() {
+   running.store(true, std::memory_order_relaxed);
    for (auto i = 0u; threads.size() > i; ++i) {
       auto& t_info = threads[i];
       auto singleton_cpy = new std::shared_ptr<ioMgrImpl>(singleton);
@@ -146,7 +149,7 @@ ioMgrImpl::local_init() {
 
 bool
 ioMgrImpl::is_running() const {
-    return (!!singleton);
+    return running.load(std::memory_order_relaxed);
 }
 
 void
