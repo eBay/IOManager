@@ -3,17 +3,13 @@
 namespace iomgr
 {
 
-ioMgr::ioMgr(size_t const num_ep, size_t const num_threads) :
-    _impl(new ioMgrImpl(num_ep, num_threads))
-{ }
+ioMgr::ioMgr(size_t const num_ep, size_t const num_threads)
+{ _impl = ioMgrImpl::create(num_ep, num_threads); }
 
 ioMgr::~ioMgr() = default;
 
 void ioMgr::start()
 {_impl->start();}
-
-void ioMgr::stop()
-{_impl->stop();}
 
 void ioMgr::add_ep(EndPoint *ep)
 {_impl->add_ep(ep);}

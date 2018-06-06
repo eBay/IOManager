@@ -29,7 +29,6 @@ struct ioMgr {
    ~ioMgr();
 
    void start();
-   void stop();
    void add_ep(EndPoint *ep);
    void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
    void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
@@ -38,7 +37,7 @@ struct ioMgr {
    void process_done(int const fd, int const ev);
 
  private:
-   std::unique_ptr<ioMgrImpl> _impl;
+   std::shared_ptr<ioMgrImpl> _impl;
 };
 
 } /* iomgr */

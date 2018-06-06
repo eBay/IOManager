@@ -15,15 +15,16 @@ std::shared_ptr<spdlog::logger> GetLogger() {
 }
 
 int main(int argc, char* argv[]) {
-   spdlog::set_level(log_level::trace);
+   spdlog::set_level(log_level::debug);
    spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
    logger_ = spdlog::stdout_color_mt("example");
 
-   iomgr::ioMgr io_mgr(0, 2);
-   LOGINFO("Created ioMgr");
-   io_mgr.start();
-   io_mgr.print_perf_cntrs();
-   io_mgr.stop();
+   {
+      iomgr::ioMgr io_mgr(0, 8);
+      LOGINFO("Created ioMgr");
+      io_mgr.start();
+      io_mgr.print_perf_cntrs();
+   }
    LOGINFO("success...");
 
    return 0;

@@ -8,7 +8,6 @@ extern "C" {
 #include <event.h>
 #include <sys/time.h>
 }
-#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -40,10 +39,11 @@ struct ioMgrImpl {
   static thread_local int epollfd_pri[MAX_PRI];
   static thread_local int epollfd;
 
+  static std::shared_ptr<ioMgrImpl> create(size_t const num_ep, size_t const num_threads);
+
   ioMgrImpl(size_t const num_ep, size_t const num_threads);
   ~ioMgrImpl();
   void start();
-  void stop();
   void local_init();
   void add_ep(class EndPoint *ep);
   void add_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
@@ -59,8 +59,7 @@ struct ioMgrImpl {
   void process_evfd(int fd, void *data, uint32_t event);
   struct thread_info *get_tid_info(pthread_t &tid);
   void process_done(int fd, int ev);
-  bool is_running();
-  void wait_for_ready();
+  bool is_running() const;
 
  private:
   size_t num_ep;
@@ -69,7 +68,6 @@ struct ioMgrImpl {
   std::mutex map_mtx;
   std::mutex cv_mtx;
   std::condition_variable cv;
-  std::atomic_bool running;
   bool ready;
 };
 

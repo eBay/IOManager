@@ -25,7 +25,8 @@ namespace iomgr
 
 thread_local int ioMgrImpl::epollfd = 0;
 thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
-   
+static std::shared_ptr<ioMgrImpl> singleton;
+
 struct fd_info {
    enum {READ = 0, WRITE};
 
@@ -44,57 +45,57 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
     threads(num_threads),
     num_ep(num_ep)
 {
+   assert(!singleton);
    ready = num_ep == 0;
    global_fd.reserve(num_ep * 10);
    LOGDEBUG("Starting ready: {}", ready);
 }
 
-ioMgrImpl::~ioMgrImpl() {
-   stop();
+std::shared_ptr<ioMgrImpl>
+ioMgrImpl::create(size_t const num_ep, size_t const num_threads) {
+   static std::once_flag singleton_flag;
+   std::call_once(singleton_flag,
+                  [num_ep, num_threads] () {
+                      singleton = std::make_shared<ioMgrImpl>(num_ep, num_threads);
+                 });
+   return singleton;
 }
+
+ioMgrImpl::~ioMgrImpl() = default;
 
 void
 ioMgrImpl::start() {
-   running.store(true, std::memory_order_relaxed);
    for (auto i = 0u; threads.size() > i; ++i) {
       auto& t_info = threads[i];
-      int rc = pthread_create(&(t_info.tid), nullptr, iothread, this);
+      auto singleton_cpy = new std::shared_ptr<ioMgrImpl>(singleton);
+      int rc = pthread_create(&(t_info.tid), nullptr, iothread, singleton_cpy);
       assert(!rc);
       if (rc) {
          LOGCRITICAL("Failed to create thread: {}", rc);
          continue;
       }
-      LOGDEBUG("Created thread...", i);
+      LOGTRACE("Created thread...", i);
       t_info.id = i;
       t_info.inited = false;
+      pthread_detach(t_info.tid);
    }
 }
 
 void
-ioMgrImpl::stop() {
-   LOGDEBUG("Terminating threadpool");
-   // Set running to false and notify all epoll waits
-   running.store(false, std::memory_order_relaxed);
-   if (0 != epollfd) {
-      auto rc = write(epollfd, &ready, sizeof(ready));
-      if (!rc) LOGCRITICAL("Failed to wake up io threads!");
-      assert(0 != rc);
-   }
-
-   // Re-join threads
-   for (auto const& t_info : threads) {
-      pthread_join(t_info.tid, nullptr);
-   }
-}
-
-void 
 ioMgrImpl::local_init() {
+   {
+      std::unique_lock<std::mutex> lck(cv_mtx);
+      cv.wait(lck, [this] { return ready; });
+   }
+   if (!is_running()) return;
+   LOGTRACE("Initializing locals.");
+
    struct epoll_event ev;
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
 
    epollfd = epoll_create1(0);
-   LOGDEBUG("EPoll created: {}", epollfd);
+   LOGTRACE("EPoll created: {}", epollfd);
 
    if (epollfd < 1) {
       assert(0);
@@ -144,17 +145,11 @@ ioMgrImpl::local_init() {
 }
 
 bool
-ioMgrImpl::is_running() {
-    return running.load(std::memory_order_relaxed);
+ioMgrImpl::is_running() const {
+    return (!!singleton);
 }
 
 void
-ioMgrImpl::wait_for_ready() {
-   std::unique_lock<std::mutex> lck(cv_mtx);
-   cv.wait(lck, [this] { return ready; });
-}
-
-void 
 ioMgrImpl::add_ep(class EndPoint *ep) {
    ep_list.push_back(ep);
    if (ep_list.size() == num_ep) {
@@ -163,7 +158,7 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
       ready = true;
    }
    cv.notify_all();
-   LOGDEBUG("Added Endpoint.");
+   LOGTRACE("Added Endpoint.");
 }
 
 void

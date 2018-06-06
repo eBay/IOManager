@@ -13,6 +13,7 @@ extern "C" {
 
 #include "iomgr_impl.hpp"
 
+#define likely(x)     __builtin_expect((x),1)
 #define unlikely(x)     __builtin_expect((x),0)
 
 namespace iomgr
@@ -30,21 +31,20 @@ get_elapsed_time_ns(Clock::time_point startTime) {
 #define MAX_EVENTS 20
 void* iothread(void *obj) {
    pthread_t t = pthread_self();
-   auto iomgr = static_cast<ioMgrImpl*>(obj);
+   auto iomgr = *static_cast<std::shared_ptr<ioMgrImpl>*>(obj);
    thread_info *info = iomgr->get_tid_info(t);
    struct epoll_event fd_events[MAX_PRI];
    struct epoll_event events[MAX_EVENTS];
    int num_fds;
 
-   LOGTRACE("Becoming ready.");
-   iomgr->wait_for_ready();
-   /* initialize the variables local to a thread */
-   LOGTRACE("Initializing locals.");
-   iomgr->local_init();
-
-   info->count = 0;
-   info->time_spent_ns = 0;
-   while (iomgr->is_running()) {
+   if (likely(iomgr->is_running())) {
+      /* initialize the variables local to a thread */
+      LOGTRACE("Becoming ready.");
+      iomgr->local_init();
+      info->count = 0;
+      info->time_spent_ns = 0;
+   }
+   while (likely(iomgr->is_running())) {
       LOGTRACE("Waiting");
       num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
       if (unlikely(!iomgr->is_running())) break;
