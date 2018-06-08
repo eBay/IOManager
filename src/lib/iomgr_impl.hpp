@@ -8,6 +8,7 @@ extern "C" {
 #include <event.h>
 #include <sys/time.h>
 }
+#include <atomic>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -33,7 +34,7 @@ struct thread_info {
 };
 
 
-struct ioMgrImpl {
+struct ioMgrImpl : public std::enable_shared_from_this<ioMgrImpl> {
   std::vector<thread_info> threads;
   std::vector <struct fd_info *>global_fd; /* fds shared between the threads */
   static thread_local int epollfd_pri[MAX_PRI];
@@ -69,6 +70,7 @@ struct ioMgrImpl {
   std::mutex cv_mtx;
   std::condition_variable cv;
   bool ready;
+  std::atomic_bool running;
 };
 
 } /* iomgr */ 

@@ -25,8 +25,6 @@ namespace iomgr
 
 thread_local int ioMgrImpl::epollfd = 0;
 thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
-static std::shared_ptr<ioMgrImpl> singleton;
-static std::atomic_bool running;
 
 struct fd_info {
    enum {READ = 0, WRITE};
@@ -44,23 +42,12 @@ struct fd_info {
 
 ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
     threads(num_threads),
-    num_ep(num_ep)
+    num_ep(num_ep),
+    running(false)
 {
-   assert(!singleton);
-   running.store(false, std::memory_order_relaxed);
    ready = num_ep == 0;
    global_fd.reserve(num_ep * 10);
    LOGDEBUG("Starting ready: {}", ready);
-}
-
-std::shared_ptr<ioMgrImpl>
-ioMgrImpl::create(size_t const num_ep, size_t const num_threads) {
-   static std::once_flag singleton_flag;
-   std::call_once(singleton_flag,
-                  [num_ep, num_threads] () {
-                      singleton = std::make_shared<ioMgrImpl>(num_ep, num_threads);
-                 });
-   return singleton;
 }
 
 ioMgrImpl::~ioMgrImpl() = default;
@@ -70,8 +57,8 @@ ioMgrImpl::start() {
    running.store(true, std::memory_order_relaxed);
    for (auto i = 0u; threads.size() > i; ++i) {
       auto& t_info = threads[i];
-      auto singleton_cpy = new std::shared_ptr<ioMgrImpl>(singleton);
-      int rc = pthread_create(&(t_info.tid), nullptr, iothread, singleton_cpy);
+      auto iomgr_copy = new std::shared_ptr<ioMgrImpl>(shared_from_this());
+      int rc = pthread_create(&(t_info.tid), nullptr, iothread, iomgr_copy);
       assert(!rc);
       if (rc) {
          LOGCRITICAL("Failed to create thread: {}", rc);
@@ -132,9 +119,9 @@ ioMgrImpl::local_init() {
          LOGERROR("epoll_ctl failed: {}", strerror(errno));
       }
 
-      add_local_fd(global_fd[i]->ev_fd[info->id], 
-                   std::bind(&ioMgrImpl::process_evfd, this, std::placeholders::_1, 
-                             std::placeholders::_2, std::placeholders::_3),
+      add_local_fd(global_fd[i]->ev_fd[info->id],
+                   [this] (int fd, void* cookie, uint32_t events)
+                   { process_evfd(fd, cookie, events); },
                    EPOLLIN, 1, global_fd[i]);
 
       LOGDEBUG("registered global fds");
@@ -200,8 +187,8 @@ ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
          assert(0);
       }
       add_fd_to_thread(t_info, info->ev_fd[i],
-                       std::bind(&ioMgrImpl::process_evfd, this,
-                                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+                       [this] (int fd, void* cookie, uint32_t events)
+                       { process_evfd(fd, cookie, events); },
                        EPOLLIN, 1, info);
    }
 }
