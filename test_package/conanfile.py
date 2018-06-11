@@ -4,7 +4,7 @@ import os
 class FireFlyTestConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     generators = "cmake"
-    build_requires = (("sds_logging/[>=0.1,<1.0]@demo/dev"));
+    build_requires = (("sds_logging/[>=1.0,<2.0]@demo/dev"));
 
     def build(self):
         cmake = CMake(self)

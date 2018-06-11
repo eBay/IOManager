@@ -2,3 +2,5 @@
 *.pyc
 test_package/build
 
+.idea/
+cmake-build*
