@@ -4,3 +4,5 @@ test_package/build
 cmake-build*
 .idea/
 
+.idea/
+cmake-build*
