@@ -10,11 +10,11 @@ class IOMgrConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     options = {"shared": [True, False], "fPIC": [True]}
 
-    build_requires = (("sds_logging/[>=1.0.0,<2.0]@demo/dev"))
+    build_requires = (("sds_logging/1.0.0@sds/stable"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
-    exports_sources = "*"
+    exports_sources = "src/*", "cmake/*", "CMakeLists.txt"
 
     # These are not proper Conan dependencies, but support building
     # packages outside the official SDS build image. If you want to support
