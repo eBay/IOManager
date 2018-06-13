@@ -1,4 +1,5 @@
 from conans import ConanFile, CMake, tools
+from conans.tools import os_info
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
@@ -9,11 +10,32 @@ class IOMgrConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     options = {"shared": [True, False], "fPIC": [True]}
 
-    build_requires = (("sds_logging/[>=0.1.4,<1.0]@demo/dev"))
+    build_requires = (("sds_logging/1.0.0@sds/stable"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
     exports_sources = "*"
+
+    # These are not proper Conan dependencies, but support building
+    # packages outside the official SDS build image. If you want to support
+    # an OS/Platform that isn't listed, you'll need to add it yourself
+    def system_requirements(self):
+        pkgs = list()
+        if os_info.linux_distro == "ubuntu":
+            pkgs.append("libgoogle-perftools-dev")
+            pkgs.append("libevent-dev")
+            if os_info.os_version < "17":
+                pkgs.append("g++-5")
+            elif os_info.os_version < "18":
+                pkgs.append("g++-6")
+            elif os_info.os_version < "19":
+                pkgs.append("g++-7")
+            else:
+                pkgs.append("g++")
+
+        installer = tools.SystemPackageTool()
+        for pkg in pkgs:
+            installer.install(packages=pkg, update=False)
 
     def build(self):
         cmake = CMake(self)
