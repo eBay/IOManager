@@ -37,7 +37,7 @@ struct ioMgr {
    void process_done(int const fd, int const ev);
 
  private:
-   std::unique_ptr<ioMgrImpl> _impl;
+   std::shared_ptr<ioMgrImpl> _impl;
 };
 
 } /* iomgr */

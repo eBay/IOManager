@@ -3,9 +3,8 @@
 namespace iomgr
 {
 
-ioMgr::ioMgr(size_t const num_ep, size_t const num_threads) :
-    _impl(new ioMgrImpl(num_ep, num_threads))
-{ }
+ioMgr::ioMgr(size_t const num_ep, size_t const num_threads)
+{ _impl = std::make_shared<ioMgrImpl>(num_ep, num_threads); }
 
 ioMgr::~ioMgr() = default;
 

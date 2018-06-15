@@ -25,7 +25,7 @@ namespace iomgr
 
 thread_local int ioMgrImpl::epollfd = 0;
 thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
-   
+
 struct fd_info {
    enum {READ = 0, WRITE};
 
@@ -40,39 +40,52 @@ struct fd_info {
    void *cookie;
 };
 
-ioMgrImpl::ioMgrImpl(size_t num_ep, size_t num_threads) :
+ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
     threads(num_threads),
     num_ep(num_ep),
-    num_threads(num_threads)
+    running(false)
 {
-   ready = false;
+   ready = num_ep == 0;
    global_fd.reserve(num_ep * 10);
-   threads.resize(num_threads);
+   LOGDEBUG("Starting ready: {}", ready);
 }
+
+ioMgrImpl::~ioMgrImpl() = default;
 
 void
 ioMgrImpl::start() {
-   for (auto i = 0u; i < num_threads; ++i) {
-      int rc = pthread_create(&(threads[i].tid), NULL, iothread, this);
+   running.store(true, std::memory_order_relaxed);
+   for (auto i = 0u; threads.size() > i; ++i) {
+      auto& t_info = threads[i];
+      auto iomgr_copy = new std::shared_ptr<ioMgrImpl>(shared_from_this());
+      int rc = pthread_create(&(t_info.tid), nullptr, iothread, iomgr_copy);
       assert(!rc);
       if (rc) {
          LOGCRITICAL("Failed to create thread: {}", rc);
          continue;
       }
-      LOGDEBUG("Created thread {}", i);
-      threads[i].id = i;
-      threads[i].inited = false;
+      LOGTRACE("Created thread...", i);
+      t_info.id = i;
+      t_info.inited = false;
+      pthread_detach(t_info.tid);
    }
 }
 
-void 
+void
 ioMgrImpl::local_init() {
+   {
+      std::unique_lock<std::mutex> lck(cv_mtx);
+      cv.wait(lck, [this] { return ready; });
+   }
+   if (!is_running()) return;
+   LOGTRACE("Initializing locals.");
+
    struct epoll_event ev;
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
 
    epollfd = epoll_create1(0);
-   LOGDEBUG("EPoll created: {}", epollfd);
+   LOGTRACE("EPoll created: {}", epollfd);
 
    if (epollfd < 1) {
       assert(0);
@@ -106,9 +119,9 @@ ioMgrImpl::local_init() {
          LOGERROR("epoll_ctl failed: {}", strerror(errno));
       }
 
-      add_local_fd(global_fd[i]->ev_fd[info->id], 
-                   std::bind(&ioMgrImpl::process_evfd, this, std::placeholders::_1, 
-                             std::placeholders::_2, std::placeholders::_3),
+      add_local_fd(global_fd[i]->ev_fd[info->id],
+                   [this] (int fd, void* cookie, uint32_t events)
+                   { process_evfd(fd, cookie, events); },
                    EPOLLIN, 1, global_fd[i]);
 
       LOGDEBUG("registered global fds");
@@ -121,13 +134,12 @@ ioMgrImpl::local_init() {
    }
 }
 
-void
-ioMgrImpl::wait_for_ready() {
-   std::unique_lock<std::mutex> lck(cv_mtx);
-   cv.wait(lck, [this] { return ready; });
+bool
+ioMgrImpl::is_running() const {
+    return running.load(std::memory_order_relaxed);
 }
 
-void 
+void
 ioMgrImpl::add_ep(class EndPoint *ep) {
    ep_list.push_back(ep);
    if (ep_list.size() == num_ep) {
@@ -136,7 +148,7 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
       ready = true;
    }
    cv.notify_all();
-   LOGDEBUG("Added Endpoint.");
+   LOGTRACE("Added Endpoint.");
 }
 
 void
@@ -152,9 +164,9 @@ ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
    info->is_global = true;
    info->pri = pri;
    info->cookie = cookie;
-   info->ev_fd.resize(num_threads);
-   info->event.resize(num_threads);
-   for (auto i = 0u; i < num_threads; ++i) {
+   info->ev_fd.resize(threads.size());
+   info->event.resize(threads.size());
+   for (auto i = 0u; i < threads.size(); ++i) {
       info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
       info->event[i] = 0;
    }
@@ -163,19 +175,20 @@ ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
 
    struct epoll_event ev;
    /* add it to all the threads */
-   for (auto i = 0u; i < num_threads; ++i) {
+   for (auto i = 0u; threads.size() > i; ++i) {
+      auto& t_info = threads[i];
       ev.events = EPOLLET | info->ev;
       ev.data.ptr = info;
-      if (!threads[i].inited) {
+      if (!t_info.inited) {
          continue;
       }	
-      if (epoll_ctl(threads[i].epollfd_pri[pri], EPOLL_CTL_ADD,
+      if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
                     fd, &ev) == -1) {
          assert(0);
       }
-      add_fd_to_thread(i, info->ev_fd[i],
-                       std::bind(&ioMgrImpl::process_evfd, this,
-                                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+      add_fd_to_thread(t_info, info->ev_fd[i],
+                       [this] (int fd, void* cookie, uint32_t events)
+                       { process_evfd(fd, cookie, events); },
                        EPOLLIN, 1, info);
    }
 }
@@ -186,11 +199,11 @@ ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *coo
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
 
-   add_fd_to_thread(info->id, fd, cb, iomgr_ev, pri, cookie);
+   add_fd_to_thread(*info, fd, cb, iomgr_ev, pri, cookie);
 }
 
 void 
-ioMgrImpl::add_fd_to_thread(int i, int fd, ev_callback cb, 
+ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
                         int iomgr_ev, int pri, void *cookie) {
    struct epoll_event ev;
    struct fd_info* info = new struct fd_info;
@@ -208,7 +221,7 @@ ioMgrImpl::add_fd_to_thread(int i, int fd, ev_callback cb,
 
    ev.events = EPOLLET | iomgr_ev;
    ev.data.ptr = info;
-   if (epoll_ctl(threads[i].epollfd_pri[pri], EPOLL_CTL_ADD, 
+   if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
                  fd, &ev) == -1) {
       assert(0);
    }
@@ -265,7 +278,7 @@ ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
    uint64_t min_cnt = UINTMAX_MAX;
    int min_id = 0;
 
-   for(auto i = 0u; i < num_threads; ++i) {
+   for(auto i = 0u; threads.size() > i; ++i) {
       if (threads[i].count < min_cnt) {
          min_id = i;
          min_cnt = threads[i].count;
@@ -320,18 +333,18 @@ ioMgrImpl::process_done_impl(void *data, int ev) {
 
 struct thread_info * 
 ioMgrImpl::get_tid_info(pthread_t &tid) {
-   for (auto i = 0u; i < num_threads; ++i) {
-      if (threads[i].tid == tid) {
-         return &threads[i];
+   for (auto& t_info: threads) {
+      if (t_info.tid == tid) {
+         return &t_info;
       }
    }
    assert(0);
-   return NULL;
+   return nullptr;
 }
 
 void
 ioMgrImpl::print_perf_cntrs() {
-   for(auto i = 0u; i < num_threads; ++i) {
+   for(auto i = 0u; threads.size() > i; ++i) {
       LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms",
               i,
               threads[i].count,

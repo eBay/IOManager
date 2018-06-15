@@ -3,7 +3,7 @@ from conans.tools import os_info
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "1.0.4"
+    version = "1.0.5"
     license = "Proprietary"
     description = "iomgr"
 
@@ -14,7 +14,7 @@ class IOMgrConan(ConanFile):
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
-    exports_sources = "*"
+    exports_sources = "src/*", "cmake/*", "CMakeLists.txt"
 
     # These are not proper Conan dependencies, but support building
     # packages outside the official SDS build image. If you want to support

@@ -13,6 +13,9 @@ extern "C" {
 
 #include "iomgr_impl.hpp"
 
+#define likely(x)     __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+
 namespace iomgr
 {
 
@@ -28,24 +31,23 @@ get_elapsed_time_ns(Clock::time_point startTime) {
 #define MAX_EVENTS 20
 void* iothread(void *obj) {
    pthread_t t = pthread_self();
-   auto iomgr = static_cast<ioMgrImpl*>(obj);
+   auto iomgr = *static_cast<std::shared_ptr<ioMgrImpl>*>(obj);
    thread_info *info = iomgr->get_tid_info(t);
    struct epoll_event fd_events[MAX_PRI];
    struct epoll_event events[MAX_EVENTS];
    int num_fds;
 
-   LOGTRACE("Becoming ready.");
-   iomgr->wait_for_ready();
-   /* initialize the variables local to a thread */
-   LOGTRACE("Initializing locals.");
-   iomgr->local_init();
-
-   info->count = 0;
-   info->time_spent_ns = 0;
-   while (1) {
+   if (likely(iomgr->is_running())) {
+      /* initialize the variables local to a thread */
+      LOGTRACE("Becoming ready.");
+      iomgr->local_init();
+      info->count = 0;
+      info->time_spent_ns = 0;
+   }
+   while (likely(iomgr->is_running())) {
       LOGTRACE("Waiting");
-      //	LOG(INFO) << "waiting " << info->id;
       num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
+      if (unlikely(!iomgr->is_running())) break;
       for (auto i = 0ul; i < MAX_PRI; ++i) {
          /* XXX: should it be  go through only
           * those fds which has the events.
@@ -56,7 +58,6 @@ void* iothread(void *obj) {
             LOGERROR("epoll wait failed: {}", errno);
             continue;
          }
-         //			LOG(INFO) << "waking" << info->id;
          for (auto i = 0; i < num_fds; ++i) {
             LOGTRACE("Checking: {}", i);
             if (iomgr->can_process(events[i].data.ptr, events[i].events)) {
@@ -68,11 +69,11 @@ void* iothread(void *obj) {
                info->time_spent_ns += get_elapsed_time_ns(write_startTime);
                LOGTRACE("Call took: {}ns", info->time_spent_ns);
             } else {
-               //		LOG(INFO) << "can not process in thread" << info->id;
             }
          }
       }
    }
+   return nullptr;
 }
 
 } /* iomgr */ 
