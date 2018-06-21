@@ -10,7 +10,8 @@ class IOMgrConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     options = {"shared": [True, False], "fPIC": [True]}
 
-    build_requires = (("sds_logging/1.0.0@sds/stable"))
+    requires = (("libevent/2.0.22@bincrafters/stable"),
+                ("sds_logging/1.0.0@sds/stable"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
@@ -22,8 +23,6 @@ class IOMgrConan(ConanFile):
     def system_requirements(self):
         pkgs = list()
         if os_info.linux_distro == "ubuntu":
-            pkgs.append("libgoogle-perftools-dev")
-            pkgs.append("libevent-dev")
             if os_info.os_version < "17":
                 pkgs.append("g++-5")
             elif os_info.os_version < "18":
