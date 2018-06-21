@@ -46,6 +46,9 @@ class IOMgrConan(ConanFile):
         self.copy("*.hpp", dst="include/iomgr", src="src", keep_path=False)
         self.copy("*.a", dst="lib", keep_path=False)
         self.copy("*.so", dst="lib", keep_path=False)
+        self.copy("*.dll", dst="lib", keep_path=False)
+        self.copy("*.dylib", dst="lib", keep_path=False)
+        self.copy("*.lib", dst="lib", keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)

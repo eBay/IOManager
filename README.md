@@ -1,11 +1,17 @@
 # IOMgr
+An asynchronous event handler for the SDS data-path.
 
-## Build
-To build (assuming a local Docker instance is running):
+## Brief
+To build (assuming a recent version of conan package manager is installed)
 ```
-   $ docker build -t iomgr-pub --build-arg CONAN_USER=$(whoami) --build-arg CONAN_PASS=<secret> -f Dockerfile .
+   $ conan create . <user>/<channel>
 ```
 To publish:
 ```
-   $ docker run --rm iomgr-pub
+   # You'll need credentials for this!
+   $ conan upload -r origin iomgr/<version>@/<user>/<channel>
+```
+Official builds can be found under the **user** ``sds`` in either the ``stable`` or ``testing`` channels.
+```
+   $ conan search -r origin iomgr*
 ```

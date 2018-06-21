@@ -4,8 +4,8 @@ LABEL description="Automated compilation for SDS IOMgr"
 
 ARG CONAN_CHANNEL
 ARG CONAN_USER
-ENV CONAN_USER=${CONAN_USER:-demo}
-ENV CONAN_CHANNEL=${CONAN_CHANNEL:-dev}
+ENV CONAN_USER=${CONAN_USER:-sds}
+ENV CONAN_CHANNEL=${CONAN_CHANNEL:-testing}
 
 COPY conanfile.py /tmp/source/
 COPY cmake/ /tmp/source/cmake
@@ -15,7 +15,6 @@ COPY src/ /tmp/source/src
 
 RUN conan create /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
 RUN conan create -pr debug /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
-RUN conan create -pr clang-default /tmp/source "${CONAN_USER}"/"${CONAN_CHANNEL}";
 
 ARG CONAN_PASS=${CONAN_USER}
 RUN conan user -r origin -p "${CONAN_PASS}" sds;
