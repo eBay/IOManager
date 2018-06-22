@@ -1,5 +1,5 @@
 # ##########   #######   ############
-FROM ecr.vip.ebayc3.com/sds/sds_cpp_base
+FROM ecr.vip.ebayc3.com/sds/sds_cpp_base:1.3
 LABEL description="Automated compilation for SDS IOMgr"
 
 ARG CONAN_CHANNEL

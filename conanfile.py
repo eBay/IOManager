@@ -1,5 +1,4 @@
 from conans import ConanFile, CMake, tools
-from conans.tools import os_info
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
@@ -16,25 +15,6 @@ class IOMgrConan(ConanFile):
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
     exports_sources = "src/*", "cmake/*", "CMakeLists.txt"
-
-    # These are not proper Conan dependencies, but support building
-    # packages outside the official SDS build image. If you want to support
-    # an OS/Platform that isn't listed, you'll need to add it yourself
-    def system_requirements(self):
-        pkgs = list()
-        if os_info.linux_distro == "ubuntu":
-            if os_info.os_version < "17":
-                pkgs.append("g++-5")
-            elif os_info.os_version < "18":
-                pkgs.append("g++-6")
-            elif os_info.os_version < "19":
-                pkgs.append("g++-7")
-            else:
-                pkgs.append("g++")
-
-        installer = tools.SystemPackageTool()
-        for pkg in pkgs:
-            installer.install(packages=pkg, update=False)
 
     def build(self):
         cmake = CMake(self)
