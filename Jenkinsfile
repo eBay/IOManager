@@ -24,7 +24,7 @@ pipeline {
 
         stage('Deploy') {
             when {
-                branch 'stable/*'
+                branch 'testing/*'
             }
             steps {
                 sh "docker run ${PROJECT}"
