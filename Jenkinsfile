@@ -27,8 +27,14 @@ pipeline {
                 branch 'testing/*'
             }
             steps {
-                sh "docker run ${PROJECT}"
+                sh "docker run --rm ${PROJECT}"
             }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${PROJECT}"
         }
     }
 }
