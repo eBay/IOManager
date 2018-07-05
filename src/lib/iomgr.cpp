@@ -64,7 +64,7 @@ ioMgrImpl::start() {
          LOGCRITICAL("Failed to create thread: {}", rc);
          continue;
       }
-      LOGTRACE("Created thread...", i);
+      LOGTRACEMOD(iomgr, "Created thread...", i);
       t_info.id = i;
       t_info.inited = false;
       pthread_detach(t_info.tid);
@@ -78,14 +78,14 @@ ioMgrImpl::local_init() {
       cv.wait(lck, [this] { return ready; });
    }
    if (!is_running()) return;
-   LOGTRACE("Initializing locals.");
+   LOGTRACEMOD(iomgr, "Initializing locals.");
 
    struct epoll_event ev;
    pthread_t t = pthread_self();
    thread_info *info = get_tid_info(t);
 
    epollfd = epoll_create1(0);
-   LOGTRACE("EPoll created: {}", epollfd);
+   LOGTRACEMOD(iomgr, "EPoll created: {}", epollfd);
 
    if (epollfd < 1) {
       assert(0);
@@ -124,7 +124,7 @@ ioMgrImpl::local_init() {
                    { process_evfd(fd, cookie, events); },
                    EPOLLIN, 1, global_fd[i]);
 
-      LOGDEBUG("registered global fds");
+      LOGDEBUGMOD(iomgr, "registered global fds");
    }
 
    assert(num_ep == ep_list.size());
@@ -148,7 +148,7 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
       ready = true;
    }
    cv.notify_all();
-   LOGTRACE("Added Endpoint.");
+   LOGTRACEMOD(iomgr, "Added Endpoint.");
 }
 
 void
@@ -225,7 +225,7 @@ ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
                  fd, &ev) == -1) {
       assert(0);
    }
-   LOGDEBUG("Added FD: {}", fd);
+   LOGDEBUGMOD(iomgr, "Added FD: {}", fd);
    return;
 }
 

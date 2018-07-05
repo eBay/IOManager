@@ -39,13 +39,13 @@ void* iothread(void *obj) {
 
    if (likely(iomgr->is_running())) {
       /* initialize the variables local to a thread */
-      LOGTRACE("Becoming ready.");
+      LOGTRACEMOD(iomgr, "Becoming ready.");
       iomgr->local_init();
       info->count = 0;
       info->time_spent_ns = 0;
    }
    while (likely(iomgr->is_running())) {
-      LOGTRACE("Waiting");
+      LOGTRACEMOD(iomgr, "Waiting");
       num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
       if (unlikely(!iomgr->is_running())) break;
       for (auto i = 0ul; i < MAX_PRI; ++i) {
@@ -59,15 +59,15 @@ void* iothread(void *obj) {
             continue;
          }
          for (auto i = 0; i < num_fds; ++i) {
-            LOGTRACE("Checking: {}", i);
+            LOGTRACEMOD(iomgr, "Checking: {}", i);
             if (iomgr->can_process(events[i].data.ptr, events[i].events)) {
                Clock::time_point write_startTime = Clock::now();
                ++info->count;
-               LOGTRACE("Processing event on: {}", i);
+               LOGTRACEMOD(iomgr, "Processing event on: {}", i);
                iomgr->callback(events[i].data.ptr, 
                                events[i].events);
                info->time_spent_ns += get_elapsed_time_ns(write_startTime);
-               LOGTRACE("Call took: {}ns", info->time_spent_ns);
+               LOGTRACEMOD(iomgr, "Call took: {}ns", info->time_spent_ns);
             } else {
             }
          }
