@@ -251,7 +251,6 @@ ioMgrImpl::can_process(void *data, uint32_t ev) {
                                                             std::memory_order_acquire);
    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
       LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
-      assert(0);
    } else {
       LOGCRITICAL("Unknown event: {}", ev);
       assert(0);
@@ -311,6 +310,7 @@ ioMgrImpl::process_evfd(int fd, void *data, uint32_t event) {
 void
 ioMgrImpl::process_done(int fd, int ev) {
    std::map<int, fd_info*>::iterator it;
+   std::unique_lock<std::mutex> lck(map_mtx);
    it = fd_info_map.find(fd);
    assert(it->first == fd);
 
