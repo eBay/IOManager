@@ -10,8 +10,7 @@ class IOMgrConan(ConanFile):
     options = {"shared": [True, False], "fPIC": [True]}
 
     requires = (("libevent/2.0.22@bincrafters/stable"),
-                ("sds_logging/2.1.2@sds/stable"),
-                ("OpenSSL/1.0.2o@conan/stable"))
+                ("sds_logging/2.1.2@sds/stable"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
