@@ -14,6 +14,7 @@ class IOMgrConan(ConanFile):
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
+
     exports_sources = "src/*", "cmake/*", "CMakeLists.txt"
 
     def build(self):
