@@ -14,10 +14,10 @@ using ev_callback = std::function<void(int fd, void *cookie, uint32_t events)>;
 
 class EndPoint {
  protected:
-   ioMgr *iomgr;
+   std::shared_ptr<ioMgr> iomgr;
 
  public:
-   explicit EndPoint(ioMgr* iomgr) : iomgr(iomgr) {}
+   explicit EndPoint(std::shared_ptr<ioMgr> iomgr) : iomgr(iomgr) {}
    virtual ~EndPoint() = default;
 
    virtual void init_local() = 0;
