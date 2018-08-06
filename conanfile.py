@@ -2,7 +2,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "2.0.0"
+    version = "2.0.1"
     license = "Proprietary"
     description = "iomgr"
 
@@ -10,7 +10,7 @@ class IOMgrConan(ConanFile):
     options = {"shared": [True, False], "fPIC": [True]}
 
     requires = (("libevent/2.0.22@bincrafters/stable"),
-                ("sds_logging/2.1.2@sds/stable"))
+                ("sds_logging/2.1.3@sds/stable"))
 
     generators = "cmake"
     default_options = "shared=False", "fPIC=True"
