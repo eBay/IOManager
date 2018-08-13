@@ -11,7 +11,7 @@ SDS_OPTIONS_ENABLE(logging)
 
 int main(int argc, char* argv[]) {
    SDS_OPTIONS_LOAD(argc, argv, logging)
-   sds_logging::SetLogger(spdlog::stdout_color_mt("example"));
+   sds_logging::SetLogger("example");
    spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
    SDS_LOG_LEVEL(iomgr, log_level::trace);
 
