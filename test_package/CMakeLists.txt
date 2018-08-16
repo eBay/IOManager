@@ -9,7 +9,6 @@ find_package (Threads REQUIRED)
 add_executable(package_test package_test.cpp)
 target_link_libraries(package_test
                        ${CONAN_LIBS}
-                       gcov
                        ${CMAKE_THREAD_LIBS_INIT})
 
 # CTest is a testing tool that can be used to test your project.
