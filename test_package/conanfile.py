@@ -18,4 +18,4 @@ class FireFlyTestConan(ConanFile):
     def test(self):
         if not tools.cross_building(self.settings):
             os.chdir("bin")
-            self.run(".%spackage_test" % os.sep)
+            self.run(".%spackage_test -c --log_mods iomgr:0" % os.sep)

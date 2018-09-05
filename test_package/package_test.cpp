@@ -13,7 +13,6 @@ int main(int argc, char* argv[]) {
    SDS_OPTIONS_LOAD(argc, argv, logging)
    sds_logging::SetLogger("example");
    spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
-   SDS_LOG_LEVEL(iomgr, log_level::trace);
 
    {
       iomgr::ioMgr io_mgr(0, 8);
