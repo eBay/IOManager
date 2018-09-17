@@ -9,9 +9,17 @@ pipeline {
     }
 
     stages {
+        stage('Get Version') {
+            steps {
+                script {
+                    TAG = sh(script: "grep 'version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
+                }
+            }
+        }
+
         stage('Build') {
             steps {
-                sh "docker build --build-arg CONAN_USER=${CONAN_USER} --build-arg CONAN_PASS=${CONAN_PASS} --build-arg CONAN_CHANNEL=${CONAN_CHANNEL} -t ${PROJECT} ."
+                sh "docker build --rm --build-arg CONAN_USER=${CONAN_USER} --build-arg CONAN_PASS=${CONAN_PASS} --build-arg CONAN_CHANNEL=${CONAN_CHANNEL} -t ${PROJECT}-${TAG} ."
             }
         }
 
@@ -26,14 +34,15 @@ pipeline {
                 branch "${CONAN_CHANNEL}/*"
             }
             steps {
-                sh "docker run --rm ${PROJECT}"
+                sh "docker run --rm ${PROJECT}-${TAG}"
+                slackSend channel: '#conan-pkgs', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* has been uploaded to conan repo."
             }
         }
     }
 
     post {
         always {
-            sh "docker rmi -f ${PROJECT}"
+            sh "docker rmi -f ${PROJECT}-${TAG}"
         }
     }
 }
