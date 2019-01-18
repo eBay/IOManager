@@ -2,6 +2,7 @@
  * Copyright 2018 by eBay Corporation
  */
 #include <sds_logging/logging.h>
+#include <sds_options/options.h>
 #include <iomgr/iomgr.hpp>
 
 using log_level = spdlog::level::level_enum;
