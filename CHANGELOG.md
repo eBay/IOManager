@@ -11,4 +11,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Cleaned up conan recipe and added `sanitize` setting
 
-[Unreleased]: https://github.corp.ebay.com/SDS/sds_messaging/compare/testing/v2.x...develop
+[Unreleased]: https://github.corp.ebay.com/SDS/iomgr/compare/testing/v2.x...develop
