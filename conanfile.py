@@ -4,23 +4,32 @@ class IOMgrConan(ConanFile):
     name = "iomgr"
     version = "2.1.2"
     license = "Proprietary"
+    url = "https://github.corp.ebay.com/SDS/iomgr"
     description = "iomgr"
 
-    settings = "os", "compiler", "build_type", "arch"
-    options = {"shared": [True, False], "fPIC": [True]}
+    settings = "arch", "os", "compiler", "build_type", "sanitize"
+    options = {
+        "shared": ['True', 'False'],
+        "fPIC": ['True', 'False'],
+        }
+    default_options = (
+        'shared=False',
+        'fPIC=True'
+        )
 
-    requires = (("libevent/2.0.22@bincrafters/stable"),
-                ("OpenSSL/1.0.2q@conan/stable"),
-                ("sds_logging/4.0.0@sds/testing"))
+    requires = (
+            "libevent/2.0.22@bincrafters/stable",
+            "sds_logging/4.0.0@sds/testing",
+            )
 
     generators = "cmake"
-    default_options = "shared=False", "fPIC=True"
-
-    exports_sources = "src/*", "cmake/*", "CMakeLists.txt"
+    exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure()
+        definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+                       'MEMORY_SANITIZER_ON': 'OFF'}
+        cmake.configure(defs=definitions)
         cmake.build()
 
     def package(self):
@@ -34,3 +43,6 @@ class IOMgrConan(ConanFile):
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
+        if self.settings.sanitize != None:
+            self.cpp_info.sharedlinkflags.append("-fsanitize=address")
+            self.cpp_info.exelinkflags.append("-fsanitize=address")
