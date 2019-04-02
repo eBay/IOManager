@@ -50,7 +50,11 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
    LOGDEBUG("Starting ready: {}", ready);
 }
 
-ioMgrImpl::~ioMgrImpl() = default;
+ioMgrImpl::~ioMgrImpl() {
+    for (auto& x : fd_info_map)  {
+        delete x.second;
+    }
+}
 
 void
 ioMgrImpl::start() {
