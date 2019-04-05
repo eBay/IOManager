@@ -5,39 +5,40 @@
 
 #include <memory>
 #include <functional>
+#include "iomgr_impl.hpp"
 
 namespace iomgr {
 
 struct ioMgr;
 struct ioMgrImpl;
-using ev_callback = std::function<void(int fd, void *cookie, uint32_t events)>;
+using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >;
 
 class EndPoint {
- protected:
-   std::shared_ptr<ioMgr> iomgr;
+protected:
+    std::shared_ptr< ioMgr > iomgr;
 
- public:
-   explicit EndPoint(std::shared_ptr<ioMgr> iomgr) : iomgr(iomgr) {}
-   virtual ~EndPoint() = default;
+public:
+    explicit EndPoint(std::shared_ptr< ioMgr > iomgr) : iomgr(iomgr) {}
+    virtual ~EndPoint() = default;
 
-   virtual void init_local() = 0;
-   virtual void print_perf() = 0;
+    virtual void init_local() = 0;
+    virtual void print_perf() = 0;
 };
 
 struct ioMgr {
-   ioMgr(size_t const num_ep, size_t const num_threads);
-   ~ioMgr();
+    ioMgr(size_t const num_ep, size_t const num_threads);
+    ~ioMgr();
 
-   void start();
-   void add_ep(EndPoint *ep);
-   void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
-   void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
-   void print_perf_cntrs();
-   void fd_reschedule(int const fd, uint32_t const event);
-   void process_done(int const fd, int const ev);
+    void start();
+    void add_ep(EndPoint* ep);
+    void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
+    void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
+    void print_perf_cntrs();
+    void fd_reschedule(int const fd, uint32_t const event);
+    void process_done(int const fd, int const ev);
 
- private:
-   std::shared_ptr<ioMgrImpl> _impl;
+private:
+    ioMgrImpl _impl;
 };
 
-} /* iomgr */
+} // namespace iomgr

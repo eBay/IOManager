@@ -8,9 +8,8 @@
 
 SDS_LOGGING_DECL(iomgr);
 
-namespace iomgr
-{
+namespace iomgr {
 
-void *iothread(void* iomgr);
+void* iothread(void* iomgr);
 
-} /* iomgr */ 
+} // namespace iomgr
