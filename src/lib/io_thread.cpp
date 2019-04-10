@@ -28,58 +28,10 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 
 #define MAX_EVENTS 20
 
-#if 0
-void* iothread(void* obj) {
-    pthread_t          t = pthread_self();
-    auto               iomgr = *static_cast< std::shared_ptr< ioMgrImpl >* >(obj);
-    thread_info*       info = iomgr->get_tid_info(t);
-    struct epoll_event fd_events[MAX_PRI];
-    struct epoll_event events[MAX_EVENTS];
-    int                num_fds;
-
-    if (likely(iomgr->is_running())) {
-        /* initialize the variables local to a thread */
-        LOGTRACEMOD(iomgr, "Becoming ready.");
-        iomgr->local_init();
-        info->count = 0;
-        info->time_spent_ns = 0;
-    }
-    while (likely(iomgr->is_running())) {
-        LOGTRACEMOD(iomgr, "Waiting");
-        num_fds = epoll_wait(iomgr->epollfd, fd_events, MAX_PRI, -1);
-        if (unlikely(!iomgr->is_running()))
-            break;
-        for (auto i = 0ul; i < MAX_PRI; ++i) {
-            /* XXX: should it be  go through only
-             * those fds which has the events.
-             */
-            num_fds = epoll_wait(iomgr->epollfd_pri[i], events, MAX_EVENTS, 0);
-            if (num_fds < 0) {
-                LOGERROR("epoll wait failed: {}", errno);
-                continue;
-            }
-            for (auto i = 0; i < num_fds; ++i) {
-                LOGTRACEMOD(iomgr, "Checking: {}", i);
-                if (iomgr->can_process(events[i].data.ptr, events[i].events)) {
-                    Clock::time_point write_startTime = Clock::now();
-                    ++info->count;
-                    LOGTRACEMOD(iomgr, "Processing event on: {}", i);
-                    iomgr->callback(events[i].data.ptr, events[i].events);
-                    info->time_spent_ns += get_elapsed_time_ns(write_startTime);
-                    LOGTRACEMOD(iomgr, "Call took: {}ns", info->time_spent_ns);
-                } else {
-                }
-            }
-        }
-    }
-    return nullptr;
-}
-#endif
-
-ioMgrThreadContext::ioMgrThreadContext(iomgr::ioMgrImpl *iomgr) {
+ioMgrThreadContext::ioMgrThreadContext(iomgr::ioMgrImpl* iomgr) {
     m_iomgr = iomgr;
     m_thread_num = sisl::ThreadLocalContext::my_thread_num();
-    //context_init(false /* wait_till_ready */);
+    // context_init(false /* wait_till_ready */);
 }
 
 void ioMgrThreadContext::context_init(bool wait_till_ready) {
@@ -114,7 +66,7 @@ void ioMgrThreadContext::context_init(bool wait_till_ready) {
     }
 
     // For every registered fds add my thread portion of event fd
-    m_iomgr->foreach_fd_info([&](fd_info *fdi) {
+    m_iomgr->foreach_fd_info([&](fd_info* fdi) {
         /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
          * some events can be missed.
          */
@@ -128,25 +80,25 @@ void ioMgrThreadContext::context_init(bool wait_till_ready) {
         // Create an event fd and add it to this thread representation of infos.ev_fd array
         auto my_event_fd = eventfd(0, EFD_NONBLOCK);
         fdi->ev_fd[m_thread_num] = my_event_fd;
-        add_fd_to_thread(my_event_fd,
-                     [this](int fd, void* cookie, uint32_t events) {
-                        this->m_iomgr->process_evfd(fd, cookie, events);
-                     }, EPOLLIN, 1, fdi);
+        add_fd_to_thread(
+            my_event_fd,
+            [this](int fd, void* cookie, uint32_t events) { this->m_iomgr->process_evfd(fd, cookie, events); }, EPOLLIN,
+            1, fdi);
 
         LOGTRACEMOD(iomgr, "registered event fd {} to this thread context", my_event_fd);
     });
 
     /* initialize all the thread local variables in end point */
-    m_iomgr->foreach_endpoint([&](EndPoint *ep){
-       ep->init_local();
-    });
+    m_iomgr->foreach_endpoint([&](EndPoint* ep) { ep->init_local(); });
 }
 
 void ioMgrThreadContext::run() {
-    if (!m_inited) { context_init(true /* wait_till_ready */); }
+    if (!m_inited) {
+        context_init(true /* wait_till_ready */);
+    }
 
     bool keep_running = true;
-    while(keep_running) {
+    while (keep_running) {
         listen();
     }
 }
@@ -184,7 +136,7 @@ void ioMgrThreadContext::listen() {
 }
 
 fd_info* ioMgrThreadContext::add_fd_to_thread(int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    //if (!m_inited) { context_init(true /* wait_till_ready */); }
+    // if (!m_inited) { context_init(true /* wait_till_ready */); }
     if (!m_inited) {
         LOGTRACEMOD(iomgr, "Ignoring to add fd {} to this non-io thread", fd);
         return nullptr;

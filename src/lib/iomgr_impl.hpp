@@ -60,7 +60,6 @@ struct ioMgrImpl {
     ~ioMgrImpl();
     void     start();
     void     run_io_loop();
-    void     local_init();
     fd_info* create_fd_info(int fd, const ev_callback& cb, int ev, int pri, void* cookie);
 
     void     add_ep(EndPoint* ep);
@@ -75,14 +74,11 @@ struct ioMgrImpl {
     void     process_done(int fd, int ev);
     void     process_done(fd_info* info, int ev);
     bool     is_ready() const;
-    void set_my_evfd(fd_info* fdi, int ev_fd);
-    int  get_my_evfd(fd_info* fdi) const;
+    void     set_my_evfd(fd_info* fdi, int ev_fd);
+    int      get_my_evfd(fd_info* fdi) const;
 
     void foreach_fd_info(std::function< void(fd_info*) > fd_cb);
-    void foreach_endpoint(std::function< void(EndPoint *) > ep_cb);
-
-    //const std::vector< fd_info* >&  get_fd_infos() const;
-    //const std::vector< EndPoint* >& get_ep_list() const;
+    void foreach_endpoint(std::function< void(EndPoint*) > ep_cb);
 
     void wait_to_be_ready();
 
@@ -90,9 +86,9 @@ private:
     fd_info* fd_to_info(int fd);
 
 private:
-    size_t                    m_expected_eps;
-    size_t                    m_num_threads;
-    std::atomic_bool          m_ready = false;
+    size_t           m_expected_eps;
+    size_t           m_num_threads;
+    std::atomic_bool m_ready = false;
 
     folly::Synchronized< std::vector< fd_info* > >   m_fd_infos; /* fds shared between the threads */
     folly::Synchronized< std::vector< EndPoint* > >  m_ep_list;

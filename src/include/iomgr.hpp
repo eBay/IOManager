@@ -29,9 +29,9 @@ struct ioMgr {
     ioMgr(size_t const num_ep, size_t const num_threads);
     ~ioMgr();
 
-    void start();
-    void run_io_loop();
-    void add_ep(EndPoint* ep);
+    void     start();
+    void     run_io_loop();
+    void     add_ep(EndPoint* ep);
     fd_info* add_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
     fd_info* add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
 
