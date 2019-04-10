@@ -152,6 +152,7 @@ void ioMgrImpl::fd_reschedule(fd_info* info, uint32_t event) {
     int      min_id = 0;
 
     m_thread_ctx.access_all_threads([&min_id, &min_cnt](ioMgrThreadContext* ctx) {
+        if (!ctx->is_io_thread()) { return true; }
         if (ctx->m_count < min_cnt) {
             min_id = ctx->m_thread_num;
             min_cnt = ctx->m_count;
@@ -198,6 +199,7 @@ void ioMgrImpl::process_done(fd_info* info, int ev) {
 
 void ioMgrImpl::print_perf_cntrs() {
     m_thread_ctx.access_all_threads([](ioMgrThreadContext* ctx) {
+        if (!ctx->is_io_thread()) { return true; }
         LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms", ctx->m_thread_num,
                 ctx->m_count, (ctx->m_time_spent_ns / (1000 * 1000)));
         return true;
