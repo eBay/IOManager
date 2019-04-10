@@ -5,12 +5,12 @@
 
 #include <memory>
 #include <functional>
-#include "iomgr_impl.hpp"
 
 namespace iomgr {
 
 struct ioMgr;
 struct ioMgrImpl;
+struct fd_info;
 using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >;
 
 class EndPoint {
@@ -30,15 +30,21 @@ struct ioMgr {
     ~ioMgr();
 
     void start();
+    void run_io_loop();
     void add_ep(EndPoint* ep);
-    void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
-    void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
-    void print_perf_cntrs();
+    fd_info* add_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
+    fd_info* add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie);
+
     void fd_reschedule(int const fd, uint32_t const event);
+    void fd_reschedule(fd_info* info, uint32_t const event);
+
     void process_done(int const fd, int const ev);
+    void process_done(fd_info* info, int const ev);
+
+    void print_perf_cntrs();
 
 private:
-    ioMgrImpl _impl;
+    std::unique_ptr< ioMgrImpl > _impl;
 };
 
 } // namespace iomgr
