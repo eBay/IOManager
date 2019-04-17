@@ -154,7 +154,7 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
 void
 ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
    auto info = new struct fd_info;
-   {  std::lock_guard<std::mutex> lck(map_mtx);
+   {  std::unique_lock<mutex_t> lck(map_mtx);
       fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
       info->cb = cb;
       info->is_running[fd_info::READ] = 0;
@@ -208,7 +208,7 @@ void
 ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
                         int iomgr_ev, int pri, void *cookie) {
    auto info = new struct fd_info;
-   {  std::lock_guard<std::mutex> lck(map_mtx);
+   {  std::unique_lock<mutex_t> lck(map_mtx);
       fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
 
       info->cb = cb;
@@ -265,7 +265,7 @@ void
 ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
    std::map<int, fd_info*>::iterator it;
    fd_info* info {nullptr};
-   {  std::lock_guard<std::mutex> lck(map_mtx);
+   {  std::shared_lock<mutex_t> lck(map_mtx);
       if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
          assert(it->first == fd);
          info = it->second;
@@ -310,7 +310,7 @@ void
 ioMgrImpl::process_done(int fd, int ev) {
    std::map<int, fd_info*>::iterator it;
    fd_info* info {nullptr};
-   {  std::lock_guard<std::mutex> lck(map_mtx);
+   {  std::shared_lock<mutex_t> lck(map_mtx);
       if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
          assert(it->first == fd);
          info = it->second;
