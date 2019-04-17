@@ -52,7 +52,6 @@ struct ioMgrImpl : public std::enable_shared_from_this<ioMgrImpl> {
   void add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb, int ev,
                         int pri, void *cookie);
   void callback(void *data, uint32_t ev);
-  void process_done_impl(void *data,int ev);
   struct thread_info *get_thread_info(pthread_t &tid);
   void print_perf_cntrs();
   bool can_process(void *data, uint32_t event);
