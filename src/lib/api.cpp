@@ -1,5 +1,4 @@
 #include "iomgr_impl.hpp"
-#include <sds_logging/logging.h>
 namespace iomgr
 {
 

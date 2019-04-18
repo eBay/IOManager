@@ -286,14 +286,17 @@ ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
    struct fd_info*  info = nullptr;
    {  
        std::lock_guard<std::mutex> lck(map_mtx);
-       if(fd_info_map.find(fd) != fd_info_map.end()) {
-           info = fd_info_map[fd];
+
+       auto it = fd_info_map.end();
+       bool happened {false};
+       std::tie(it, happened) = fd_info_map.emplace(std::make_pair(fd, nullptr));
+       if (it != fd_info_map.end() && !happened) {
+           info = it->second;
        } else {
            info = new struct fd_info;
-           fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
+           it->second = info;
        }
-       fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
-
+       
        info->cb = cb;
        info->is_running[fd_info::READ] = 0;
        info->is_running[fd_info::WRITE] = 0;

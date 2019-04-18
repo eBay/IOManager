@@ -77,9 +77,9 @@ void* iothread(void *obj) {
                 }
             }
         }
-   
-        for (auto i = 0u; i < iomgr->num_ep; ++i) {
-            iomgr->ep_list[i]->shutdown_local();
+        
+        for (auto& ep : iomgr->ep_list) {
+            ep->shutdown_local();
         } 
     } // de-ref of iomgr use_count;
 

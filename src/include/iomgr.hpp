@@ -5,7 +5,6 @@
 
 #include <memory>
 #include <functional>
-#include <sds_logging/logging.h>
 namespace iomgr {
 
 struct ioMgr;
