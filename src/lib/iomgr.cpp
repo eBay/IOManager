@@ -15,6 +15,7 @@ extern "C" {
 #include <chrono>
 #include <functional>
 #include <vector>
+#include <thread>
 
 #include <sds_logging/logging.h>
 
@@ -51,9 +52,80 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
 }
 
 ioMgrImpl::~ioMgrImpl() {
+    // free the memory of fd_info
     for (auto& x : fd_info_map)  {
         delete x.second;
     }
+}
+
+// 
+// Stop iomgr procedure
+// 1. set thread running to false;
+// 2. trigger the event to wake up iothread and call shutdown_local of each ep
+// 3. join all the i/o threads;
+// 
+void 
+ioMgrImpl::stop() {
+    stop_running();
+    uint64_t temp = 1;
+
+    for (auto& x : global_fd) {
+        // 
+        // Currently one event will wake up all the i/o threads.
+        // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
+        // wake up all the threads to stop them from running;
+        //
+        while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+        // wait for all the threads to wake up;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        if(close(x->fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x->fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x->fd);
+    }
+
+    for (auto& x : threads) {
+        for (uint32_t i = 0; i < MAX_PRI; i++) {
+            auto y = x.epollfd_pri[i];
+            if(close(y)) {
+                LOGERROR("{}, Failed to close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
+                return;
+            }
+            LOGDEBUG("{}, close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
+        }
+    }
+
+    for (auto& x : threads) {
+        if(close(x.ev_fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x.ev_fd);
+    }
+
+    void *res;
+    for (auto& x : threads) {
+        int s = pthread_join(x.tid, &res);
+        if (s != 0) {
+            // handle error here;
+            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
+            return;
+        }
+        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
+    }
+    
+    for (auto i = 0u; i < num_ep; ++i) {
+        delete ep_list[i];
+    }
+}
+
+// 
+// Stop the running threads;
+//
+void 
+ioMgrImpl::stop_running() {
+    running.store(false, std::memory_order_relaxed);   
 }
 
 void
@@ -71,7 +143,6 @@ ioMgrImpl::start() {
       LOGTRACEMOD(iomgr, "Created thread...", i);
       t_info.id = i;
       t_info.inited = false;
-      pthread_detach(t_info.tid);
    }
 }
 
@@ -109,6 +180,7 @@ ioMgrImpl::local_init() {
 
    // add event fd to each thread
    info->inited = true;
+   info->ev_fd = epollfd;
    info->epollfd_pri = epollfd_pri;
 
    for(auto i = 0u; i < global_fd.size(); ++i) {
@@ -211,18 +283,25 @@ ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *coo
 void
 ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
                         int iomgr_ev, int pri, void *cookie) {
-   auto info = new struct fd_info;
-   {  std::lock_guard<std::mutex> lck(map_mtx);
-      fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
+   struct fd_info*  info = nullptr;
+   {  
+       std::lock_guard<std::mutex> lck(map_mtx);
+       if(fd_info_map.find(fd) != fd_info_map.end()) {
+           info = fd_info_map[fd];
+       } else {
+           info = new struct fd_info;
+           fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
+       }
+       fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
 
-      info->cb = cb;
-      info->is_running[fd_info::READ] = 0;
-      info->is_running[fd_info::WRITE] = 0;
-      info->fd = fd;
-      info->ev = iomgr_ev;
-      info->is_global = false;
-      info->pri = pri;
-      info->cookie = cookie;
+       info->cb = cb;
+       info->is_running[fd_info::READ] = 0;
+       info->is_running[fd_info::WRITE] = 0;
+       info->fd = fd;
+       info->ev = iomgr_ev;
+       info->is_global = false;
+       info->pri = pri;
+       info->cookie = cookie;
    }
 
    epoll_event ev;
