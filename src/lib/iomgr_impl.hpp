@@ -40,16 +40,20 @@ struct thread_info {
 
 
 struct ioMgrImpl : public std::enable_shared_from_this<ioMgrImpl> {
-  std::vector<thread_info> threads;
-  std::vector <struct fd_info *>global_fd; /* fds shared between the threads */
-  static thread_local int epollfd_pri[MAX_PRI];
-  static thread_local int epollfd;
+  std::vector<thread_info>          threads;
+  std::vector<struct fd_info *>     global_fd; /* fds shared between the threads */
+  std::vector<class EndPoint *>     ep_list;
+  size_t                            num_ep;
 
+  static thread_local int epollfd_pri[MAX_PRI]; 
+  static thread_local int epollfd;
   static std::shared_ptr<ioMgrImpl> create(size_t const num_ep, size_t const num_threads);
 
   ioMgrImpl(size_t const num_ep, size_t const num_threads);
   ~ioMgrImpl();
   void start();
+  void stop();
+  void tear_down();
   void local_init();
   void add_ep(class EndPoint *ep);
   void add_fd(int fd, ev_callback cb, int ev, int pri, void *cookie);
@@ -66,9 +70,10 @@ struct ioMgrImpl : public std::enable_shared_from_this<ioMgrImpl> {
   void process_done(int fd, int ev);
   bool is_running() const;
 
- private:
-  size_t num_ep;
-  std::vector<class EndPoint *> ep_list;
+private:
+  void stop_running();
+
+private:
   std::map<int, fd_info *> fd_info_map;
   mutex_t map_mtx;
 
