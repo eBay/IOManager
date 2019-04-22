@@ -5,7 +5,6 @@
 
 #include <memory>
 #include <functional>
-
 namespace iomgr {
 
 struct ioMgr;
@@ -18,9 +17,10 @@ class EndPoint {
 
  public:
    explicit EndPoint(std::shared_ptr<ioMgr> iomgr) : iomgr(iomgr) {}
-   virtual ~EndPoint() = default;
+   virtual ~EndPoint() { }
 
    virtual void init_local() = 0;
+   virtual void shutdown_local() = 0;
    virtual void print_perf() = 0;
 };
 
@@ -29,6 +29,7 @@ struct ioMgr {
    ~ioMgr();
 
    void start();
+   void stop();
    void add_ep(EndPoint *ep);
    void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
    void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);

@@ -15,6 +15,7 @@ extern "C" {
 #include <chrono>
 #include <functional>
 #include <vector>
+#include <thread>
 
 #include <sds_logging/logging.h>
 
@@ -50,7 +51,82 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
    LOGDEBUG("Starting ready: {}", ready);
 }
 
-ioMgrImpl::~ioMgrImpl() = default;
+ioMgrImpl::~ioMgrImpl() {
+    // free the memory of fd_info
+    for (auto& x : fd_info_map)  {
+        delete x.second;
+    }
+}
+
+// 
+// Stop iomgr procedure
+// 1. set thread running to false;
+// 2. trigger the event to wake up iothread and call shutdown_local of each ep
+// 3. join all the i/o threads;
+// 
+void 
+ioMgrImpl::stop() {
+    stop_running();
+    uint64_t temp = 1;
+
+    for (auto& x : global_fd) {
+        // 
+        // Currently one event will wake up all the i/o threads.
+        // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
+        // wake up all the threads to stop them from running;
+        //
+        while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+        // wait for all the threads to wake up;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        if(close(x->fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x->fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x->fd);
+    }
+
+    for (auto& x : threads) {
+        for (uint32_t i = 0; i < MAX_PRI; i++) {
+            auto y = x.epollfd_pri[i];
+            if(close(y)) {
+                LOGERROR("{}, Failed to close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
+                return;
+            }
+            LOGDEBUG("{}, close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
+        }
+    }
+
+    for (auto& x : threads) {
+        if(close(x.ev_fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x.ev_fd);
+    }
+
+    void *res;
+    for (auto& x : threads) {
+        int s = pthread_join(x.tid, &res);
+        if (s != 0) {
+            // handle error here;
+            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
+            return;
+        }
+        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
+    }
+    
+    for (auto i = 0u; i < num_ep; ++i) {
+        delete ep_list[i];
+    }
+}
+
+// 
+// Stop the running threads;
+//
+void 
+ioMgrImpl::stop_running() {
+    running.store(false, std::memory_order_relaxed);   
+}
 
 void
 ioMgrImpl::start() {
@@ -67,7 +143,6 @@ ioMgrImpl::start() {
       LOGTRACEMOD(iomgr, "Created thread...", i);
       t_info.id = i;
       t_info.inited = false;
-      pthread_detach(t_info.tid);
    }
 }
 
@@ -105,6 +180,7 @@ ioMgrImpl::local_init() {
 
    // add event fd to each thread
    info->inited = true;
+   info->ev_fd = epollfd;
    info->epollfd_pri = epollfd_pri;
 
    for(auto i = 0u; i < global_fd.size(); ++i) {
@@ -144,7 +220,7 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
    ep_list.push_back(ep);
    if (ep_list.size() == num_ep) {
       /* allow threads to run */
-      std::unique_lock<std::mutex> lck(cv_mtx);
+      std::lock_guard<std::mutex> lck(cv_mtx);
       ready = true;
    }
    cv.notify_all();
@@ -153,22 +229,24 @@ ioMgrImpl::add_ep(class EndPoint *ep) {
 
 void
 ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
-   struct fd_info* info = new struct fd_info;
+   auto info = new struct fd_info;
+   {  std::lock_guard<std::mutex> lck(map_mtx);
+      fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
+      info->cb = cb;
+      info->is_running[fd_info::READ] = 0;
+      info->is_running[fd_info::WRITE] = 0;
+      info->fd = fd;
+      info->ev = iomgr_ev;
+      info->is_global = true;
+      info->pri = pri;
+      info->cookie = cookie;
+      info->ev_fd.resize(threads.size());
+      info->event.resize(threads.size());
 
-   fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
-   info->cb = cb;
-   info->is_running[fd_info::READ] = 0;
-   info->is_running[fd_info::WRITE] = 0;
-   info->fd = fd;
-   info->ev = iomgr_ev;
-   info->is_global = true;
-   info->pri = pri;
-   info->cookie = cookie;
-   info->ev_fd.resize(threads.size());
-   info->event.resize(threads.size());
-   for (auto i = 0u; i < threads.size(); ++i) {
-      info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
-      info->event[i] = 0;
+      for (auto i = 0u; i < threads.size(); ++i) {
+         info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
+         info->event[i] = 0;
+      }
    }
 
    global_fd.push_back(info);
@@ -181,7 +259,7 @@ ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
       ev.data.ptr = info;
       if (!t_info.inited) {
          continue;
-      }	
+      }
       if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
                     fd, &ev) == -1) {
          assert(0);
@@ -202,23 +280,34 @@ ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *coo
    add_fd_to_thread(*info, fd, cb, iomgr_ev, pri, cookie);
 }
 
-void 
+void
 ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
                         int iomgr_ev, int pri, void *cookie) {
-   struct epoll_event ev;
-   struct fd_info* info = new struct fd_info;
-   std::unique_lock<std::mutex> lck(map_mtx);
-   fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
+   struct fd_info*  info = nullptr;
+   {  
+       std::lock_guard<std::mutex> lck(map_mtx);
 
-   info->cb = cb;
-   info->is_running[fd_info::READ] = 0;
-   info->is_running[fd_info::WRITE] = 0;
-   info->fd = fd;
-   info->ev = iomgr_ev;
-   info->is_global = false;
-   info->pri = pri;
-   info->cookie = cookie;
+       auto it = fd_info_map.end();
+       bool happened {false};
+       std::tie(it, happened) = fd_info_map.emplace(std::make_pair(fd, nullptr));
+       if (it != fd_info_map.end() && !happened) {
+           info = it->second;
+       } else {
+           info = new struct fd_info;
+           it->second = info;
+       }
+       
+       info->cb = cb;
+       info->is_running[fd_info::READ] = 0;
+       info->is_running[fd_info::WRITE] = 0;
+       info->fd = fd;
+       info->ev = iomgr_ev;
+       info->is_global = false;
+       info->pri = pri;
+       info->cookie = cookie;
+   }
 
+   epoll_event ev;
    ev.events = EPOLLET | iomgr_ev;
    ev.data.ptr = info;
    if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
@@ -229,7 +318,7 @@ ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
    return;
 }
 
-void 
+void
 ioMgrImpl::callback(void *data, uint32_t event) {
    struct fd_info *info = (struct fd_info *)data;
    info->cb(info->fd, info->cookie, event);
@@ -242,12 +331,12 @@ ioMgrImpl::can_process(void *data, uint32_t ev) {
    int desired = 1;
    bool ret = false;
    if (ev & EPOLLIN) {
-      ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired, 
-                                                           std::memory_order_acquire, 
+      ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired,
+                                                           std::memory_order_acquire,
                                                            std::memory_order_acquire);
    } else if (ev & EPOLLOUT) {
-      ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired, 
-                                                            std::memory_order_acquire, 
+      ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired,
+                                                            std::memory_order_acquire,
                                                             std::memory_order_acquire);
    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
       LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
@@ -255,25 +344,21 @@ ioMgrImpl::can_process(void *data, uint32_t ev) {
       LOGCRITICAL("Unknown event: {}", ev);
       assert(0);
    }
-   if (ret) {
-      //		LOG(INFO) << "running for fd" << info->fd;
-   }else {
-      //		LOG(INFO) << "not allowed running for fd" << info->fd;
-   }
    return ret;
 }
 
 void
 ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
-   /* XXX: we might need to take a lock, if we 
-    * support dynamic add/remove of FDs. To make  it lockless
-    * we should consider fd_info in fd_reschedule.
-    */
    std::map<int, fd_info*>::iterator it;
-   it = fd_info_map.find(fd);
-   assert(it->first == fd);
+   fd_info* info {nullptr};
+   {  std::lock_guard<std::mutex> lck(map_mtx);
+      if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
+         assert(it->first == fd);
+         info = it->second;
+      }
+   }
+   if (!info) return;
 
-   struct fd_info *info = it->second;
    uint64_t min_cnt = UINTMAX_MAX;
    int min_id = 0;
 
@@ -310,28 +395,25 @@ ioMgrImpl::process_evfd(int fd, void *data, uint32_t event) {
 void
 ioMgrImpl::process_done(int fd, int ev) {
    std::map<int, fd_info*>::iterator it;
-   std::unique_lock<std::mutex> lck(map_mtx);
-   it = fd_info_map.find(fd);
-   assert(it->first == fd);
-
-   struct fd_info *info = it->second;
-
-   process_done_impl(info, ev);
-}
-
-void 
-ioMgrImpl::process_done_impl(void *data, int ev) {
-   struct fd_info *info = (struct fd_info *)data;
-   if (ev & EPOLLIN) {
-      info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
-   } else if (ev & EPOLLOUT) {
-      info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
-   } else {
-      assert(0);
+   fd_info* info {nullptr};
+   {  std::lock_guard<std::mutex> lck(map_mtx);
+      if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
+         assert(it->first == fd);
+         info = it->second;
+      }
+   }
+   if (info) {
+      if (ev & EPOLLIN) {
+         info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
+      } else if (ev & EPOLLOUT) {
+         info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
+      } else {
+         assert(0);
+      }
    }
 }
 
-struct thread_info * 
+struct thread_info *
 ioMgrImpl::get_tid_info(pthread_t &tid) {
    for (auto& t_info: threads) {
       if (t_info.tid == tid) {
@@ -355,4 +437,4 @@ ioMgrImpl::print_perf_cntrs() {
    }
 }
 
-} /* iomgr */ 
+} /* iomgr */

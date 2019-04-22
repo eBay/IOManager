@@ -1,8 +1,10 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "2.1.2"
+    version = "2.2.0"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
     description = "iomgr"
