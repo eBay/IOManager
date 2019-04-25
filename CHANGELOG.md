@@ -5,10 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Added
-- This CHANGELOG.md to adhere to changelog standards.
+### None
 
+## [2.2.1]
 ### Changed
-- Cleaned up conan recipe and added `sanitize` setting
+- Use Folly library for map concurrency versus std::mutex.
+
+## [2.2.0]
+### Changed
+- Changed how threads are shutdown fixing many memory leaks.
 
 [Unreleased]: https://github.corp.ebay.com/SDS/iomgr/compare/testing/v2.x...develop
+[2.2.1]: https://github.corp.ebay.com/SDS/iomgr/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.corp.ebay.com/SDS/iomgr/compare/5822b12...v2.2.0
