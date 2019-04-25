@@ -12,12 +12,17 @@ extern "C" {
 #include <condition_variable>
 #include <map>
 #include <memory>
+#include <shared_mutex>
 #include <vector>
+
+#include <folly/SharedMutex.h>
 
 #include "iomgr.hpp"
 
 namespace iomgr
 {
+
+using mutex_t = folly::SharedMutexReadPriority;
 
 constexpr size_t MAX_PRI = 10;
 
@@ -70,7 +75,8 @@ private:
 
 private:
   std::map<int, fd_info *> fd_info_map;
-  std::mutex map_mtx;
+  mutex_t map_mtx;
+
   std::mutex cv_mtx;
   std::condition_variable cv;
   bool ready;

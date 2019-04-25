@@ -20,6 +20,7 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
+            "folly/2019.02.18.00@bincrafters/testing",
             "libevent/2.0.22@bincrafters/stable",
             "sds_logging/4.0.0@sds/testing",
             )
