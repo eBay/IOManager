@@ -77,7 +77,7 @@ ioMgrImpl::stop() {
         //
         while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
         // wait for all the threads to wake up;
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if(close(x->fd)) {
             LOGERROR("Failed to close epoll fd: {}", x->fd);
             return;

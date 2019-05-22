@@ -22,7 +22,9 @@ class IOMgrConan(ConanFile):
     requires = (
             "folly/2019.05.13.00@bincrafters/testing",
             "libevent/2.1.8@bincrafters/stable",
+            "gtest/1.8.1@bincrafters/stable",
             "sds_logging/4.0.0@sds/testing",
+            "sds_options/0.1.4@sds/testing",
             )
 
     generators = "cmake"
@@ -32,8 +34,11 @@ class IOMgrConan(ConanFile):
         cmake = CMake(self)
         definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
+        test_target = None
+
         cmake.configure(defs=definitions)
         cmake.build()
+        cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
