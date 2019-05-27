@@ -31,7 +31,7 @@ IOMgrTester::IOMgrTester() {
 }
 
 void IOMgrTester::start() {
-    LOGDEBUG("entering, num_ev_fd: {}", num_ev_fd);
+    srand(time(0));
     m_cb_cnt = 0;
     m_iomgr = std::make_shared<iomgr::ioMgr>(num_ep, num_threads);
     m_ev_fd.reserve(num_ev_fd);
@@ -58,7 +58,6 @@ int IOMgrTester::rand_fd() {
 }
 
 IOMgrTester::~IOMgrTester() {
-    LOGDEBUG("entering");
     // 
     // m_ep will be deleted by iomgr
     //
