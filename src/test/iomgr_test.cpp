@@ -1,7 +1,9 @@
 #include "iomgr_test.hpp"
+
+extern "C" {
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
-
+}
 
 namespace iomgr{
 extern uint32_t num_ep;
