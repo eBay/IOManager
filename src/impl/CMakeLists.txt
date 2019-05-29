@@ -1,6 +1,6 @@
 set (IOMGR_SRC
-      api.cpp
       iomgr.cpp
-      io_thread.cpp)
+      io_thread.cpp
+      endpoints/drive_endpoint.cpp)
 
 add_library (iomgr ${IOMGR_SRC})

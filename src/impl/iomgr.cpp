@@ -1,0 +1,261 @@
+//
+// Created by Rishabh Mittal on 04/20/2018
+//
+
+#include "iomgr.hpp"
+
+extern "C" {
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/types.h>
+}
+
+#include <cerrno>
+#include <chrono>
+#include <ctime>
+#include <functional>
+#include <vector>
+#include <thread>
+
+#include <sds_logging/logging.h>
+
+#include "io_thread.hpp"
+#include "include/iomgr.hpp"
+#include <utility/thread_factory.hpp>
+
+namespace iomgr {
+
+IOManager::IOManager() :
+        m_expected_eps(INBUILT_ENDPOINTS_COUNT) {
+    m_fd_infos.wlock()->reserve(INBUILT_ENDPOINTS_COUNT * 10);
+    m_ep_list.wlock()->reserve(INBUILT_ENDPOINTS_COUNT + 5);
+}
+
+IOManager::~IOManager() = default;
+
+void IOManager::start(size_t const expected_custom_eps, size_t const num_threads = 0) {
+    LOGINFO("Starting ioManager");
+    m_expected_eps += expected_custom_eps;
+
+    m_default_ep = std::make_shared< DefaultEndPoint >();
+    add_ep(std::dynamic_pointer_cast< EndPoint >(m_default_ep));
+
+    for (auto i = 0u; i < num_threads; i++) {
+        auto t = sisl::thread_factory("io_thread", &IOManager::run_io_loop, this);
+        LOGTRACEMOD(iomgr, "Created iomanager thread...", i);
+        t.detach();
+    }
+}
+
+std::shared_ptr< DriveEndPoint > IOManager::create_add_drive_endpoint(drive_comp_callback cb) {
+    m_drive_ep = std::make_shared< DriveEndPoint >(cb);
+    add_ep(std::dynamic_pointer_cast< EndPoint >(m_drive_ep));
+    return m_drive_ep;
+}
+
+void IOManager::run_io_loop() { m_thread_ctx->run(); }
+
+bool IOManager::is_ready() const { return m_ready.load(std::memory_order_acquire); }
+
+void IOManager::wait_to_be_ready() {
+    std::unique_lock< std::mutex > lck(m_cv_mtx);
+    m_cv.wait(lck, [this] { return m_ready.load(std::memory_order_acquire); });
+}
+
+void IOManager::add_ep(std::shared_ptr< EndPoint > ep) {
+    m_ep_list.wlock()->push_back(ep);
+
+    if (m_ep_list.rlock()->size() == m_expected_eps) {
+        /* allow threads to run */
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        m_ready.store(true, std::memory_order_release);
+    }
+}
+
+fd_info* IOManager::create_fd_info(EndPoint* ep, int fd, const iomgr::ev_callback& cb, int ev, int pri, void* cookie) {
+    fd_info* info = new fd_info;
+
+    info->cb = cb;
+    info->is_processing[fd_info::READ] = 0;
+    info->is_processing[fd_info::WRITE] = 0;
+    info->fd = fd;
+    info->ev = ev;
+    info->is_global = false;
+    info->pri = pri;
+    info->cookie = cookie;
+    info->endpoint = ep;
+
+    m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
+    return info;
+}
+
+fd_info* IOManager::add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+    fd_info* info = create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
+    info->is_global = true;
+
+    m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
+        if (!ctx->is_io_thread()) {
+            LOGTRACEMOD(iomgr, "Ignoring to add fd {} to this non-io thread", info->fd);
+            return true;
+        }
+
+        // Register our thread to appropriate epoll priority thread context
+        struct epoll_event ev;
+        ev.events = EPOLLET | info->ev;
+        ev.data.ptr = info;
+        if (epoll_ctl(ctx->m_epollfd, EPOLL_CTL_ADD, info->fd, &ev) == -1) {
+            assert(0);
+        }
+        return true;
+    });
+
+    m_fd_infos.wlock()->push_back(info);
+    return info;
+}
+
+fd_info* IOManager::add_per_thread_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+    return m_thread_ctx->add_fd_to_thread(ep, fd, cb, iomgr_ev, pri, cookie);
+}
+
+#if 0
+void IOManager::callback(void* data, uint32_t event) {
+    fd_info* info = (fd_info*)data;
+    info->cb(info->fd, info->cookie, event);
+}
+
+bool IOManager::can_process(void* data, uint32_t ev) {
+    fd_info* info = (fd_info*)data;
+    int      expected = 0;
+    int      desired = 1;
+    bool     ret = false;
+    if (ev & EPOLLIN) {
+        ret = info->is_processing[fd_info::READ].compare_exchange_strong(expected, desired, std::memory_order_acquire,
+                                                                          std::memory_order_acquire);
+    } else if (ev & EPOLLOUT) {
+        ret = info->is_processing[fd_info::WRITE].compare_exchange_strong(expected, desired, std::memory_order_acquire,
+                                                                           std::memory_order_acquire);
+    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
+        LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
+    } else {
+        LOGCRITICAL("Unknown event: {}", ev);
+        assert(0);
+    }
+    if (ret) {
+        //		LOG(INFO) << "running for fd" << info->fd;
+    } else {
+        //		LOG(INFO) << "not allowed running for fd" << info->fd;
+    }
+    return ret;
+}
+#endif
+
+void IOManager::fd_reschedule(int fd, uint32_t event) { fd_reschedule(fd_to_info(fd), event); }
+
+void IOManager::fd_reschedule(fd_info* info, uint32_t event) {
+    uint64_t min_cnt = UINTMAX_MAX;
+    int      min_id = 0;
+    bool     rescheduled = false;
+
+    iomgr_msg msg(iomgr_msg_type::RESCHEDULE, info, event);
+    do {
+        m_thread_ctx.access_all_threads([&min_id, &min_cnt](ioMgrThreadContext* ctx) {
+            if (!ctx->is_io_thread()) { return; }
+            if (ctx->m_count < min_cnt) {
+                min_id = ctx->m_thread_num;
+                min_cnt = ctx->m_count;
+            }
+        });
+
+        // Try to send msg to the thread. send_msg could fail if thread is not alive (i,e between access_all_threads)
+        // and next method, thread exits.
+        rescheduled = (send_msg(min_id, msg) == 1);
+    } while(!rescheduled);
+}
+
+uint32_t IOManager::send_msg(int thread_num, const iomgr_msg &msg) {
+    uint32_t msg_sent_count = 0;
+    if (thread_num == -1) {
+        m_thread_ctx.access_all_threads([msg, &msg_sent_count](ioMgrThreadContext* ctx) {
+            ctx->put_msg(std::move(msg));
+            uint64_t temp = 1;
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+            msg_sent_count++;
+        });
+    } else {
+        m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext *ctx) {
+            ctx->put_msg(std::move(msg));
+            uint64_t temp = 1;
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+            msg_sent_count++;
+        });
+    }
+    return msg_sent_count;
+}
+
+#if 0
+void IOManager::process_evfd(int evfd, void* data, uint32_t event) {
+    uint64_t temp;
+    while (0 > read(evfd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+        ;
+
+    fd_info* base_info = (fd_info*)data;
+
+    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLIN && can_process(base_info, event)) {
+        base_info->cb(base_info->fd, base_info->cookie, EPOLLIN);
+    }
+
+    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLOUT && can_process(base_info, event)) {
+        base_info->cb(base_info->fd, base_info->cookie, EPOLLOUT);
+    }
+    base_info->event[sisl::ThreadLocalContext::my_thread_num()] = 0;
+
+    process_done(evfd, event);
+}
+
+void IOManager::process_done(int fd, int ev) { process_done(fd_to_info(fd), ev); }
+
+void IOManager::process_done(fd_info* info, int ev) {
+    if (ev & EPOLLIN) {
+        info->is_processing[fd_info::READ].fetch_sub(1, std::memory_order_release);
+    } else if (ev & EPOLLOUT) {
+        info->is_processing[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
+    } else {
+        assert(0);
+    }
+}
+
+void IOManager::print_perf_cntrs() {
+    m_thread_ctx.access_all_threads([](ioMgrThreadContext* ctx) {
+        if (!ctx->is_io_thread()) { return true; }
+        LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms", ctx->m_thread_num,
+                ctx->m_count, (ctx->m_time_spent_ns / (1000 * 1000)));
+    });
+
+    foreach_endpoint([](EndPoint* ep) { ep->print_perf(); });
+}
+#endif
+
+fd_info* IOManager::fd_to_info(int fd) {
+    auto it = m_fd_info_map.rlock()->find(fd);
+    assert(it->first == fd);
+    fd_info* info = it->second;
+
+    return info;
+}
+
+void IOManager::foreach_fd_info(std::function< void(fd_info*) > fd_cb) {
+    m_fd_infos.withRLock([&](auto& fd_infos) {
+        for (auto fdi : fd_infos) {
+            fd_cb(fdi);
+        }
+    });
+}
+
+void IOManager::foreach_endpoint(std::function< void(EndPoint*) > ep_cb) {
+    m_ep_list.withRLock([&](auto& ep_list) {
+        for (auto ep : ep_list) {
+            ep_cb(ep.get());
+        }
+    });
+}
+} // namespace iomgr

@@ -1,10 +1,10 @@
 #include "iomgr.hpp"
-#include "iomgr_impl.hpp"
+#include "iomgr.hpp"
 
 namespace iomgr {
 
 ioMgr::ioMgr(size_t const num_ep, size_t const num_threads) {
-    _impl = std::make_unique< ioMgrImpl >(num_ep, num_threads);
+    _impl = std::make_unique< IOManager >(num_ep, num_threads);
 }
 
 ioMgr::~ioMgr() = default;
@@ -15,12 +15,12 @@ void ioMgr::run_io_loop() { _impl->run_io_loop(); }
 
 void ioMgr::add_ep(EndPoint* ep) { _impl->add_ep(ep); }
 
-fd_info* ioMgr::add_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie) {
-    return _impl->add_fd(fd, cb, ev, pri, cookie);
+fd_info* ioMgr::add_fd(EndPoint* ep, int const fd, ev_callback cb, int const ev, int const pri, void* cookie) {
+    return _impl->add_fd(ep, fd, cb, ev, pri, cookie);
 }
 
-fd_info* ioMgr::add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void* cookie) {
-    return _impl->add_local_fd(fd, cb, ev, pri, cookie);
+fd_info* ioMgr::add_per_thread_fd(EndPoint* ep, int const fd, ev_callback cb, int const ev, int const pri, void* cookie) {
+    return _impl->add_per_thread_fd(ep, fd, cb, ev, pri, cookie);
 }
 
 void ioMgr::print_perf_cntrs() { _impl->print_perf_cntrs(); }
