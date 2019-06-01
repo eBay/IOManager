@@ -22,7 +22,7 @@ class IOMgrConan(ConanFile):
     requires = (
             "folly/2019.05.20.00@bincrafters/testing",
             "libevent/2.1.8@bincrafters/stable",
-            "sds_logging/4.1.1@sds/testing",
+            "sds_logging/5.0.0@sds/testing",
             )
 
     generators = "cmake"
