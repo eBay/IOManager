@@ -5,3 +5,4 @@ find_package (Threads REQUIRED)
 include_directories (BEFORE include)
 
 add_subdirectory (lib)
+add_subdirectory (test)

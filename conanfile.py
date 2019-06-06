@@ -32,8 +32,15 @@ class IOMgrConan(ConanFile):
         cmake = CMake(self)
         definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
+        test_target = None
+                
+        if self.settings.sanitize != "address" and self.options.coverage == 'True':
+            definitions['CONAN_BUILD_COVERAGE'] = 'ON'
+            test_target = 'coverage'
+
         cmake.configure(defs=definitions)
         cmake.build()
+        cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
