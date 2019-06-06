@@ -14,4 +14,4 @@ target_link_libraries(test_iomgr
                        ${CMAKE_THREAD_LIBS_INIT})
 
 # CTest is a testing tool that can be used to test your project.
-add_test(NAME TestIOMgr COMMAND test_iomgr)
+# add_test(NAME TestIOMgr COMMAND test_iomgr)
