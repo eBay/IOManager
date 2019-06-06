@@ -13,10 +13,12 @@ class IOMgrConan(ConanFile):
     options = {
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
+        "coverage": ['True', 'False'],
         }
     default_options = (
         'shared=False',
-        'fPIC=True'
+        'fPIC=True',
+        'coverage=False'
         )
 
     requires = (
@@ -56,3 +58,6 @@ class IOMgrConan(ConanFile):
         if self.settings.sanitize != None:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")
+        elif self.options.coverage == 'True':
+            self.cpp_info.libs.append('gcov')
+
