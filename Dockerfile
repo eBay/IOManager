@@ -20,7 +20,7 @@ WORKDIR /output
 ENV ASAN_OPTIONS=detect_leaks=0
 RUN conan create -pr debug ${SOURCE_PATH} "${CONAN_USER}"/"${CONAN_CHANNEL}"
 RUN conan create ${SOURCE_PATH} "${CONAN_USER}"/"${CONAN_CHANNEL}"
-RUN conan create -pr nosanitize ${SOURCE_PATH} "${CONAN_USER}"/"${CONAN_CHANNEL}"
+RUN conan create -pr bionic_nosanitize ${SOURCE_PATH} "${CONAN_USER}"/"${CONAN_CHANNEL}"
 
 CMD set -eux; \
     eval $(grep 'name =' ${SOURCE_PATH}conanfile.py | sed 's, ,,g' | sed 's,name,PKG_NAME,'); \
