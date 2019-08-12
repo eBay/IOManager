@@ -53,6 +53,9 @@ ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
 
 ioMgrImpl::~ioMgrImpl() {
     // free the memory of fd_info
+    for (auto i = 0u; i < ep_list.size(); ++i) {
+        delete ep_list[i];
+    }
     for (auto& x : fd_info_map)  {
         delete x.second;
     }
@@ -113,10 +116,6 @@ ioMgrImpl::stop() {
             return;
         }
         LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
-    }
-    
-    for (auto i = 0u; i < num_ep; ++i) {
-        delete ep_list[i];
     }
 }
 
