@@ -17,6 +17,7 @@ class EndPoint {
 
  public:
    explicit EndPoint(std::shared_ptr<ioMgr> iomgr) : iomgr(iomgr) {}
+   void stop() { iomgr = nullptr; }
    virtual ~EndPoint() { }
 
    virtual void init_local() = 0;
