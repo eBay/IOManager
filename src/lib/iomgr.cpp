@@ -117,6 +117,10 @@ ioMgrImpl::stop() {
         }
         LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
     }
+    
+    for (auto i = 0u; i < ep_list.size(); ++i) {
+        ep_list[i].stop();
+    }
 }
 
 // 
