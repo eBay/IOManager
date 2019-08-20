@@ -79,13 +79,25 @@ ioMgrImpl::stop() {
         // wake up all the threads to stop them from running;
         //
         while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
-        // wait for all the threads to wake up;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    void *res;
+    for (auto& x : threads) {
+        int s = pthread_join(x.tid, &res);
+        if (s != 0) {
+            // handle error here;
+            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
+            return;
+        }
+        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
+    }
+    
+    for (auto& x : global_fd) {
         if(close(x->fd)) {
             LOGERROR("Failed to close epoll fd: {}", x->fd);
             return;
         }
-        LOGDEBUG("close epoll fd: {}", x->fd);
+        LOGDEBUG("close epoll fd: {}", x.fd);
     }
 
     for (auto& x : threads) {
@@ -105,17 +117,6 @@ ioMgrImpl::stop() {
             return;
         }
         LOGDEBUG("close epoll fd: {}", x.ev_fd);
-    }
-
-    void *res;
-    for (auto& x : threads) {
-        int s = pthread_join(x.tid, &res);
-        if (s != 0) {
-            // handle error here;
-            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
-            return;
-        }
-        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
     }
     
     for (auto i = 0u; i < ep_list.size(); ++i) {
