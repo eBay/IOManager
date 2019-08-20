@@ -72,13 +72,14 @@ ioMgrImpl::stop() {
     stop_running();
     uint64_t temp = 1;
 
-    for (auto& x : global_fd) {
+    /* take one global fd and schedule the event on all threads */
+    for (auto& x : global_fd[0].ev_fd) {
         // 
         // Currently one event will wake up all the i/o threads.
         // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
         // wake up all the threads to stop them from running;
         //
-        while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+        while (0 > write(x, &temp, sizeof(uint64_t)) && errno == EAGAIN);
     }
 
     void *res;
