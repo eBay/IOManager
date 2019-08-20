@@ -102,6 +102,9 @@ ioMgrImpl::stop() {
     }
 
     for (auto& x : threads) {
+        if (!x.inited) {
+            continue;
+        }
         for (uint32_t i = 0; i < MAX_PRI; i++) {
             auto y = x.epollfd_pri[i];
             if(close(y)) {
@@ -113,6 +116,9 @@ ioMgrImpl::stop() {
     }
 
     for (auto& x : threads) {
+        if (!x.inited) {
+            continue;
+        }
         if(close(x.ev_fd)) {
             LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
             return;
@@ -184,9 +190,9 @@ ioMgrImpl::local_init() {
    }
 
    // add event fd to each thread
-   info->inited = true;
    info->ev_fd = epollfd;
    info->epollfd_pri = epollfd_pri;
+   info->inited = true;
 
    for(auto i = 0u; i < global_fd.size(); ++i) {
       /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
