@@ -73,7 +73,7 @@ ioMgrImpl::stop() {
     uint64_t temp = 1;
 
     /* take one global fd and schedule the event on all threads */
-    for (auto& x : global_fd[0].ev_fd) {
+    for (auto& x : global_fd[0]->ev_fd) {
         // 
         // Currently one event will wake up all the i/o threads.
         // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
@@ -98,7 +98,7 @@ ioMgrImpl::stop() {
             LOGERROR("Failed to close epoll fd: {}", x->fd);
             return;
         }
-        LOGDEBUG("close epoll fd: {}", x.fd);
+        LOGDEBUG("close epoll fd: {}", x->fd);
     }
 
     for (auto& x : threads) {
