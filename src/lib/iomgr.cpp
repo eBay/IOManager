@@ -106,6 +106,9 @@ ioMgrImpl::stop() {
             continue;
         }
         for (uint32_t i = 0; i < MAX_PRI; i++) {
+            if (!x.epollfd_pri) {
+                break;
+            }
             auto y = x.epollfd_pri[i];
             if(close(y)) {
                 LOGERROR("{}, Failed to close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
