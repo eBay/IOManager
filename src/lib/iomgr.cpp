@@ -105,23 +105,6 @@ ioMgrImpl::stop() {
         if (!x.inited) {
             continue;
         }
-        for (uint32_t i = 0; i < MAX_PRI; i++) {
-            if (!x.epollfd_pri) {
-                break;
-            }
-            auto y = x.epollfd_pri[i];
-            if(close(y)) {
-                LOGERROR("{}, Failed to close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
-                return;
-            }
-            LOGDEBUG("{}, close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
-        }
-    }
-
-    for (auto& x : threads) {
-        if (!x.inited) {
-            continue;
-        }
         if(close(x.ev_fd)) {
             LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
             return;
