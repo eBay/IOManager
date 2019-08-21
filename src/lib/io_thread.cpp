@@ -83,6 +83,17 @@ void* iothread(void *obj) {
         } 
     } // de-ref of iomgr use_count;
 
+    /* close the global epoll fd */
+    for (uint32_t i = 0; i < MAX_PRI; i++) {
+        auto iomgr = *iomgr_ptr;
+        auto y = iomgr->epollfd_pri[i];
+        if(close(y)) {
+            LOGERROR("{}, Failed to close iomgr->epollfd_pri[{}]: {}", __FUNCTION__, i, y); 
+        } else {
+            LOGDEBUG("{}, close iomgr->epollfd_pri[{}]: {}", __FUNCTION__, i, y); 
+        }
+    }
+
     delete iomgr_ptr;
     return nullptr;
 }

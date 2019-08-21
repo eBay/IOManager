@@ -72,39 +72,14 @@ ioMgrImpl::stop() {
     stop_running();
     uint64_t temp = 1;
 
-    for (auto& x : global_fd) {
+    /* take one global fd and schedule the event on all threads */
+    for (auto& x : global_fd[0]->ev_fd) {
         // 
         // Currently one event will wake up all the i/o threads.
         // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
         // wake up all the threads to stop them from running;
         //
-        while (0 > write(x->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
-        // wait for all the threads to wake up;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if(close(x->fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x->fd);
-            return;
-        }
-        LOGDEBUG("close epoll fd: {}", x->fd);
-    }
-
-    for (auto& x : threads) {
-        for (uint32_t i = 0; i < MAX_PRI; i++) {
-            auto y = x.epollfd_pri[i];
-            if(close(y)) {
-                LOGERROR("{}, Failed to close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
-                return;
-            }
-            LOGDEBUG("{}, close epollfd_pri[{}]: {}", __FUNCTION__, i, y);
-        }
-    }
-
-    for (auto& x : threads) {
-        if(close(x.ev_fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
-            return;
-        }
-        LOGDEBUG("close epoll fd: {}", x.ev_fd);
+        while (0 > write(x, &temp, sizeof(uint64_t)) && errno == EAGAIN);
     }
 
     void *res;
@@ -116,6 +91,25 @@ ioMgrImpl::stop() {
             return;
         }
         LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
+    }
+    
+    for (auto& x : global_fd) {
+        if(close(x->fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x->fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x->fd);
+    }
+
+    for (auto& x : threads) {
+        if (!x.inited) {
+            continue;
+        }
+        if(close(x.ev_fd)) {
+            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
+            return;
+        }
+        LOGDEBUG("close epoll fd: {}", x.ev_fd);
     }
     
     for (auto i = 0u; i < ep_list.size(); ++i) {
@@ -182,9 +176,9 @@ ioMgrImpl::local_init() {
    }
 
    // add event fd to each thread
-   info->inited = true;
    info->ev_fd = epollfd;
    info->epollfd_pri = epollfd_pri;
+   info->inited = true;
 
    for(auto i = 0u; i < global_fd.size(); ++i) {
       /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
