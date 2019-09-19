@@ -14,12 +14,12 @@ extern "C" {
 #include <memory>
 #include <vector>
 #include <utility/thread_buffer.hpp>
+#include <utility/atomic_counter.hpp>
 #include <fds/sparse_vector.hpp>
 #include <folly/Synchronized.h>
 #include "iomgr_msg.hpp"
-#include "impl/io_thread.hpp"
-#include "impl/endpoints/drive_endpoint.hpp"
-#include "impl/endpoints/default_endpoint.hpp"
+#include "io_thread.hpp"
+#include "endpoint.hpp"
 
 namespace iomgr {
 
@@ -28,14 +28,14 @@ using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >
 struct fd_info {
     enum { READ = 0, WRITE };
 
-    ev_callback                cb;
-    int                        fd;
-    std::atomic< int >         is_processing[2];
-    int                        ev;
-    bool                       is_global;
-    int                        pri;
-    void*                      cookie;
-    EndPoint*                  endpoint;
+    ev_callback        cb;
+    int                fd;
+    std::atomic< int > is_processing[2];
+    int                ev;
+    bool               is_global;
+    int                pri;
+    void*              cookie;
+    EndPoint*          endpoint;
 };
 
 #if 0
@@ -47,11 +47,18 @@ struct thread_stats {
 };
 #endif
 
-#define iomgr_instance IOManager::instance()
-
 // Only Default endpoints
 // TODO: Make this part of an enum, to force add count upon adding new inbuilt endpoint.
 #define INBUILT_ENDPOINTS_COUNT 1
+class AioDriveEndPoint;
+class DefaultEndPoint;
+
+enum class iomgr_state : uint16_t {
+    stopped = 0,
+    waiting_for_endpoints = 1,
+    waiting_for_threads = 2,
+    running = 3,
+};
 
 class IOManager {
 public:
@@ -62,10 +69,11 @@ public:
 
     IOManager();
     ~IOManager();
-    void     start(size_t num_ep, size_t num_threads);
-    void     run_io_loop();
+    void start(size_t num_ep, size_t num_threads);
+    void run_io_loop(bool is_iomgr_thread = false);
 
-    std::shared_ptr< DriveEndPoint > create_add_drive_endpoint(drive_comp_callback cb);
+    std::shared_ptr< AioDriveEndPoint > create_add_aio_drive_endpoint(const endpoint_comp_closure& cb,
+                                                                      const thread_state_notifier& notifier);
     fd_info* create_fd_info(EndPoint* ep, int fd, const ev_callback& cb, int ev, int pri, void* cookie);
 
     void     add_ep(std::shared_ptr< EndPoint > ep);
@@ -74,37 +82,62 @@ public:
     void     print_perf_cntrs();
     void     fd_reschedule(int fd, uint32_t event);
     void     fd_reschedule(fd_info* info, uint32_t event);
-    bool     is_ready() const;
 
-    //bool     can_process(void* data, uint32_t event);
-    //void     process_evfd(int fd, void* data, uint32_t event);
-    //void     process_done(int fd, int ev);
-    //void     process_done(fd_info* info, int ev);
+    // bool     can_process(void* data, uint32_t event);
+    // void     process_evfd(int fd, void* data, uint32_t event);
+    // void     process_done(int fd, int ev);
+    // void     process_done(fd_info* info, int ev);
 
     void foreach_fd_info(std::function< void(fd_info*) > fd_cb);
     void foreach_endpoint(std::function< void(EndPoint*) > ep_cb);
 
-    void wait_to_be_ready();
+    bool is_ready() const { return (get_state() == iomgr_state::running); }
+    bool is_endpoint_registered() const {
+        return ((uint16_t)get_state() > (uint16_t)iomgr_state::waiting_for_endpoints);
+    }
+
+    void wait_to_be_ready() {
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        m_cv.wait(lck, [this] { return is_ready(); });
+    }
+
+    void wait_for_ep_registration() {
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        m_cv.wait(lck, [this] { return is_endpoint_registered(); });
+    }
+
+    // Notification that iomanager thread is ready to serve
+    void iomgr_thread_ready();
 
     uint32_t send_msg(int thread_num, const iomgr_msg& msg);
 
-    DefaultEndPoint* default_endpoint() { return m_default_ep.get(); }
-    DriveEndPoint* drive_endpoint() { return m_drive_ep.get(); }
+    DefaultEndPoint*  default_endpoint() { return m_default_ep.get(); }
+    AioDriveEndPoint* drive_endpoint() { return m_drive_ep.get(); }
 
     int64_t idle_timeout_interval_usec() const { return -1; };
-    void idle_timeout_expired() {
-        if (m_idle_timeout_expired_cb) { m_idle_timeout_expired_cb(); }
+    void    idle_timeout_expired() {
+        if (m_idle_timeout_expired_cb) {
+            m_idle_timeout_expired_cb();
+        }
     }
-private:
-    fd_info* fd_to_info(int fd);
 
 private:
-    size_t           m_expected_eps;
-    std::atomic_bool m_ready = false;
+    fd_info*    fd_to_info(int fd);
+    void        set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
+    iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
+    void        set_state_and_notify(iomgr_state state) {
+        set_state(state);
+        m_cv.notify_all();
+    }
 
-    folly::Synchronized< std::vector< fd_info* > >   m_fd_infos; /* fds shared between the threads */
-    folly::Synchronized< std::vector< std::shared_ptr < EndPoint > > >  m_ep_list;
-    folly::Synchronized< std::map< int, fd_info* > > m_fd_info_map;
+private:
+    size_t                          m_expected_eps;                 // Total number of endpoints expected
+    std::atomic< iomgr_state >      m_state = iomgr_state::stopped; // Current state of IOManager
+    sisl::atomic_counter< int16_t > m_yet_to_start_nthreads = 0;    // Total number of iomanager threads yet to start
+
+    folly::Synchronized< std::vector< fd_info* > >                    m_fd_infos; /* fds shared between the threads */
+    folly::Synchronized< std::vector< std::shared_ptr< EndPoint > > > m_ep_list;
+    folly::Synchronized< std::map< int, fd_info* > >                  m_fd_info_map;
 
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
@@ -114,8 +147,9 @@ private:
     std::condition_variable m_cv;
     std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
-    std::shared_ptr< DriveEndPoint >   m_drive_ep;
-    std::shared_ptr< DefaultEndPoint > m_default_ep;
+    std::shared_ptr< AioDriveEndPoint > m_drive_ep;
+    std::shared_ptr< DefaultEndPoint >  m_default_ep;
 };
 
+#define iomanager IOManager::instance()
 } // namespace iomgr

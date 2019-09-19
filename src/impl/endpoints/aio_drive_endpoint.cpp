@@ -10,11 +10,11 @@
 #include <assert.h>
 #include <unistd.h>
 #include <sys/uio.h>
-#include "drive_endpoint.hpp"
 #include <fstream>
 #include <sys/epoll.h>
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
+#include "include/aio_drive_endpoint.hpp"
 
 namespace iomgr {
 #ifdef __APPLE__
@@ -32,49 +32,75 @@ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
 #endif
 using namespace std;
 
-thread_local struct io_event            DriveEndPoint::events[MAX_COMPLETIONS] = {{}};
-thread_local int                        DriveEndPoint::ev_fd = 0;
-thread_local io_context_t               DriveEndPoint::ioctx = 0;
-thread_local stack< struct iocb_info* > DriveEndPoint::iocb_list;
+thread_local struct io_event            AioDriveEndPoint::events[MAX_COMPLETIONS] = {{}};
+thread_local int                        AioDriveEndPoint::ev_fd = 0;
+thread_local io_context_t               AioDriveEndPoint::ioctx = 0;
+thread_local stack< struct iocb_info* > AioDriveEndPoint::iocb_list;
 
-DriveEndPoint::DriveEndPoint(drive_comp_callback cb) : m_comp_cb(cb) {}
+AioDriveEndPoint::AioDriveEndPoint(const endpoint_comp_closure& comp_closure,
+                                   const thread_state_notifier& thread_notifier) :
+        m_comp_cb(comp_closure),
+        m_thread_notifier(thread_notifier) {}
 
-int DriveEndPoint::open_dev(std::string devname, int oflags) {
+int AioDriveEndPoint::open_dev(std::string devname, int oflags) {
     /* it doesn't need to keep track of any fds */
-    return (open(devname.c_str(), oflags));
+    auto fd = open(devname.c_str(), oflags);
+    if (fd == -1) {
+        std::cerr << "Unable to open the device " << devname << " errorno = " << errno << " error = " << strerror(errno)
+                  << "\n";
+    }
+    LOGINFO("Device {} opened with flags={} successfully, fd={}", devname, oflags, fd);
+    /*iomanager.add_fd(this, fd,
+                     std::bind(&AioDriveEndPoint::process_completions, this, std::placeholders::_1,
+                               std::placeholders::_2, std::placeholders::_3),
+                     EPOLLIN, 9, nullptr); */
+    return fd;
 }
 
-void DriveEndPoint::on_thread_start() {
+void AioDriveEndPoint::on_thread_start() {
     ev_fd = eventfd(0, EFD_NONBLOCK);
-    iomgr_instance.add_per_thread_fd(this, ev_fd,
-                        std::bind(&DriveEndPoint::process_completions, this, std::placeholders::_1,
-                                  std::placeholders::_2, std::placeholders::_3),
-                        EPOLLIN, 0, NULL);
+    iomanager.add_per_thread_fd(this, ev_fd,
+                                std::bind(&AioDriveEndPoint::process_completions, this, std::placeholders::_1,
+                                          std::placeholders::_2, std::placeholders::_3),
+                                EPOLLIN, 0, NULL);
     io_setup(MAX_OUTSTANDING_IO, &ioctx);
     for (int i = 0; i < MAX_OUTSTANDING_IO; i++) {
         struct iocb_info* info = (struct iocb_info*)malloc(sizeof(struct iocb_info));
         iocb_list.push(info);
     }
+
+    if (m_thread_notifier) {
+        m_thread_notifier(true /* thread_started */);
+    }
 }
 
-void DriveEndPoint::process_completions(int fd, void* cookie, int event) {
+void AioDriveEndPoint::on_thread_exit() {
+    // TODO: Fixme Need to handle thread exit
+    if (m_thread_notifier) {
+        m_thread_notifier(false /* thread_started */);
+    }
+}
+
+void AioDriveEndPoint::process_completions(int fd, void* cookie, int event) {
     assert(fd == ev_fd);
 
-    (void)cookie; (void)event;
+    (void)cookie;
+    (void)event;
 
+    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {}", fd, ev_fd);
     /* TODO need to handle the error events */
     uint64_t temp = 0;
 
     [[maybe_unused]] auto rsize = read(ev_fd, &temp, sizeof(uint64_t));
-    int                   ret = io_getevents(ioctx, 0, MAX_COMPLETIONS, events, NULL);
-    if (ret == 0) {
+    int                   nevents = io_getevents(ioctx, 0, MAX_COMPLETIONS, events, NULL);
+    if (nevents == 0) {
         spurious_events++;
     }
-    if (ret < 0) {
+    if (nevents < 0) {
         /* TODO how to handle it */
         cmp_err++;
     }
-    for (int i = 0; i < ret; i++) {
+    for (int i = 0; i < nevents; i++) {
         assert(static_cast< int64_t >(events[i].res) >= 0);
         struct iocb_info* info = static_cast< iocb_info* >(events[i].obj);
         iocb_list.push(info);
@@ -82,9 +108,9 @@ void DriveEndPoint::process_completions(int fd, void* cookie, int event) {
     }
 }
 
-void DriveEndPoint::async_write(int m_sync_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
+void AioDriveEndPoint::async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
     if (iocb_list.empty()) {
-        sync_write(m_sync_fd, data, size, offset);
+        sync_write(data_fd, data, size, offset);
         m_comp_cb(0, cookie);
         return;
     }
@@ -93,7 +119,7 @@ void DriveEndPoint::async_write(int m_sync_fd, const char* data, uint32_t size, 
     struct iocb*      iocb = static_cast< struct iocb* >(info);
     iocb_list.pop();
 
-    io_prep_pwrite(iocb, m_sync_fd, (void*)data, size, offset);
+    io_prep_pwrite(iocb, data_fd, (void*)data, size, offset);
     io_set_eventfd(iocb, ev_fd);
     iocb->data = cookie;
     info->is_read = false;
@@ -104,9 +130,9 @@ void DriveEndPoint::async_write(int m_sync_fd, const char* data, uint32_t size, 
     }
 }
 
-void DriveEndPoint::async_read(int m_sync_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
+void AioDriveEndPoint::async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
     if (iocb_list.empty()) {
-        sync_read(m_sync_fd, data, size, offset);
+        sync_read(data_fd, data, size, offset);
         m_comp_cb(0, cookie);
         return;
     }
@@ -114,7 +140,7 @@ void DriveEndPoint::async_read(int m_sync_fd, char* data, uint32_t size, uint64_
     struct iocb*      iocb = static_cast< struct iocb* >(info);
     iocb_list.pop();
 
-    io_prep_pread(iocb, m_sync_fd, data, size, offset);
+    io_prep_pread(iocb, data_fd, data, size, offset);
     io_set_eventfd(iocb, ev_fd);
     iocb->data = cookie;
     info->is_read = true;
@@ -125,18 +151,18 @@ void DriveEndPoint::async_read(int m_sync_fd, char* data, uint32_t size, uint64_
     }
 }
 
-void DriveEndPoint::async_writev(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                 uint8_t* cookie) {
+void AioDriveEndPoint::async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                    uint8_t* cookie) {
 
     if (iocb_list.empty()) {
-        sync_writev(m_sync_fd, iov, iovcnt, size, offset);
+        sync_writev(data_fd, iov, iovcnt, size, offset);
         m_comp_cb(0, cookie);
         return;
     }
     struct iocb_info* info = iocb_list.top();
     struct iocb*      iocb = static_cast< struct iocb* >(info);
     iocb_list.pop();
-    io_prep_pwritev(iocb, m_sync_fd, iov, iovcnt, offset);
+    io_prep_pwritev(iocb, data_fd, iov, iovcnt, offset);
     io_set_eventfd(iocb, ev_fd);
     iocb->data = cookie;
     info->is_read = false;
@@ -145,11 +171,11 @@ void DriveEndPoint::async_writev(int m_sync_fd, const struct iovec* iov, int iov
     }
 }
 
-void DriveEndPoint::async_readv(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                uint8_t* cookie) {
+void AioDriveEndPoint::async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                   uint8_t* cookie) {
 
     if (iocb_list.empty()) {
-        sync_readv(m_sync_fd, iov, iovcnt, size, offset);
+        sync_readv(data_fd, iov, iovcnt, size, offset);
         m_comp_cb(0, cookie);
         return;
     }
@@ -157,7 +183,7 @@ void DriveEndPoint::async_readv(int m_sync_fd, const struct iovec* iov, int iovc
     struct iocb*      iocb = static_cast< struct iocb* >(info);
     iocb_list.pop();
 
-    io_prep_preadv(iocb, m_sync_fd, iov, iovcnt, offset);
+    io_prep_preadv(iocb, data_fd, iov, iovcnt, offset);
     io_set_eventfd(iocb, ev_fd);
     iocb->data = cookie;
     info->is_read = true;
@@ -168,8 +194,8 @@ void DriveEndPoint::async_readv(int m_sync_fd, const struct iovec* iov, int iovc
     }
 }
 
-void DriveEndPoint::sync_write(int m_sync_fd, const char* data, uint32_t size, uint64_t offset) {
-    ssize_t written_size = pwrite(m_sync_fd, data, (ssize_t)size, (off_t)offset);
+void AioDriveEndPoint::sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) {
+    ssize_t written_size = pwrite(data_fd, data, (ssize_t)size, (off_t)offset);
     if (written_size != size) {
         std::stringstream ss;
         ss << "Error trying to write offset " << offset << " size to write = " << size
@@ -178,8 +204,8 @@ void DriveEndPoint::sync_write(int m_sync_fd, const char* data, uint32_t size, u
     }
 }
 
-void DriveEndPoint::sync_writev(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    ssize_t written_size = pwritev(m_sync_fd, iov, iovcnt, offset);
+void AioDriveEndPoint::sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+    ssize_t written_size = pwritev(data_fd, iov, iovcnt, offset);
     if (written_size != size) {
         std::stringstream ss;
         ss << "Error trying to write offset " << offset << " size to write = " << size
@@ -188,8 +214,8 @@ void DriveEndPoint::sync_writev(int m_sync_fd, const struct iovec* iov, int iovc
     }
 }
 
-void DriveEndPoint::sync_read(int m_sync_fd, char* data, uint32_t size, uint64_t offset) {
-    ssize_t read_size = pread(m_sync_fd, data, (ssize_t)size, (off_t)offset);
+void AioDriveEndPoint::sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) {
+    ssize_t read_size = pread(data_fd, data, (ssize_t)size, (off_t)offset);
     if (read_size != size) {
         std::stringstream ss;
         ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
@@ -198,8 +224,8 @@ void DriveEndPoint::sync_read(int m_sync_fd, char* data, uint32_t size, uint64_t
     }
 }
 
-void DriveEndPoint::sync_readv(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    ssize_t read_size = preadv(m_sync_fd, iov, iovcnt, (off_t)offset);
+void AioDriveEndPoint::sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+    ssize_t read_size = preadv(data_fd, iov, iovcnt, (off_t)offset);
     if (read_size != size) {
         std::stringstream ss;
         ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
@@ -208,4 +234,4 @@ void DriveEndPoint::sync_readv(int m_sync_fd, const struct iovec* iov, int iovcn
     }
 }
 
-} // namespace homeio
+} // namespace iomgr

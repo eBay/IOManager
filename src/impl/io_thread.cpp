@@ -2,16 +2,14 @@
  * Copyright eBay Corporation 2018
  */
 
-#include "io_thread.hpp"
-
 extern "C" {
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 }
 
 #include <sds_logging/logging.h>
-
-#include "iomgr.hpp"
+#include "include/iomgr.hpp"
+#include "include/io_thread.hpp"
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -28,26 +26,36 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 #define MAX_EVENTS 20
 #define ESTIMATED_MSGS_PER_THREAD 128
 
-static bool compare_prioirty(const epoll_event& ev1, const epoll_event& ev2) {
-    fd_info* info1 = (fd_info *)ev1.data.ptr;
-    fd_info* info2 = (fd_info *)ev2.data.ptr;
+#if 0
+static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
+    fd_info* info1 = (fd_info*)ev1.data.ptr;
+    fd_info* info2 = (fd_info*)ev2.data.ptr;
     return (info1->pri > info2->pri);
 }
+#endif
 
-ioMgrThreadContext::ioMgrThreadContext() :
-        m_msg_q(ESTIMATED_MSGS_PER_THREAD) {
+ioMgrThreadContext::ioMgrThreadContext() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {
     m_thread_num = sisl::ThreadLocalContext::my_thread_num();
 }
 
 ioMgrThreadContext::~ioMgrThreadContext() {
-    iomgr_instance.foreach_endpoint([&](EndPoint* ep) { ep->on_thread_exit(); });
-    if (m_epollfd != -1) { close(m_epollfd); }
-    if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) { close(m_msg_fd_info->fd); }
+    iomanager.foreach_endpoint([&](EndPoint* ep) { ep->on_thread_exit(); });
+    if (m_epollfd != -1) {
+        close(m_epollfd);
+    }
+    if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) {
+        close(m_msg_fd_info->fd);
+    }
 }
 
-void ioMgrThreadContext::run() {
+void ioMgrThreadContext::run(bool is_iomgr_thread) {
     if (!m_is_io_thread) {
-        iothread_init(true /* wait_till_ready */);
+        m_is_iomgr_thread = is_iomgr_thread;
+        iothread_init(true /* wait_for_ep_register */);
+        if (is_iomgr_thread) {
+            iomanager.iomgr_thread_ready();
+        }
+        LOGINFO("IOThread is ready and going to listen loop");
     }
 
     bool keep_running = true;
@@ -56,13 +64,15 @@ void ioMgrThreadContext::run() {
     }
 }
 
-void ioMgrThreadContext::iothread_init(bool wait_till_ready) {
-    if (!iomgr_instance.is_ready()) {
-        if (!wait_till_ready) {
-            LOGTRACEMOD(iomgr, "IOmanager is not ready yet, will init the thread context once it is ready later");
+void ioMgrThreadContext::iothread_init(bool wait_for_ep_register) {
+    if (!iomanager.is_endpoint_registered()) {
+        if (!wait_for_ep_register) {
+            LOGINFO("IOmanager endpoints are not registered yet and wait is off, it will not be an iothread");
             return;
         }
-        iomgr_instance.wait_to_be_ready();
+        LOGINFO("IOManager endpoints are not registered yet, waiting for endpoints to get registered");
+        iomanager.wait_for_ep_registration();
+        LOGTRACEMOD(iomgr, "All endponts are registered to IOManager, can proceed with this thread initialization");
     }
 
     LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread");
@@ -102,20 +112,19 @@ void ioMgrThreadContext::iothread_init(bool wait_till_ready) {
     LOGDEBUGMOD(iomgr, "Epoll event added");
 
     // For every registered fds add my thread portion of event fd
-    iomgr_instance.foreach_fd_info([&](fd_info* fdi) {
+    iomanager.foreach_fd_info([&](fd_info* fdi) {
         struct epoll_event ev;
         ev.events = EPOLLET | EPOLLEXCLUSIVE | fdi->ev;
         ev.data.ptr = fdi;
         if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, fdi->fd, &ev) == -1) {
-            assert(0);
-            LOGERROR("epoll_ctl failed: {}", strerror(errno));
+            LOGFATAL("epoll_ctl failed: {}", strerror(errno));
         }
 
         LOGTRACEMOD(iomgr, "registered event fd {} to this thread context", fdi->fd);
     });
 
     /* Notify all the end points about new thread */
-    iomgr_instance.foreach_endpoint([&](EndPoint* ep) { ep->on_thread_start(); });
+    iomanager.foreach_endpoint([&](EndPoint* ep) { ep->on_thread_start(); });
     return;
 
 error:
@@ -127,7 +136,9 @@ error:
     }
 
     if (m_msg_fd_info) {
-        if (m_msg_fd_info->fd > 0) { close(m_msg_fd_info->fd); }
+        if (m_msg_fd_info->fd > 0) {
+            close(m_msg_fd_info->fd);
+        }
         m_msg_fd_info = nullptr;
     }
 }
@@ -135,19 +146,21 @@ error:
 bool ioMgrThreadContext::is_io_thread() const { return m_is_io_thread; }
 
 void ioMgrThreadContext::listen() {
-    std::array<struct epoll_event, MAX_EVENTS > events;
+    std::array< struct epoll_event, MAX_EVENTS > events;
 
-    int num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomgr_instance.idle_timeout_interval_usec());
+    int num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
     if (num_fds == 0) {
-        iomgr_instance.idle_timeout_expired();
+        iomanager.idle_timeout_expired();
         return;
     } else if (num_fds < 0) {
         LOGERROR("epoll wait failed: {}", errno);
         return;
     }
     // Next sort the events based on priority and handle them in that order
-    std::sort(events.begin(), events.end(), compare_prioirty);
-    for (auto &e : events) {
+    // std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
+    // for (auto& e : events) {
+    for (auto i = 0; i < num_fds; ++i) {
+        auto& e = events[i];
         if (e.data.fd == m_msg_fd_info->fd) {
             on_msg_fd_notification();
         } else {
@@ -164,14 +177,15 @@ void ioMgrThreadContext::listen() {
     }
 }
 
-fd_info* ioMgrThreadContext::add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+fd_info* ioMgrThreadContext::add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri,
+                                              void* cookie) {
     // if (!m_is_io_thread) { iothread_init(true /* wait_till_ready */); }
     if (!m_is_io_thread) {
         LOGTRACEMOD(iomgr, "Ignoring to add fd {} to this non-io thread", fd);
         return nullptr;
     }
 
-    fd_info* info = iomgr_instance.create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
+    fd_info* info = iomanager.create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
 
     struct epoll_event ev;
     ev.events = EPOLLET | iomgr_ev;
@@ -179,15 +193,13 @@ fd_info* ioMgrThreadContext::add_fd_to_thread(EndPoint* ep, int fd, ev_callback 
     if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, fd, &ev) == -1) {
         assert(0);
     }
-    LOGDEBUGMOD(iomgr, "Added FD: {} to this thread context", fd);
+    LOGDEBUGMOD(iomgr, "Added per thread fd {} to this io thread's epoll fd {}", fd, m_epollfd);
     return info;
 }
 
-void ioMgrThreadContext::put_msg(const iomgr_msg& msg) {
-    m_msg_q.blockingWrite(msg);
-}
+void ioMgrThreadContext::put_msg(const iomgr_msg& msg) { m_msg_q.blockingWrite(msg); }
 
-void ioMgrThreadContext::put_msg(iomgr_msg_type type, fd_info *info, int event, void *buf, uint32_t size) {
+void ioMgrThreadContext::put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf, uint32_t size) {
     put_msg(iomgr_msg(type, info, event, buf, size));
 }
 
@@ -197,7 +209,7 @@ void ioMgrThreadContext::on_msg_fd_notification() {
         ;
 
     // Start pulling all the messages and handle them.
-    while(true) {
+    while (true) {
         iomgr_msg msg;
         if (!m_msg_q.read(msg)) {
             break;
@@ -206,8 +218,12 @@ void ioMgrThreadContext::on_msg_fd_notification() {
         switch (msg.m_type) {
         case RESCHEDULE: {
             auto info = msg.m_fd_info;
-            if (msg.m_event & EPOLLIN) { info->cb(info->fd, info->cookie, EPOLLIN); }
-            if (msg.m_event & EPOLLOUT) { info->cb(info->fd, info->cookie, EPOLLOUT); }
+            if (msg.m_event & EPOLLIN) {
+                info->cb(info->fd, info->cookie, EPOLLIN);
+            }
+            if (msg.m_event & EPOLLOUT) {
+                info->cb(info->fd, info->cookie, EPOLLOUT);
+            }
             break;
         }
 
@@ -216,9 +232,7 @@ void ioMgrThreadContext::on_msg_fd_notification() {
         case SHUTDOWN:
         case DESIGNATE_IO_THREAD:
         case RELINQUISH_IO_THREAD:
-        default:
-            assert(0);
-            break;
+        default: assert(0); break;
         }
     }
 }

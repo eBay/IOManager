@@ -19,14 +19,15 @@ extern "C" {
 
 #include <sds_logging/logging.h>
 
-#include "io_thread.hpp"
+#include "include/default_endpoint.hpp"
+#include "include/aio_drive_endpoint.hpp"
 #include "include/iomgr.hpp"
+#include "include/io_thread.hpp"
 #include <utility/thread_factory.hpp>
 
 namespace iomgr {
 
-IOManager::IOManager() :
-        m_expected_eps(INBUILT_ENDPOINTS_COUNT) {
+IOManager::IOManager() : m_expected_eps(INBUILT_ENDPOINTS_COUNT) {
     m_fd_infos.wlock()->reserve(INBUILT_ENDPOINTS_COUNT * 10);
     m_ep_list.wlock()->reserve(INBUILT_ENDPOINTS_COUNT + 5);
 }
@@ -34,62 +35,63 @@ IOManager::IOManager() :
 IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const expected_custom_eps, size_t const num_threads = 0) {
-    LOGINFO("Starting ioManager");
+    LOGINFO("Starting IOManager");
     m_expected_eps += expected_custom_eps;
+    m_yet_to_start_nthreads.set(num_threads);
 
+    set_state(iomgr_state::waiting_for_endpoints);
     m_default_ep = std::make_shared< DefaultEndPoint >();
     add_ep(std::dynamic_pointer_cast< EndPoint >(m_default_ep));
-
-    for (auto i = 0u; i < num_threads; i++) {
-        auto t = sisl::thread_factory("io_thread", &IOManager::run_io_loop, this);
-        LOGTRACEMOD(iomgr, "Created iomanager thread...", i);
-        t.detach();
-    }
 }
 
-std::shared_ptr< DriveEndPoint > IOManager::create_add_drive_endpoint(drive_comp_callback cb) {
-    m_drive_ep = std::make_shared< DriveEndPoint >(cb);
+std::shared_ptr< AioDriveEndPoint > IOManager::create_add_aio_drive_endpoint(const endpoint_comp_closure& cb,
+                                                                             const thread_state_notifier& notifier) {
+    m_drive_ep = std::make_shared< AioDriveEndPoint >(cb, notifier);
     add_ep(std::dynamic_pointer_cast< EndPoint >(m_drive_ep));
     return m_drive_ep;
-}
-
-void IOManager::run_io_loop() { m_thread_ctx->run(); }
-
-bool IOManager::is_ready() const { return m_ready.load(std::memory_order_acquire); }
-
-void IOManager::wait_to_be_ready() {
-    std::unique_lock< std::mutex > lck(m_cv_mtx);
-    m_cv.wait(lck, [this] { return m_ready.load(std::memory_order_acquire); });
 }
 
 void IOManager::add_ep(std::shared_ptr< EndPoint > ep) {
     m_ep_list.wlock()->push_back(ep);
 
-    if (m_ep_list.rlock()->size() == m_expected_eps) {
-        /* allow threads to run */
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
-        m_ready.store(true, std::memory_order_release);
+    auto ep_count = m_ep_list.rlock()->size();
+    if (ep_count == m_expected_eps) {
+        LOGINFO("Registered expected {} endpoints, marking iomanager waiting for threads", ep_count);
+
+        auto nthreads = m_yet_to_start_nthreads.get();
+        if (nthreads) {
+            set_state_and_notify(iomgr_state::waiting_for_threads);
+            LOGINFO("IOManager is asked to start {} number of threads, starting them", nthreads);
+            for (auto i = 0; i < nthreads; i++) {
+                auto t = sisl::thread_factory("io_thread", &IOManager::run_io_loop, this, true);
+                LOGTRACEMOD(iomgr, "Created iomanager thread...", i);
+                t.detach();
+            }
+        } else {
+            set_state_and_notify(iomgr_state::running);
+        }
+    } else if (ep_count < m_expected_eps) {
+        LOGINFO("Only added {} end points, need to wait till we get {} endpoints registered", ep_count, m_expected_eps);
     }
 }
 
-fd_info* IOManager::create_fd_info(EndPoint* ep, int fd, const iomgr::ev_callback& cb, int ev, int pri, void* cookie) {
-    fd_info* info = new fd_info;
+void IOManager::run_io_loop(bool is_iomgr_thread) { m_thread_ctx->run(is_iomgr_thread); }
 
-    info->cb = cb;
-    info->is_processing[fd_info::READ] = 0;
-    info->is_processing[fd_info::WRITE] = 0;
-    info->fd = fd;
-    info->ev = ev;
-    info->is_global = false;
-    info->pri = pri;
-    info->cookie = cookie;
-    info->endpoint = ep;
-
-    m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
-    return info;
+void IOManager::iomgr_thread_ready() {
+    if (m_yet_to_start_nthreads.decrement_testz()) {
+        set_state_and_notify(iomgr_state::running);
+    }
 }
 
 fd_info* IOManager::add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+    if (!is_ready()) {
+        LOGINFO("IOManager is ready to add fd, will wait for it to be ready");
+        wait_to_be_ready();
+        LOGINFO("IOManager is ready now, proceed to add fd to the list");
+    }
+
+    LOGTRACEMOD(iomgr, "fd {} is requested to add to IOManager, will add it to all threads", fd);
+
     fd_info* info = create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
     info->is_global = true;
 
@@ -104,8 +106,9 @@ fd_info* IOManager::add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, i
         ev.events = EPOLLET | info->ev;
         ev.data.ptr = info;
         if (epoll_ctl(ctx->m_epollfd, EPOLL_CTL_ADD, info->fd, &ev) == -1) {
-            assert(0);
+            LOGFATAL("epoll_ctl failed: {}", strerror(errno));
         }
+        LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}", info->fd, ctx->m_epollfd);
         return true;
     });
 
@@ -159,7 +162,9 @@ void IOManager::fd_reschedule(fd_info* info, uint32_t event) {
     iomgr_msg msg(iomgr_msg_type::RESCHEDULE, info, event);
     do {
         m_thread_ctx.access_all_threads([&min_id, &min_cnt](ioMgrThreadContext* ctx) {
-            if (!ctx->is_io_thread()) { return; }
+            if (!ctx->is_io_thread()) {
+                return;
+            }
             if (ctx->m_count < min_cnt) {
                 min_id = ctx->m_thread_num;
                 min_cnt = ctx->m_count;
@@ -169,23 +174,25 @@ void IOManager::fd_reschedule(fd_info* info, uint32_t event) {
         // Try to send msg to the thread. send_msg could fail if thread is not alive (i,e between access_all_threads)
         // and next method, thread exits.
         rescheduled = (send_msg(min_id, msg) == 1);
-    } while(!rescheduled);
+    } while (!rescheduled);
 }
 
-uint32_t IOManager::send_msg(int thread_num, const iomgr_msg &msg) {
+uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
     uint32_t msg_sent_count = 0;
     if (thread_num == -1) {
         m_thread_ctx.access_all_threads([msg, &msg_sent_count](ioMgrThreadContext* ctx) {
             ctx->put_msg(std::move(msg));
             uint64_t temp = 1;
-            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+                ;
             msg_sent_count++;
         });
     } else {
-        m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext *ctx) {
+        m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext* ctx) {
             ctx->put_msg(std::move(msg));
             uint64_t temp = 1;
-            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+                ;
             msg_sent_count++;
         });
     }
@@ -234,6 +241,23 @@ void IOManager::print_perf_cntrs() {
     foreach_endpoint([](EndPoint* ep) { ep->print_perf(); });
 }
 #endif
+
+fd_info* IOManager::create_fd_info(EndPoint* ep, int fd, const iomgr::ev_callback& cb, int ev, int pri, void* cookie) {
+    fd_info* info = new fd_info;
+
+    info->cb = cb;
+    info->is_processing[fd_info::READ] = 0;
+    info->is_processing[fd_info::WRITE] = 0;
+    info->fd = fd;
+    info->ev = ev;
+    info->is_global = false;
+    info->pri = pri;
+    info->cookie = cookie;
+    info->endpoint = ep;
+
+    m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
+    return info;
+}
 
 fd_info* IOManager::fd_to_info(int fd) {
     auto it = m_fd_info_map.rlock()->find(fd);

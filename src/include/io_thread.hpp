@@ -8,8 +8,8 @@
 #include <pthread.h>
 #include <iostream>
 #include <folly/MPMCQueue.h>
-#include "include/endpoint.hpp"
-#include "include/iomgr_msg.hpp"
+#include "endpoint.hpp"
+#include "iomgr_msg.hpp"
 
 SDS_LOGGING_DECL(iomgr);
 
@@ -27,7 +27,7 @@ class ioMgrThreadContext {
 public:
     ioMgrThreadContext();
     ~ioMgrThreadContext();
-    void     run();
+    void     run(bool is_iomgr_thread = false);
     void     listen();
     fd_info* add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie);
     bool     is_io_thread() const;
@@ -36,7 +36,7 @@ public:
      * Put the message to the message q for this thread.
      * @param msg
      */
-    //void put_msg(iomgr_msg&& msg);
+    // void put_msg(iomgr_msg&& msg);
     void put_msg(const iomgr_msg& msg);
     void put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf = nullptr, uint32_t size = 0);
 
@@ -51,6 +51,7 @@ private:
     uint64_t                   m_count = 0;    // Count of operations this thread is handling.
     uint64_t                   m_time_spent_ns = 0;
     bool                       m_is_io_thread = false;
+    bool                       m_is_iomgr_thread = false; // Is this thread created by iomanager itself
 
     folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
 };

@@ -18,11 +18,11 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
-            "libevent/2.0.22@bincrafters/stable",
-            "sds_logging/4.0.0@sds/testing",
-            "OpenSSL/1.0.2q@conan/stable",
-            "folly/2019.02.18.00@bincrafters/testing",
-            "sisl/0.3.0@sisl/testing"
+            "libevent/2.1.8@bincrafters/stable",
+            "sds_logging/5.3.2@sds/develop",
+            "folly/2019.07.22.00@bincrafters/testing",
+            "zstd/1.3.8@bincrafters/stable",
+            "sisl/0.3.5@sisl/testing"
             )
 
     generators = "cmake"

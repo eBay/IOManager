@@ -5,7 +5,12 @@
 #ifndef IOMGR_ENDPOINT_HPP
 #define IOMGR_ENDPOINT_HPP
 
+#include <functional>
+
 namespace iomgr {
+typedef std::function< void(int64_t res, uint8_t* cookie) > endpoint_comp_closure;
+typedef std::function< void(bool is_started) >              thread_state_notifier;
+
 class EndPoint {
 protected:
 public:
@@ -16,5 +21,5 @@ public:
     virtual void on_thread_exit() = 0;
 };
 
-}
-#endif //IOMGR_ENDPOINT_HPP
+} // namespace iomgr
+#endif // IOMGR_ENDPOINT_HPP
