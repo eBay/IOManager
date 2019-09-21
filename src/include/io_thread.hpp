@@ -27,10 +27,12 @@ class ioMgrThreadContext {
 public:
     ioMgrThreadContext();
     ~ioMgrThreadContext();
-    void     run(bool is_iomgr_thread = false);
-    void     listen();
-    fd_info* add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie);
-    bool     is_io_thread() const;
+    void run(bool is_iomgr_thread = false);
+    void listen();
+    // fd_info* add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie);
+    int  add_fd_to_thread(fd_info* info);
+    int  remove_fd_from_thread(fd_info* info);
+    bool is_io_thread() const;
 
     /***
      * Put the message to the message q for this thread.
@@ -52,6 +54,7 @@ private:
     uint64_t                   m_time_spent_ns = 0;
     bool                       m_is_io_thread = false;
     bool                       m_is_iomgr_thread = false; // Is this thread created by iomanager itself
+    bool                       m_keep_running = true;
 
     folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
 };

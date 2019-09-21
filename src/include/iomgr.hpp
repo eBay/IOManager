@@ -60,8 +60,11 @@ enum class iomgr_state : uint16_t {
     running = 3,
 };
 
+typedef std::function< void(bool is_started) > io_thread_state_notifier;
+
 class IOManager {
 public:
+    friend class ioMgrThreadContext; // TODO: Remove this, temporary
     static IOManager& instance() {
         static IOManager inst;
         return inst;
@@ -69,19 +72,25 @@ public:
 
     IOManager();
     ~IOManager();
-    void start(size_t num_ep, size_t num_threads);
+    void start(size_t num_ep, size_t num_threads = 0, const io_thread_state_notifier& notifier = nullptr);
     void run_io_loop(bool is_iomgr_thread = false);
+    void stop();
 
-    std::shared_ptr< AioDriveEndPoint > create_add_aio_drive_endpoint(const endpoint_comp_closure& cb,
-                                                                      const thread_state_notifier& notifier);
     fd_info* create_fd_info(EndPoint* ep, int fd, const ev_callback& cb, int ev, int pri, void* cookie);
 
     void     add_ep(std::shared_ptr< EndPoint > ep);
-    fd_info* add_fd(EndPoint* ep, int fd, ev_callback cb, int ev, int pri, void* cookie);
-    fd_info* add_per_thread_fd(EndPoint* ep, int fd, ev_callback cb, int ev, int pri, void* cookie);
-    void     print_perf_cntrs();
-    void     fd_reschedule(int fd, uint32_t event);
-    void     fd_reschedule(fd_info* info, uint32_t event);
+    fd_info* add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+        return _add_fd(ep, fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
+    }
+    fd_info* add_per_thread_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+        return _add_fd(ep, fd, cb, iomgr_ev, pri, cookie, true /* is_per_thread_fd */);
+    }
+    fd_info* _add_fd(EndPoint* ep, int fd, ev_callback cb, int ev, int pri, void* cookie, bool is_per_thread_fd);
+    void     remove_fd(EndPoint* ep, fd_info* info, ioMgrThreadContext* iomgr_ctx = nullptr);
+
+    void print_perf_cntrs();
+    void fd_reschedule(int fd, uint32_t event);
+    void fd_reschedule(fd_info* info, uint32_t event);
 
     // bool     can_process(void* data, uint32_t event);
     // void     process_evfd(int fd, void* data, uint32_t event);
@@ -108,17 +117,18 @@ public:
 
     // Notification that iomanager thread is ready to serve
     void iomgr_thread_ready();
+    void notify_thread_state(bool is_started) {
+        if (m_thread_state_notifier) m_thread_state_notifier(is_started);
+    }
 
     uint32_t send_msg(int thread_num, const iomgr_msg& msg);
 
-    DefaultEndPoint*  default_endpoint() { return m_default_ep.get(); }
-    AioDriveEndPoint* drive_endpoint() { return m_drive_ep.get(); }
+    std::shared_ptr< DefaultEndPoint > default_endpoint() { return m_default_ep; }
+    // std::shared_ptr< AioDriveEndPoint > drive_endpoint() { return m_drive_ep; }
 
     int64_t idle_timeout_interval_usec() const { return -1; };
     void    idle_timeout_expired() {
-        if (m_idle_timeout_expired_cb) {
-            m_idle_timeout_expired_cb();
-        }
+        if (m_idle_timeout_expired_cb) { m_idle_timeout_expired_cb(); }
     }
 
 private:
@@ -137,7 +147,7 @@ private:
 
     folly::Synchronized< std::vector< fd_info* > >                    m_fd_infos; /* fds shared between the threads */
     folly::Synchronized< std::vector< std::shared_ptr< EndPoint > > > m_ep_list;
-    folly::Synchronized< std::map< int, fd_info* > >                  m_fd_info_map;
+    folly::Synchronized< std::unordered_map< int, fd_info* > >        m_fd_info_map;
 
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
@@ -147,8 +157,9 @@ private:
     std::condition_variable m_cv;
     std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
-    std::shared_ptr< AioDriveEndPoint > m_drive_ep;
-    std::shared_ptr< DefaultEndPoint >  m_default_ep;
+    std::shared_ptr< DefaultEndPoint > m_default_ep;
+    std::vector< std::thread >         m_iomgr_threads;
+    io_thread_state_notifier           m_thread_state_notifier = nullptr;
 };
 
 #define iomanager IOManager::instance()

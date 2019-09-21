@@ -10,8 +10,8 @@
 namespace iomgr {
 class DefaultEndPoint : public EndPoint {
 public:
-    void on_thread_start() override {};
-    void on_thread_exit() override {};
+    void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
+    void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
 };
 } // namespace iomgr
-#endif //IOMGR_DEFAULT_ENDPOINT_HPP
+#endif // IOMGR_DEFAULT_ENDPOINT_HPP

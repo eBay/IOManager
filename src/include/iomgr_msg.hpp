@@ -30,7 +30,7 @@ struct iomgr_msg {
     iomgr_msg() = default;
     iomgr_msg(const iomgr_msg& msg) = default;
     // iomgr_msg &operator=(const iomgr_msg &msg) = default;
-    iomgr_msg(iomgr_msg_type type, fd_info* info, int event, void* buf = nullptr, uint32_t size = 0) :
+    iomgr_msg(iomgr_msg_type type, fd_info* info = nullptr, int event = -1, void* buf = nullptr, uint32_t size = 0) :
             m_type(type),
             m_fd_info(info),
             m_event(event),
