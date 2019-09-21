@@ -10,7 +10,6 @@ extern "C" {
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
 #include "include/io_thread.hpp"
-#include "include/aio_drive_endpoint.hpp" // TODO: Remove this temporary
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -103,33 +102,6 @@ void ioMgrThreadContext::iothread_init(bool wait_for_ep_register) {
     LOGINFO("Creating a message event fd {} and add to this thread epoll fd {}", m_msg_fd_info->fd, m_epollfd)
     if (add_fd_to_thread(m_msg_fd_info.get()) == -1) { goto error; }
 
-#if 0
-    struct epoll_event msg_ev;
-    msg_ev.events = EPOLLET | EPOLLIN | EPOLLEXCLUSIVE;
-    msg_ev.data.ptr = m_msg_fd_info.get();
-    if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, m_msg_fd_info->fd, &msg_ev) == -1) {
-        assert(0);
-        LOGERROR("Unable to add msg fd {} to the epoll fd", m_msg_fd_info->fd, m_epollfd);
-        goto error;
-    }
-
-    LOGINFO("Message fd {} for this thread added to epoll fd {} data.ptr={}", m_msg_fd_info->fd, m_epollfd,
-            (void*)msg_ev.data.ptr);
-
-#endif
-#if 0
-    // For every registered fds add my thread portion of event fd
-    iomanager.foreach_fd_info([&](fd_info* fdi) {
-        struct epoll_event ev;
-        ev.events = EPOLLET | EPOLLEXCLUSIVE | fdi->ev;
-        ev.data.ptr = fdi;
-        if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, fdi->fd, &ev) == -1) {
-            LOGFATAL("epoll_ctl failed: {}", strerror(errno));
-        }
-
-        LOGTRACEMOD(iomgr, "registered event fd {} to this thread context", fdi->fd);
-    });
-#endif
     // Add all iomanager existing fds to be added to this thread epoll
     iomanager.foreach_fd_info([&](fd_info* fdi) { add_fd_to_thread(fdi); });
 
@@ -194,8 +166,7 @@ int ioMgrThreadContext::add_fd_to_thread(fd_info* info) {
     ev.events = EPOLLET | EPOLLEXCLUSIVE | info->ev;
     ev.data.ptr = (void*)info;
     if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, info->fd, &ev) == -1) {
-        m LOGDFATAL("Adding fd {} to this thread's epoll fd {} failed, error = {}", info->fd, m_epollfd,
-                    strerror(errno));
+        LOGDFATAL("Adding fd {} to this thread's epoll fd {} failed, error = {}", info->fd, m_epollfd, strerror(errno));
         return -1;
     }
     LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", info->fd, m_epollfd,
@@ -213,32 +184,6 @@ int ioMgrThreadContext::remove_fd_from_thread(fd_info* info) {
     return 0;
 }
 
-#if 0
-fd_info* ioMgrThreadContext::add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri,
-                                              void* cookie) {
-    // if (!m_is_io_thread) { iothread_init(true /* wait_till_ready */); }
-    if (!m_is_io_thread) {
-        LOGTRACEMOD(iomgr, "Ignoring to add fd {} to this non-io thread", fd);
-        return nullptr;
-    }
-
-    fd_info* info = iomanager.create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
-
-    struct epoll_event ev;
-    ev.events = EPOLLET | iomgr_ev;
-    ev.data.ptr = (void*)info;
-    if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, fd, &ev) == -1) { assert(0); }
-    LOGDEBUGMOD(iomgr, "Added per thread fd {} to this io thread's epoll fd {}, data.ptr={}", fd, m_epollfd,
-                (void*)ev.data.ptr);
-    return info;
-}
-
-void ioMgrThreadContext::remove_fd_from_thread(EndPoint* ep, fd_info* info) {
-    epoll_ctl(m_epollfd, EPOLL_CTL_REMOVE, info->fd, nullptr);
-    LOGDEBUGMOD(iomgr, "Removed per thread fd {} to this io thread's epoll fd {}", info->fd, m_epollfd);
-    delete (info);
-}
-#endif
 void ioMgrThreadContext::put_msg(const iomgr_msg& msg) { m_msg_q.blockingWrite(msg); }
 
 void ioMgrThreadContext::put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf, uint32_t size) {

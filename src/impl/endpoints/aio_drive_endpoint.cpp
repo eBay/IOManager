@@ -44,7 +44,6 @@ int AioDriveEndPoint::open_dev(std::string devname, int oflags) {
                   << "\n";
     }
     LOGINFO("Device {} opened with flags={} successfully, fd={}", devname, oflags, fd);
-
     return fd;
 }
 
@@ -62,8 +61,6 @@ void AioDriveEndPoint::on_io_thread_start(ioMgrThreadContext* iomgr_ctx) {
         struct iocb_info* info = (struct iocb_info*)malloc(sizeof(struct iocb_info));
         _aio_ctx->iocb_list.push(info);
     }
-
-    // if (m_thread_notifier) { m_thread_notifier(true /* thread_started */); }
 }
 
 void AioDriveEndPoint::add_fd(int fd, int priority) {
@@ -74,8 +71,6 @@ void AioDriveEndPoint::add_fd(int fd, int priority) {
 }
 
 void AioDriveEndPoint::on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) {
-    // TODO: Fixme Need to handle thread exti
-    // if (m_thread_notifier) { m_thread_notifier(false /* thread_started */); }
     iomanager.remove_fd(this, _aio_ctx->ev_fd_info, iomgr_ctx);
     delete _aio_ctx;
 }

@@ -29,7 +29,6 @@ public:
     ~ioMgrThreadContext();
     void run(bool is_iomgr_thread = false);
     void listen();
-    // fd_info* add_fd_to_thread(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie);
     int  add_fd_to_thread(fd_info* info);
     int  remove_fd_from_thread(fd_info* info);
     bool is_io_thread() const;

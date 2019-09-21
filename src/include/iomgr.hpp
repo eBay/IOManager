@@ -64,7 +64,6 @@ typedef std::function< void(bool is_started) > io_thread_state_notifier;
 
 class IOManager {
 public:
-    friend class ioMgrThreadContext; // TODO: Remove this, temporary
     static IOManager& instance() {
         static IOManager inst;
         return inst;
@@ -124,7 +123,6 @@ public:
     uint32_t send_msg(int thread_num, const iomgr_msg& msg);
 
     std::shared_ptr< DefaultEndPoint > default_endpoint() { return m_default_ep; }
-    // std::shared_ptr< AioDriveEndPoint > drive_endpoint() { return m_drive_ep; }
 
     int64_t idle_timeout_interval_usec() const { return -1; };
     void    idle_timeout_expired() {
@@ -145,7 +143,6 @@ private:
     std::atomic< iomgr_state >      m_state = iomgr_state::stopped; // Current state of IOManager
     sisl::atomic_counter< int16_t > m_yet_to_start_nthreads = 0;    // Total number of iomanager threads yet to start
 
-    folly::Synchronized< std::vector< fd_info* > >                    m_fd_infos; /* fds shared between the threads */
     folly::Synchronized< std::vector< std::shared_ptr< EndPoint > > > m_ep_list;
     folly::Synchronized< std::unordered_map< int, fd_info* > >        m_fd_info_map;
 

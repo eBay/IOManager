@@ -28,7 +28,6 @@ extern "C" {
 namespace iomgr {
 
 IOManager::IOManager() : m_expected_eps(INBUILT_ENDPOINTS_COUNT) {
-    m_fd_infos.wlock()->reserve(INBUILT_ENDPOINTS_COUNT * 10);
     m_ep_list.wlock()->reserve(INBUILT_ENDPOINTS_COUNT + 5);
 }
 
@@ -55,13 +54,6 @@ void IOManager::stop() {
         t.join();
     }
 }
-
-/*std::shared_ptr< AioDriveEndPoint > IOManager::create_add_aio_drive_endpoint(const endpoint_comp_cb_t& cb,
-                                                                             const thread_state_notifier& notifier) {
-    m_drive_ep = std::make_shared< AioDriveEndPoint >(cb, notifier);
-    add_ep(std::dynamic_pointer_cast< EndPoint >(m_drive_ep));
-    return m_drive_ep;
-}*/
 
 void IOManager::add_ep(std::shared_ptr< EndPoint > ep) {
     m_ep_list.wlock()->push_back(ep);
@@ -93,41 +85,6 @@ void IOManager::run_io_loop(bool is_iomgr_thread) { m_thread_ctx->run(is_iomgr_t
 void IOManager::iomgr_thread_ready() {
     if (m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
 }
-
-#if 0
-fd_info* IOManager::add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    if (!is_ready()) {
-        LOGINFO("IOManager is ready to add fd, will wait for it to be ready");
-        wait_to_be_ready();
-        LOGINFO("IOManager is ready now, proceed to add fd to the list");
-    }
-
-    LOGTRACEMOD(iomgr, "fd {} is requested to add to IOManager, will add it to all threads", fd);
-
-    fd_info* info = create_fd_info(ep, fd, cb, iomgr_ev, pri, cookie);
-    info->is_global = true;
-
-    m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
-        if (!ctx->is_io_thread()) {
-            LOGTRACEMOD(iomgr, "Ignoring to add fd {} to this non-io thread", info->fd);
-            return true;
-        }
-
-        // Register our thread to appropriate epoll priority thread context
-        struct epoll_event ev;
-        ev.events = EPOLLET | info->ev;
-        ev.data.ptr = info;
-        if (epoll_ctl(ctx->m_epollfd, EPOLL_CTL_ADD, info->fd, &ev) == -1) {
-            LOGFATAL("epoll_ctl failed: {}", strerror(errno));
-        }
-        LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}", info->fd, ctx->m_epollfd);
-        return true;
-    });
-
-    m_fd_infos.wlock()->push_back(info);
-    return info;
-}
-#endif
 
 fd_info* IOManager::_add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie,
                             bool is_per_thread_fd) {
@@ -169,14 +126,6 @@ void IOManager::remove_fd(EndPoint* ep, fd_info* info, ioMgrThreadContext* iomgr
     }
     delete (info);
 }
-
-#if 0
-fd_info* IOManager::add_per_thread_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    return m_thread_ctx->add_fd_to_thread(ep, fd, cb, iomgr_ev, pri, cookie);
-}
-
-void IOManager::remove_per_thread_fd(EndPoint* ep, fd_info* info) { m_thread_ctx->remove_fd_from_thread(ep, info); }
-#endif
 
 #if 0
 void IOManager::callback(void* data, uint32_t event) {

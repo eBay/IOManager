@@ -9,7 +9,6 @@
 
 namespace iomgr {
 typedef std::function< void(int64_t res, uint8_t* cookie) > endpoint_comp_cb_t;
-// typedef std::function< void(bool is_started) >              thread_state_notifier;
 
 class ioMgrThreadContext;
 class EndPoint {
