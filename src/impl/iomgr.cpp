@@ -186,6 +186,8 @@ uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
     uint32_t msg_sent_count = 0;
     if (thread_num == -1) {
         m_thread_ctx.access_all_threads([msg, &msg_sent_count](ioMgrThreadContext* ctx) {
+            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
+
             LOGTRACEMOD(iomgr, "Sending msg of type {} to local thread msg fd = {}, ptr = {}", msg.m_type,
                         ctx->m_msg_fd_info->fd, (void*)ctx->m_msg_fd_info.get());
             ctx->put_msg(std::move(msg));
@@ -196,6 +198,8 @@ uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
         });
     } else {
         m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext* ctx) {
+            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
+
             ctx->put_msg(std::move(msg));
             uint64_t temp = 1;
             while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)

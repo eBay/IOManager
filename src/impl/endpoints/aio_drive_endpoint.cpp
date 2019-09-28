@@ -56,7 +56,14 @@ void AioDriveEndPoint::on_io_thread_start(ioMgrThreadContext* iomgr_ctx) {
                                     std::bind(&AioDriveEndPoint::process_completions, this, std::placeholders::_1,
                                               std::placeholders::_2, std::placeholders::_3),
                                     EPOLLIN, 0, NULL);
-    io_setup(MAX_OUTSTANDING_IO, &_aio_ctx->ioctx);
+    int err = io_setup(MAX_OUTSTANDING_IO, &_aio_ctx->ioctx);
+    if (err) {
+        LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
+        std::stringstream ss;
+        ss << "io_setup failed with ret status " << err << " errno = " << errno;
+        folly::throwSystemError(ss.str());
+    }
+
     for (int i = 0; i < MAX_OUTSTANDING_IO; i++) {
         struct iocb_info* info = (struct iocb_info*)malloc(sizeof(struct iocb_info));
         _aio_ctx->iocb_list.push(info);
@@ -87,22 +94,39 @@ void AioDriveEndPoint::process_completions(int fd, void* cookie, int event) {
 
     [[maybe_unused]] auto rsize = read(_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
     int                   nevents = io_getevents(_aio_ctx->ioctx, 0, MAX_COMPLETIONS, _aio_ctx->events, NULL);
-    if (nevents == 0) { spurious_events++; }
+    if (nevents == 0) { COUNTER_INCREMENT(m_metrics, spurious_events, 1); }
     if (nevents < 0) {
-        /* TODO how to handle it */
-        cmp_err++;
+        /* TODO: Handle error by reporting failures */
+        LOGERROR("process_completions nevents is less then zero {}", nevents);
+        COUNTER_INCREMENT(m_metrics, completion_errors, 1);
     }
+
     for (int i = 0; i < nevents; i++) {
         auto& e = _aio_ctx->events[i];
-        assert(static_cast< int64_t >(e.res) >= 0);
+
+        auto              ret = static_cast< int64_t >(e.res);
         struct iocb_info* info = static_cast< iocb_info* >(e.obj);
         _aio_ctx->iocb_list.push(info);
-        m_comp_cb(e.res, (uint8_t*)e.data);
+
+        if (ret < 0) {
+            COUNTER_INCREMENT(m_metrics, completion_errors, 1);
+            LOGDFATAL("Error in completion of aio, result: {} info: {}", ret, info->to_string());
+        } else if ((e.res != info->size) || e.res2) {
+            COUNTER_INCREMENT(m_metrics, completion_errors, 1);
+            LOGERROR("io is not completed properly. size read/written {} info {} error {}", e.res, info->to_string(),
+                     e.res2);
+            if (e.res2 == 0) { e.res2 = EIO; }
+        }
+
+        m_comp_cb(e.res2, (uint8_t*)e.data);
     }
 }
 
 void AioDriveEndPoint::async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
     if (_aio_ctx->iocb_list.empty()) {
+        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
+        LOGWARN("Not enough available iocbs to schedule an async write: size {}, offset {}, doing sync write instead",
+                size, offset);
         sync_write(data_fd, data, size, offset);
         m_comp_cb(0, cookie);
         return;
@@ -116,13 +140,32 @@ void AioDriveEndPoint::async_write(int data_fd, const char* data, uint32_t size,
     io_set_eventfd(iocb, _aio_ctx->ev_fd);
     iocb->data = cookie;
     info->is_read = false;
+    info->size = size;
+    info->offset = offset;
+    info->fd = data_fd;
 
-    LOGTRACE("Writing: {}", size);
-    if (io_submit(_aio_ctx->ioctx, 1, &iocb) != 1) { m_comp_cb(errno, cookie); }
+    LOGTRACE("Writing data info: {}", info->to_string());
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    if (ret != 1) {
+        if (errno == EAGAIN) {
+            COUNTER_INCREMENT(m_metrics, force_sync_io_eagain_error, 1);
+            sync_write(data_fd, data, size, offset);
+        } else {
+            COUNTER_INCREMENT(m_metrics, write_io_submission_errors, 1);
+            LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
+        }
+        m_comp_cb(errno, cookie);
+        return;
+    }
+    COUNTER_INCREMENT(m_metrics, async_write_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
     if (_aio_ctx->iocb_list.empty()) {
+        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
+        LOGWARN("Not enough available iocbs to schedule an async read: size {}, offset {}, doing sync read instead",
+                size, offset);
         sync_read(data_fd, data, size, offset);
         m_comp_cb(0, cookie);
         return;
@@ -135,15 +178,33 @@ void AioDriveEndPoint::async_read(int data_fd, char* data, uint32_t size, uint64
     io_set_eventfd(iocb, _aio_ctx->ev_fd);
     iocb->data = cookie;
     info->is_read = true;
+    info->size = size;
+    info->offset = offset;
+    info->fd = data_fd;
 
-    LOGTRACE("Reading: {}", size);
-    if (io_submit(_aio_ctx->ioctx, 1, &iocb) != 1) { m_comp_cb(errno, cookie); }
+    LOGTRACE("Reading data info: {}", info->to_string());
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    if (ret != 1) {
+        if (errno == EAGAIN) {
+            COUNTER_INCREMENT(m_metrics, force_sync_io_eagain_error, 1);
+            sync_read(data_fd, data, size, offset);
+        } else {
+            COUNTER_INCREMENT(m_metrics, read_io_submission_errors, 1);
+            LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
+        }
+        m_comp_cb(errno, cookie);
+        return;
+    }
+    COUNTER_INCREMENT(m_metrics, async_read_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie) {
-
     if (_aio_ctx->iocb_list.empty()) {
+        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
+        LOGWARN("Not enough available iocbs to schedule an async writev: size {}, offset {}, doing sync read instead",
+                size, offset);
         sync_writev(data_fd, iov, iovcnt, size, offset);
         m_comp_cb(0, cookie);
         return;
@@ -155,13 +216,34 @@ void AioDriveEndPoint::async_writev(int data_fd, const struct iovec* iov, int io
     io_set_eventfd(iocb, _aio_ctx->ev_fd);
     iocb->data = cookie;
     info->is_read = false;
-    if (io_submit(_aio_ctx->ioctx, 1, &iocb) != 1) { m_comp_cb(errno, cookie); }
+    info->size = size;
+    info->offset = offset;
+    info->fd = data_fd;
+
+    LOGTRACE("Writing data: info: {} iovcnt: {}", info->to_string(), iovcnt);
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    if (ret != 1) {
+        if (errno == EAGAIN) {
+            COUNTER_INCREMENT(m_metrics, force_sync_io_eagain_error, 1);
+            sync_writev(data_fd, iov, iovcnt, size, offset);
+        } else {
+            COUNTER_INCREMENT(m_metrics, write_io_submission_errors, 1);
+            LOGERROR("io submit fail: io info: {}, iovcnt {} errno: {}", info->to_string(), iovcnt, errno);
+        }
+        m_comp_cb(errno, cookie);
+        return;
+    }
+    COUNTER_INCREMENT(m_metrics, async_write_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                    uint8_t* cookie) {
 
     if (_aio_ctx->iocb_list.empty()) {
+        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
+        LOGWARN("Not enough available iocbs to schedule an async readv: size {}, offset {}, doing sync read instead",
+                size, offset);
         sync_readv(data_fd, iov, iovcnt, size, offset);
         m_comp_cb(0, cookie);
         return;
@@ -174,9 +256,25 @@ void AioDriveEndPoint::async_readv(int data_fd, const struct iovec* iov, int iov
     io_set_eventfd(iocb, _aio_ctx->ev_fd);
     iocb->data = cookie;
     info->is_read = true;
+    info->size = size;
+    info->offset = offset;
+    info->fd = data_fd;
 
-    LOGTRACE("Reading: {} vectors", iovcnt);
-    if (io_submit(_aio_ctx->ioctx, 1, &iocb) != 1) { m_comp_cb(errno, cookie); }
+    LOGTRACE("Reading data: info: {} iovcnt: {}", info->to_string(), iovcnt);
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    if (ret != 1) {
+        if (errno == EAGAIN) {
+            COUNTER_INCREMENT(m_metrics, force_sync_io_eagain_error, 1);
+            sync_readv(data_fd, iov, iovcnt, size, offset);
+        } else {
+            COUNTER_INCREMENT(m_metrics, read_io_submission_errors, 1);
+            LOGERROR("io submit fail: io info: {}, iovcnt {} errno: {}", info->to_string(), iovcnt, errno);
+        }
+        m_comp_cb(errno, cookie);
+        return;
+    }
+    COUNTER_INCREMENT(m_metrics, async_read_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) {
@@ -184,9 +282,11 @@ void AioDriveEndPoint::sync_write(int data_fd, const char* data, uint32_t size, 
     if (written_size != size) {
         std::stringstream ss;
         ss << "Error trying to write offset " << offset << " size to write = " << size
-           << " size written = " << written_size << "\n";
+           << " size written = " << written_size << " err no" << errno << " fd =" << data_fd << "\n";
         folly::throwSystemError(ss.str());
     }
+    COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
@@ -194,9 +294,11 @@ void AioDriveEndPoint::sync_writev(int data_fd, const struct iovec* iov, int iov
     if (written_size != size) {
         std::stringstream ss;
         ss << "Error trying to write offset " << offset << " size to write = " << size
-           << " size written = " << written_size << "\n";
+           << " size written = " << written_size << " err no" << errno << " fd =" << data_fd << "\n";
         folly::throwSystemError(ss.str());
     }
+    COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) {
@@ -204,9 +306,11 @@ void AioDriveEndPoint::sync_read(int data_fd, char* data, uint32_t size, uint64_
     if (read_size != size) {
         std::stringstream ss;
         ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
-           << "\n";
+           << " err no" << errno << " fd =" << data_fd << "\n";
         folly::throwSystemError(ss.str());
     }
+    COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveEndPoint::sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
@@ -214,9 +318,10 @@ void AioDriveEndPoint::sync_readv(int data_fd, const struct iovec* iov, int iovc
     if (read_size != size) {
         std::stringstream ss;
         ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
-           << "\n";
+           << " err no" << errno << " fd =" << data_fd << "\n";
         folly::throwSystemError(ss.str());
     }
+    COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
+    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
-
 } // namespace iomgr

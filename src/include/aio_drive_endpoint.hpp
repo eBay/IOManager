@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include "endpoint.hpp"
+#include <metrics/metrics.hpp>
 
 #ifdef linux
 #include <fcntl.h>
@@ -27,7 +28,16 @@ namespace iomgr {
 #ifdef linux
 struct iocb_info : public iocb {
     bool              is_read;
+    uint32_t          size;
+    uint64_t          offset;
     Clock::time_point start_time;
+    int               fd;
+
+    std::string to_string() const {
+        std::stringstream ss;
+        ss << "is_read = " << is_read << ", size = " << size << ", offset = " << offset << ", fd = " << fd;
+        return ss.str();
+    }
 };
 
 template < typename T, typename Container = std::deque< T > >
@@ -64,6 +74,31 @@ struct aio_thread_context {
     }
 };
 
+class AioDriveEndPointMetrics : public sisl::MetricsGroupWrapper {
+public:
+    explicit AioDriveEndPointMetrics(const char* inst_name = "AioDriveEndPoint") :
+            sisl::MetricsGroupWrapper("AioDriveEndPoint", inst_name) {
+        REGISTER_COUNTER(spurious_events, "Spurious events count");
+        REGISTER_COUNTER(completion_errors, "Aio Completion errors");
+        REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
+                         {"io_direction", "write"});
+        REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
+                         {"io_direction", "read"});
+        REGISTER_COUNTER(force_sync_io_empty_iocb, "Forced sync io because of empty iocb");
+        REGISTER_COUNTER(force_sync_io_eagain_error, "Forced sync io because of EAGAIN error");
+        REGISTER_COUNTER(async_write_count, "Aio Drive async write count", "io_count", {"io_direction", "write"});
+        REGISTER_COUNTER(async_read_count, "Aio Drive async read count", "io_count", {"io_direction", "read"});
+        REGISTER_COUNTER(sync_write_count, "Aio Drive sync write count", "io_count", {"io_direction", "write"});
+        REGISTER_COUNTER(sync_read_count, "Aio Drive sync read count", "io_count", {"io_direction", "read"});
+
+        REGISTER_HISTOGRAM(write_io_sizes, "Write IO Sizes", "io_sizes", {"io_direction", "write"},
+                           HistogramBucketsType(ExponentialOfTwoBuckets));
+        REGISTER_HISTOGRAM(read_io_sizes, "Read IO Sizes", "io_sizes", {"io_direction", "read"},
+                           HistogramBucketsType(ExponentialOfTwoBuckets));
+        register_me_to_farm();
+    }
+};
+
 class AioDriveEndPoint : public EndPoint {
 public:
     AioDriveEndPoint(const endpoint_comp_cb_t& cb);
@@ -87,10 +122,8 @@ public:
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
-
-    atomic< uint64_t > spurious_events = 0;
-    atomic< uint64_t > cmp_err = 0;
-    endpoint_comp_cb_t m_comp_cb;
+    AioDriveEndPointMetrics                 m_metrics;
+    endpoint_comp_cb_t                      m_comp_cb;
 };
 #else
 class AioDriveEndPoint : public EndPoint {

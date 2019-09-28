@@ -26,30 +26,18 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 #define MAX_EVENTS 20
 #define ESTIMATED_MSGS_PER_THREAD 128
 
-#if 0
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     fd_info* info1 = (fd_info*)ev1.data.ptr;
     fd_info* info2 = (fd_info*)ev2.data.ptr;
     return (info1->pri > info2->pri);
 }
-#endif
 
 ioMgrThreadContext::ioMgrThreadContext() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {
     m_thread_num = sisl::ThreadLocalContext::my_thread_num();
 }
 
 ioMgrThreadContext::~ioMgrThreadContext() {
-    iomanager.foreach_endpoint([&](EndPoint* ep) { ep->on_io_thread_stopped(this); });
-    iomanager.foreach_fd_info([&](fd_info* fdi) { remove_fd_from_thread(fdi); });
-
-    // Notify the caller registered to iomanager for it
-    iomanager.notify_thread_state(false /* started */);
-
-    if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) {
-        remove_fd_from_thread(m_msg_fd_info.get());
-        close(m_msg_fd_info->fd);
-    }
-    if (m_epollfd != -1) { close(m_epollfd); }
+    if (m_is_io_thread) { iothread_stop(); }
 }
 
 void ioMgrThreadContext::run(bool is_iomgr_thread) {
@@ -63,6 +51,20 @@ void ioMgrThreadContext::run(bool is_iomgr_thread) {
     while (m_keep_running) {
         listen();
     }
+}
+
+void ioMgrThreadContext::iothread_stop() {
+    iomanager.foreach_endpoint([&](EndPoint* ep) { ep->on_io_thread_stopped(this); });
+    iomanager.foreach_fd_info([&](fd_info* fdi) { remove_fd_from_thread(fdi); });
+
+    // Notify the caller registered to iomanager for it
+    iomanager.notify_thread_state(false /* started */);
+
+    if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) {
+        remove_fd_from_thread(m_msg_fd_info.get());
+        close(m_msg_fd_info->fd);
+    }
+    if (m_epollfd != -1) { close(m_epollfd); }
 }
 
 void ioMgrThreadContext::iothread_init(bool wait_for_ep_register) {
@@ -140,8 +142,7 @@ void ioMgrThreadContext::listen() {
         return;
     }
     // Next sort the events based on priority and handle them in that order
-    // std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
-    // for (auto& e : events) {
+    std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
     for (auto i = 0; i < num_fds; ++i) {
         auto& e = events[i];
         if (e.data.ptr == (void*)m_msg_fd_info.get()) {
@@ -211,6 +212,7 @@ void ioMgrThreadContext::on_msg_fd_notification() {
         case RELINQUISH_IO_THREAD:
             LOGINFO("This thread is asked to be reliquished its status as io thread. Will exit io loop");
             m_keep_running = false;
+            iothread_stop();
             m_is_io_thread = false;
             break;
 

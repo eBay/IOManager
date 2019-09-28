@@ -26,7 +26,7 @@ class IOMgrConan(ConanFile):
             )
 
     generators = "cmake"
-    exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
+    exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
 
     def build(self):
         cmake = CMake(self)
@@ -38,6 +38,7 @@ class IOMgrConan(ConanFile):
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
         self.copy("*.hpp", dst="include/iomgr", src="src", keep_path=False)
+        self.copy("*.cpp", dst="test/", src="test", keep_path=False)
         self.copy("*.a", dst="impl", keep_path=False)
         self.copy("*.so", dst="impl", keep_path=False)
         self.copy("*.dll", dst="impl", keep_path=False)

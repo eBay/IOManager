@@ -43,6 +43,7 @@ public:
 
 private:
     void iothread_init(bool wait_till_ready);
+    void iothread_stop();
     void on_msg_fd_notification();
 
 private:
