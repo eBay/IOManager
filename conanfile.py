@@ -1,8 +1,11 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "2.1.3"
+    version = "3.0.0"
+    revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
     description = "iomgr"
@@ -11,18 +14,21 @@ class IOMgrConan(ConanFile):
     options = {
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
+        "coverage": ['True', 'False'],
         }
     default_options = (
         'shared=False',
-        'fPIC=True'
+        'fPIC=True',
+        'coverage=False'
         )
 
     requires = (
-            "libevent/2.1.8@bincrafters/stable",
-            "sds_logging/5.3.2@sds/develop",
-            "folly/2019.07.22.00@bincrafters/testing",
-            "zstd/1.3.8@bincrafters/stable",
-            "sisl/0.3.5@sisl/testing"
+            "zstd/1.4.0@bincrafters/stable",
+            "sisl/0.3.10@sisl/develop",
+            "folly/2019.09.23.00@bincrafters/develop",
+            "OpenSSL/1.1.1c@conan/stable",
+            "libevent/2.1.11@bincrafters/stable",
+            "sds_logging/6.0.0@sds/develop",
             )
 
     generators = "cmake"
@@ -32,8 +38,15 @@ class IOMgrConan(ConanFile):
         cmake = CMake(self)
         definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
+        test_target = None
+                
+        if self.settings.sanitize != "address" and self.options.coverage == 'True':
+            definitions['CONAN_BUILD_COVERAGE'] = 'ON'
+            test_target = 'coverage'
+
         cmake.configure(defs=definitions)
         cmake.build()
+        cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
@@ -50,3 +63,6 @@ class IOMgrConan(ConanFile):
         if self.settings.sanitize != None:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")
+        elif self.options.coverage == 'True':
+            self.cpp_info.libs.append('gcov')
+

@@ -29,6 +29,9 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     fd_info* info1 = (fd_info*)ev1.data.ptr;
     fd_info* info2 = (fd_info*)ev2.data.ptr;
+
+    // In case of equal priority, pick global fd which could get rescheduled
+    if (info1->pri == info2->pri) { return info1->is_global; }
     return (info1->pri > info2->pri);
 }
 
@@ -141,6 +144,7 @@ void ioMgrThreadContext::listen() {
         LOGERROR("epoll wait failed: {}", errno);
         return;
     }
+
     // Next sort the events based on priority and handle them in that order
     std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
     for (auto i = 0; i < num_fds; ++i) {

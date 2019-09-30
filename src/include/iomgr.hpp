@@ -20,6 +20,7 @@ extern "C" {
 #include "iomgr_msg.hpp"
 #include "io_thread.hpp"
 #include "endpoint.hpp"
+#include <functional>
 
 namespace iomgr {
 
@@ -37,15 +38,6 @@ struct fd_info {
     void*              cookie;
     EndPoint*          endpoint;
 };
-
-#if 0
-// This is some of the critical thread stats like count and any other info that needs to be shared
-// across the instances. It is not wise to add this one to ThreadBuffer because we end up having to
-// access all these threads
-struct thread_stats {
-    uint64_t    io_count;    // Total number of
-};
-#endif
 
 // Only Default endpoints
 // TODO: Make this part of an enum, to force add count upon adding new inbuilt endpoint.
@@ -76,25 +68,21 @@ public:
     void stop();
 
     fd_info* create_fd_info(EndPoint* ep, int fd, const ev_callback& cb, int ev, int pri, void* cookie);
-
     void     add_ep(std::shared_ptr< EndPoint > ep);
+
     fd_info* add_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
         return _add_fd(ep, fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
     }
     fd_info* add_per_thread_fd(EndPoint* ep, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
         return _add_fd(ep, fd, cb, iomgr_ev, pri, cookie, true /* is_per_thread_fd */);
     }
+
     fd_info* _add_fd(EndPoint* ep, int fd, ev_callback cb, int ev, int pri, void* cookie, bool is_per_thread_fd);
     void     remove_fd(EndPoint* ep, fd_info* info, ioMgrThreadContext* iomgr_ctx = nullptr);
 
     void print_perf_cntrs();
     void fd_reschedule(int fd, uint32_t event);
     void fd_reschedule(fd_info* info, uint32_t event);
-
-    // bool     can_process(void* data, uint32_t event);
-    // void     process_evfd(int fd, void* data, uint32_t event);
-    // void     process_done(int fd, int ev);
-    // void     process_done(fd_info* info, int ev);
 
     void foreach_fd_info(std::function< void(fd_info*) > fd_cb);
     void foreach_endpoint(std::function< void(EndPoint*) > ep_cb);
