@@ -4,4 +4,4 @@ set (IOMGR_SRC
       endpoints/aio_drive_endpoint.cpp)
 
 add_library (iomgr ${IOMGR_SRC})
-target_link_libraries(iomgr ${LIB_AIO})
+target_link_libraries(iomgr ${CONAN_LIBS} ${LIB_AIO})

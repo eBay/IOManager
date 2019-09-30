@@ -23,7 +23,7 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
-            "zstd/1.4.0@bincrafters/stable",
+            ("zstd/1.4.0@bincrafters/stable", "override"),
             "sisl/0.3.10@sisl/develop",
             "folly/2019.09.23.00@bincrafters/develop",
             "OpenSSL/1.1.1c@conan/stable",
@@ -51,12 +51,10 @@ class IOMgrConan(ConanFile):
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
         self.copy("*.hpp", dst="include/iomgr", src="src", keep_path=False)
-        self.copy("*.cpp", dst="test/", src="test", keep_path=False)
-        self.copy("*.a", dst="impl", keep_path=False)
-        self.copy("*.so", dst="impl", keep_path=False)
-        self.copy("*.dll", dst="impl", keep_path=False)
-        self.copy("*.dylib", dst="impl", keep_path=False)
-        self.copy("*.impl", dst="impl", keep_path=False)
+        self.copy("*.a", dst="lib", keep_path=False)
+        self.copy("*.so", dst="lib", keep_path=False)
+        self.copy("*.dll", dst="lib", keep_path=False)
+        self.copy("*.dylib", dst="lib", keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
