@@ -24,7 +24,7 @@ class IOMgrConan(ConanFile):
 
     requires = (
             ("zstd/1.4.0@bincrafters/stable", "override"),
-            "sisl/0.3.10@sisl/develop",
+            "sisl/0.3.11@hkadayam/develop",
             "folly/2019.09.23.00@bincrafters/develop",
             "OpenSSL/1.1.1c@conan/stable",
             "libevent/2.1.11@bincrafters/stable",

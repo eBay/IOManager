@@ -8,8 +8,9 @@
 #include <pthread.h>
 #include <iostream>
 #include <folly/MPMCQueue.h>
-#include "endpoint.hpp"
+#include "io_interface.hpp"
 #include "iomgr_msg.hpp"
+#include <metrics/metrics.hpp>
 
 SDS_LOGGING_DECL(iomgr);
 
@@ -20,7 +21,39 @@ using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >
 
 struct fd_info;
 
-class EndPoint;
+class IOInterface;
+class ioMgrThreadMetrics : public sisl::MetricsGroupWrapper {
+public:
+    explicit ioMgrThreadMetrics(uint32_t thread_num) :
+            sisl::MetricsGroupWrapper("ioMgrThreadMetrics", std::to_string(thread_num)) {
+        LOGINFO("Registring metrics group name = ioMgrThreadMetrics, thread_num = {}, inst name = {}", thread_num,
+                std::to_string(thread_num));
+
+        REGISTER_GAUGE(iomgr_thread_io_count, "IO Manager per thread IO count");
+        REGISTER_GAUGE(iomgr_thread_total_msg_recvd, "Total message received for this thread");
+        REGISTER_GAUGE(iomgr_thread_rescheduled_in, "Count of times IOs rescheduled into this thread");
+        REGISTER_GAUGE(iomgr_thread_rescheduled_out, "Count of times IOs rescheduled out of this thread");
+
+        register_me_to_farm();
+
+        attach_gather_cb(std::bind(&ioMgrThreadMetrics::on_gather, this));
+    }
+
+    ~ioMgrThreadMetrics() { deregister_me_from_farm(); }
+
+    void on_gather() {
+        GAUGE_UPDATE(*this, iomgr_thread_io_count, io_count);
+        GAUGE_UPDATE(*this, iomgr_thread_total_msg_recvd, msg_recvd_count);
+        GAUGE_UPDATE(*this, iomgr_thread_rescheduled_in, rescheduled_in);
+        GAUGE_UPDATE(*this, iomgr_thread_rescheduled_out, rescheduled_out);
+    }
+
+    uint64_t io_count = 0;
+    uint64_t msg_recvd_count = 0;
+    uint64_t rescheduled_in = 0;
+    uint64_t rescheduled_out = 0;
+};
+
 class ioMgrThreadContext {
     friend class IOManager;
 
@@ -57,5 +90,6 @@ private:
     bool                       m_keep_running = true;
 
     folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
+    std::unique_ptr< ioMgrThreadMetrics >            m_metrics;
 };
 } // namespace iomgr

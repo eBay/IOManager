@@ -8,7 +8,7 @@
 #include <stack>
 #include <atomic>
 #include <mutex>
-#include "endpoint.hpp"
+#include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
 
 #ifdef linux
@@ -74,10 +74,10 @@ struct aio_thread_context {
     }
 };
 
-class AioDriveEndPointMetrics : public sisl::MetricsGroupWrapper {
+class AioDriveInterfaceMetrics : public sisl::MetricsGroupWrapper {
 public:
-    explicit AioDriveEndPointMetrics(const char* inst_name = "AioDriveEndPoint") :
-            sisl::MetricsGroupWrapper("AioDriveEndPoint", inst_name) {
+    explicit AioDriveInterfaceMetrics(const char* inst_name = "AioDriveInterface") :
+            sisl::MetricsGroupWrapper("AioDriveInterface", inst_name) {
         REGISTER_COUNTER(spurious_events, "Spurious events count");
         REGISTER_COUNTER(completion_errors, "Aio Completion errors");
         REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
@@ -99,36 +99,37 @@ public:
     }
 };
 
-class AioDriveEndPoint : public EndPoint {
+class AioDriveInterface : public DriveInterface {
 public:
-    AioDriveEndPoint(const endpoint_comp_cb_t& cb);
+    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
+    drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
-    static int open_dev(std::string devname, int oflags);
-
-    void add_fd(int fd, int priority = 9);
-    void sync_write(int m_sync_fd, const char* data, uint32_t size, uint64_t offset);
-    void sync_writev(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
-    void sync_read(int m_sync_fd, char* data, uint32_t size, uint64_t offset);
-    void sync_readv(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
-    void async_write(int m_sync_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie);
-    void async_writev(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                      uint8_t* cookie);
-    void async_read(int m_sync_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie);
-    void async_readv(int m_sync_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                     uint8_t* cookie);
+    void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
+    int  open_dev(std::string devname, int oflags) override;
+    void add_fd(int fd, int priority = 9) override;
+    void sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) override;
+    void sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) override;
+    void sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
+    void async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                      uint8_t* cookie) override;
+    void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
+    void async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                     uint8_t* cookie) override;
     void process_completions(int fd, void* cookie, int event);
     void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override;
     void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override;
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
-    AioDriveEndPointMetrics                 m_metrics;
-    endpoint_comp_cb_t                      m_comp_cb;
+    AioDriveInterfaceMetrics                m_metrics;
+    io_interface_comp_cb_t                  m_comp_cb;
 };
 #else
-class AioDriveEndPoint : public EndPoint {
+class AioDriveInterface : public DriveInterface {
 public:
-    AioDriveEndPoint(const endpoint_comp_cb_t& cb) {}
+    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr) {}
     void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override {}
     void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override {}
 };

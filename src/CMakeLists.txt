@@ -5,4 +5,4 @@ find_library(LIB_AIO aio)
 
 include_directories (BEFORE . include)
 
-add_subdirectory (impl)
+add_subdirectory (lib)
