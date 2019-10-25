@@ -19,12 +19,12 @@
 namespace iomgr {
 #ifdef __APPLE__
 
-ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+ssize_t preadv(int fd, const iovec* iov, int iovcnt, off_t offset) {
     lseek(fd, offset, SEEK_SET);
     return ::readv(fd, iov, iovcnt);
 }
 
-ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+ssize_t pwritev(int fd, const iovec* iov, int iovcnt, off_t offset) {
     lseek(fd, offset, SEEK_SET);
     return ::writev(fd, iov, iovcnt);
 }
@@ -199,7 +199,7 @@ void AioDriveInterface::async_read(int data_fd, char* data, uint32_t size, uint6
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
-void AioDriveInterface::async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie) {
     if (_aio_ctx->iocb_list.empty()) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
@@ -237,7 +237,7 @@ void AioDriveInterface::async_writev(int data_fd, const struct iovec* iov, int i
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
-void AioDriveInterface::async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie) {
 
     if (_aio_ctx->iocb_list.empty()) {
@@ -289,7 +289,7 @@ void AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size,
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
-void AioDriveInterface::sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+void AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     ssize_t written_size = pwritev(data_fd, iov, iovcnt, offset);
     if (written_size != size) {
         std::stringstream ss;
@@ -313,7 +313,7 @@ void AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
-void AioDriveInterface::sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+void AioDriveInterface::sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     ssize_t read_size = preadv(data_fd, iov, iovcnt, (off_t)offset);
     if (read_size != size) {
         std::stringstream ss;

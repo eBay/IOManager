@@ -108,14 +108,14 @@ public:
     int  open_dev(std::string devname, int oflags) override;
     void add_fd(int fd, int priority = 9) override;
     void sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) override;
-    void sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
     void sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) override;
-    void sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
     void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+    void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                       uint8_t* cookie) override;
     void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+    void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                      uint8_t* cookie) override;
     void process_completions(int fd, void* cookie, int event);
     void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override;

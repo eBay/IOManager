@@ -5,6 +5,7 @@
 #ifndef IOMGR_DRIVE_INTERFACE_HPP
 #define IOMGR_DRIVE_INTERFACE_HPP
 
+#include <fcntl.h>
 #include "io_interface.hpp"
 
 namespace iomgr {
@@ -21,14 +22,14 @@ public:
     virtual int  open_dev(std::string devname, int oflags) = 0;
     virtual void add_fd(int fd, int priority = 9) = 0;
     virtual void sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) = 0;
-    virtual void sync_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
     virtual void sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) = 0;
-    virtual void sync_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
     virtual void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) = 0;
-    virtual void async_writev(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+    virtual void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                               uint8_t* cookie) = 0;
     virtual void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) = 0;
-    virtual void async_readv(int data_fd, const struct iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+    virtual void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                              uint8_t* cookie) = 0;
 };
 } // namespace iomgr
