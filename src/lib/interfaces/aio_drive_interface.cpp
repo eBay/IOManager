@@ -201,7 +201,11 @@ void AioDriveInterface::async_read(int data_fd, char* data, uint32_t size, uint6
 
 void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie) {
-    if (_aio_ctx->iocb_list.empty()) {
+    if (_aio_ctx->iocb_list.empty()
+#ifdef _PRERELEASE
+        || Flip::instance().test_flip("io_write_iocb_empty_flip")
+#endif
+    ) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
         LOGWARN("Not enough available iocbs to schedule an async writev: size {}, offset {}, doing sync read instead",
                 size, offset);
@@ -219,6 +223,13 @@ void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, 
     info->size = size;
     info->offset = offset;
     info->fd = data_fd;
+
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_write_error_flip")) {
+        m_comp_cb(homestore::homestore_error::write_failed, cookie);
+        return;
+    }
+#endif
 
     LOGTRACE("Writing data: info: {} iovcnt: {}", info->to_string(), iovcnt);
     auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
@@ -240,7 +251,11 @@ void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, 
 void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie) {
 
-    if (_aio_ctx->iocb_list.empty()) {
+    if (_aio_ctx->iocb_list.empty()
+#ifdef _PRERELEASE
+        || Flip::instance().test_flip("io_read_iocb_empty_flip")
+#endif
+    ) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
         LOGWARN("Not enough available iocbs to schedule an async readv: size {}, offset {}, doing sync read instead",
                 size, offset);
@@ -260,6 +275,13 @@ void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, u
     info->offset = offset;
     info->fd = data_fd;
 
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
+        m_comp_cb(homestore::homestore_error::read_failed, cookie);
+        return;
+    }
+#endif
+
     LOGTRACE("Reading data: info: {} iovcnt: {}", info->to_string(), iovcnt);
     auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
     if (ret != 1) {
@@ -278,6 +300,10 @@ void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, u
 }
 
 void AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) {
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_sync_write_error_flip", size)) { folly::throwSystemError("flip error"); }
+#endif
+
     ssize_t written_size = pwrite(data_fd, data, (ssize_t)size, (off_t)offset);
     if (written_size != size) {
         std::stringstream ss;
@@ -290,6 +316,9 @@ void AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size,
 }
 
 void AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_sync_write_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
+#endif
     ssize_t written_size = pwritev(data_fd, iov, iovcnt, offset);
     if (written_size != size) {
         std::stringstream ss;
@@ -302,6 +331,9 @@ void AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, u
 }
 
 void AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) {
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_sync_read_error_flip", size)) { folly::throwSystemError("flip error"); }
+#endif
     ssize_t read_size = pread(data_fd, data, (ssize_t)size, (off_t)offset);
     if (read_size != size) {
         std::stringstream ss;
@@ -314,6 +346,9 @@ void AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64
 }
 
 void AioDriveInterface::sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+#ifdef _PRERELEASE
+    if (Flip::instance().test_flip("io_sync_read_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
+#endif
     ssize_t read_size = preadv(data_fd, iov, iovcnt, (off_t)offset);
     if (read_size != size) {
         std::stringstream ss;
