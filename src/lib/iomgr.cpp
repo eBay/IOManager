@@ -2,436 +2,304 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
-#include "iomgr_impl.hpp"
+#include "iomgr.hpp"
 
 extern "C" {
-#include <sys/eventfd.h>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <sys/types.h>
 }
 
 #include <cerrno>
-#include <ctime>
 #include <chrono>
+#include <ctime>
 #include <functional>
 #include <vector>
 #include <thread>
 
 #include <sds_logging/logging.h>
 
-#include "io_thread.hpp"
+#include "include/drive_interface.hpp"
+#include "include/iomgr.hpp"
+#include "include/io_thread.hpp"
+#include <utility/thread_factory.hpp>
 
-namespace iomgr
-{
+namespace iomgr {
 
-thread_local int ioMgrImpl::epollfd = 0;
-thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
+IOManager::IOManager() { m_iface_list.wlock()->reserve(inbuilt_interface_count + 5); }
 
-struct fd_info {
-   enum {READ = 0, WRITE};
+IOManager::~IOManager() = default;
 
-   ev_callback cb;
-   int fd;
-   std::atomic<int> is_running[2];
-   int ev;
-   bool is_global;
-   int pri;
-   std::vector<int> ev_fd;
-   std::vector<int> event;
-   void *cookie;
-};
+void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads,
+                      const io_thread_state_notifier& notifier) {
+    LOGINFO("Starting IOManager");
+    m_expected_ifaces += expected_custom_ifaces;
+    m_yet_to_start_nthreads.set(num_threads);
+    m_thread_state_notifier = notifier;
 
-ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
-    threads(num_threads),
-    num_ep(num_ep),
-    running(false)
-{
-   ready = num_ep == 0;
-   global_fd.reserve(num_ep * 10);
-   LOGDEBUG("Starting ready: {}", ready);
+    set_state(iomgr_state::waiting_for_interfaces);
+
+    /* Create all in-built interfaces here.
+     * TODO: Can we create aio_drive_end_point by default itself
+     * */
+    m_default_general_iface = std::make_shared< DefaultIOInterface >();
+    add_interface(m_default_general_iface);
 }
 
-ioMgrImpl::~ioMgrImpl() {
-    // free the memory of fd_info
-    for (auto i = 0u; i < ep_list.size(); ++i) {
-        delete ep_list[i];
-    }
-    for (auto& x : fd_info_map)  {
-        delete x.second;
+void IOManager::stop() {
+    iomgr_msg msg(iomgr_msg_type::RELINQUISH_IO_THREAD);
+    send_msg(-1, std::move(msg));
+    for (auto& t : m_iomgr_threads) {
+        t.join();
     }
 }
 
-// 
-// Stop iomgr procedure
-// 1. set thread running to false;
-// 2. trigger the event to wake up iothread and call shutdown_local of each ep
-// 3. join all the i/o threads;
-// 
-void 
-ioMgrImpl::stop() {
-    stop_running();
-    uint64_t temp = 1;
+void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface) {
+    add_interface(std::dynamic_pointer_cast< IOInterface >(iface));
+    m_drive_ifaces.wlock()->push_back(iface);
+    if (default_iface) m_default_drive_iface = iface;
+}
 
-    /* take one global fd and schedule the event on all threads */
-    for (auto& x : global_fd[0]->ev_fd) {
-        // 
-        // Currently one event will wake up all the i/o threads.
-        // When change back to EPOLLEXCLUSIVE, we need to send multiple times to 
-        // wake up all the threads to stop them from running;
-        //
-        while (0 > write(x, &temp, sizeof(uint64_t)) && errno == EAGAIN);
-    }
+void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
+    m_iface_list.wlock()->push_back(iface);
 
-    void *res;
-    for (auto& x : threads) {
-        int s = pthread_join(x.tid, &res);
-        if (s != 0) {
-            // handle error here;
-            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
-            return;
+    auto iface_count = m_iface_list.rlock()->size();
+    if (iface_count == m_expected_ifaces) {
+        LOGINFO("Registered expected {} interfaces, marking iomanager waiting for threads", iface_count);
+
+        auto nthreads = m_yet_to_start_nthreads.get();
+        if (nthreads) {
+            set_state_and_notify(iomgr_state::waiting_for_threads);
+            LOGINFO("IOManager is asked to start {} number of threads, starting them", nthreads);
+            for (auto i = 0; i < nthreads; i++) {
+                m_iomgr_threads.push_back(
+                    std::move(sisl::thread_factory("io_thread", &IOManager::run_io_loop, this, true)));
+                LOGTRACEMOD(iomgr, "Created iomanager thread...", i);
+                // t.detach();
+            }
+        } else {
+            set_state_and_notify(iomgr_state::running);
         }
-        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
+    } else if (iface_count < m_expected_ifaces) {
+        LOGINFO("Only added {} interfaces, need to wait till we get {} interfaces registered", iface_count,
+                m_expected_ifaces);
     }
-    
-    for (auto& x : global_fd) {
-        if(close(x->fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x->fd);
-            return;
+}
+
+void IOManager::run_io_loop(bool is_iomgr_thread) { m_thread_ctx->run(is_iomgr_thread); }
+
+void IOManager::iomgr_thread_ready() {
+    if (m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
+}
+
+fd_info* IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie,
+                            bool is_per_thread_fd) {
+    // We can add per thread fd even when iomanager is not ready. However, global fds need IOManager
+    // to be initialized, since it has to maintain global map
+    if (!is_per_thread_fd && !is_ready()) {
+        LOGINFO("IOManager is not ready to add fd {}, will wait for it to be ready", fd);
+        wait_to_be_ready();
+        LOGINFO("IOManager is ready now, proceed to add fd to the list");
+    }
+
+    LOGTRACEMOD(iomgr, "fd {} is requested to add to IOManager, will add it to {} thread(s)", fd,
+                (is_per_thread_fd ? "this" : "all"));
+
+    fd_info* info = create_fd_info(iface, fd, cb, iomgr_ev, pri, cookie);
+    info->is_global = !is_per_thread_fd;
+
+    if (is_per_thread_fd) {
+        m_thread_ctx->add_fd_to_thread(info);
+    } else {
+        m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
+            if (ctx->is_io_thread()) { ctx->add_fd_to_thread(info); }
+        });
+        m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
+    }
+    return info;
+}
+
+void IOManager::remove_fd(IOInterface* iface, fd_info* info, ioMgrThreadContext* iomgr_ctx) {
+    (void)iface;
+    if (!is_ready()) {
+        LOGDFATAL("Expected IOManager to be ready before we receive _remove_fd");
+        return;
+    }
+
+    if (info->is_global) {
+        m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
+            if (ctx->is_io_thread()) { ctx->remove_fd_from_thread(info); }
+        });
+        m_fd_info_map.wlock()->erase(info->fd);
+    } else {
+        iomgr_ctx ? iomgr_ctx->remove_fd_from_thread(info) : m_thread_ctx->remove_fd_from_thread(info);
+    }
+    delete (info);
+}
+
+#if 0
+void IOManager::callback(void* data, uint32_t event) {
+    fd_info* info = (fd_info*)data;
+    info->cb(info->fd, info->cookie, event);
+}
+
+bool IOManager::can_process(void* data, uint32_t ev) {
+    fd_info* info = (fd_info*)data;
+    int      expected = 0;
+    int      desired = 1;
+    bool     ret = false;
+    if (ev & EPOLLIN) {
+        ret = info->is_processing[fd_info::READ].compare_exchange_strong(expected, desired, std::memory_order_acquire,
+                                                                          std::memory_order_acquire);
+    } else if (ev & EPOLLOUT) {
+        ret = info->is_processing[fd_info::WRITE].compare_exchange_strong(expected, desired, std::memory_order_acquire,
+                                                                           std::memory_order_acquire);
+    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
+        LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
+    } else {
+        LOGCRITICAL("Unknown event: {}", ev);
+        assert(0);
+    }
+    if (ret) {
+        //		LOG(INFO) << "running for fd" << info->fd;
+    } else {
+        //		LOG(INFO) << "not allowed running for fd" << info->fd;
+    }
+    return ret;
+}
+#endif
+
+void IOManager::fd_reschedule(int fd, uint32_t event) { fd_reschedule(fd_to_info(fd), event); }
+
+void IOManager::fd_reschedule(fd_info* info, uint32_t event) {
+    uint64_t min_cnt = UINTMAX_MAX;
+    int      min_id = 0;
+    bool     rescheduled = false;
+
+    iomgr_msg msg(iomgr_msg_type::RESCHEDULE, info, event);
+    do {
+        m_thread_ctx.access_all_threads([&min_id, &min_cnt](ioMgrThreadContext* ctx) {
+            if (!ctx->is_io_thread()) { return; }
+            if (ctx->m_count < min_cnt) {
+                min_id = ctx->m_thread_num;
+                min_cnt = ctx->m_count;
+            }
+        });
+
+        // Try to send msg to the thread. send_msg could fail if thread is not alive (i,e between access_all_threads)
+        // and next method, thread exits.
+        rescheduled = (send_msg(min_id, msg) == 1);
+    } while (!rescheduled);
+}
+
+uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
+    uint32_t msg_sent_count = 0;
+    if (thread_num == -1) {
+        m_thread_ctx.access_all_threads([msg, &msg_sent_count](ioMgrThreadContext* ctx) {
+            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
+
+            LOGTRACEMOD(iomgr, "Sending msg of type {} to local thread msg fd = {}, ptr = {}", msg.m_type,
+                        ctx->m_msg_fd_info->fd, (void*)ctx->m_msg_fd_info.get());
+            ctx->put_msg(std::move(msg));
+            uint64_t temp = 1;
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+                ;
+            msg_sent_count++;
+        });
+    } else {
+        m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext* ctx) {
+            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
+
+            ctx->put_msg(std::move(msg));
+            uint64_t temp = 1;
+            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+                ;
+            msg_sent_count++;
+        });
+    }
+    return msg_sent_count;
+}
+
+#if 0
+void IOManager::process_evfd(int evfd, void* data, uint32_t event) {
+    uint64_t temp;
+    while (0 > read(evfd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+        ;
+
+    fd_info* base_info = (fd_info*)data;
+
+    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLIN && can_process(base_info, event)) {
+        base_info->cb(base_info->fd, base_info->cookie, EPOLLIN);
+    }
+
+    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLOUT && can_process(base_info, event)) {
+        base_info->cb(base_info->fd, base_info->cookie, EPOLLOUT);
+    }
+    base_info->event[sisl::ThreadLocalContext::my_thread_num()] = 0;
+
+    process_done(evfd, event);
+}
+
+void IOManager::process_done(int fd, int ev) { process_done(fd_to_info(fd), ev); }
+
+void IOManager::process_done(fd_info* info, int ev) {
+    if (ev & EPOLLIN) {
+        info->is_processing[fd_info::READ].fetch_sub(1, std::memory_order_release);
+    } else if (ev & EPOLLOUT) {
+        info->is_processing[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
+    } else {
+        assert(0);
+    }
+}
+
+void IOManager::print_perf_cntrs() {
+    m_thread_ctx.access_all_threads([](ioMgrThreadContext* ctx) {
+        if (!ctx->is_io_thread()) { return true; }
+        LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms", ctx->m_thread_num,
+                ctx->m_count, (ctx->m_time_spent_ns / (1000 * 1000)));
+    });
+
+    foreach_interface([](IOInterface* iface) { iface->print_perf(); });
+}
+#endif
+
+fd_info* IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_callback& cb, int ev, int pri,
+                                   void* cookie) {
+    fd_info* info = new fd_info;
+
+    info->cb = cb;
+    info->is_processing[fd_info::READ] = 0;
+    info->is_processing[fd_info::WRITE] = 0;
+    info->fd = fd;
+    info->ev = ev;
+    info->is_global = false;
+    info->pri = pri;
+    info->cookie = cookie;
+    info->io_interface = iface;
+    return info;
+}
+
+fd_info* IOManager::fd_to_info(int fd) {
+    auto it = m_fd_info_map.rlock()->find(fd);
+    assert(it->first == fd);
+    fd_info* info = it->second;
+
+    return info;
+}
+
+void IOManager::foreach_fd_info(std::function< void(fd_info*) > fd_cb) {
+    m_fd_info_map.withRLock([&](auto& fd_infos) {
+        for (auto& fdi : fd_infos) {
+            fd_cb(fdi.second);
         }
-        LOGDEBUG("close epoll fd: {}", x->fd);
-    }
+    });
+}
 
-    for (auto& x : threads) {
-        if (!x.inited) {
-            continue;
+void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) {
+    m_iface_list.withRLock([&](auto& iface_list) {
+        for (auto iface : iface_list) {
+            iface_cb(iface.get());
         }
-        if(close(x.ev_fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
-            return;
-        }
-        LOGDEBUG("close epoll fd: {}", x.ev_fd);
-    }
-    
-    for (auto i = 0u; i < ep_list.size(); ++i) {
-        ep_list[i]->stop();
-    }
+    });
 }
-
-// 
-// Stop the running threads;
-//
-void 
-ioMgrImpl::stop_running() {
-    running.store(false, std::memory_order_relaxed);   
-}
-
-void
-ioMgrImpl::start() {
-   running.store(true, std::memory_order_relaxed);
-   for (auto i = 0u; threads.size() > i; ++i) {
-      auto& t_info = threads[i];
-      auto iomgr_copy = new std::shared_ptr<ioMgrImpl>(shared_from_this());
-      int rc = pthread_create(&(t_info.tid), nullptr, iothread, iomgr_copy);
-      assert(!rc);
-      if (rc) {
-         LOGCRITICAL("Failed to create thread: {}", rc);
-         continue;
-      }
-      LOGTRACEMOD(iomgr, "Created thread...", i);
-      t_info.id = i;
-      t_info.inited = false;
-   }
-}
-
-void
-ioMgrImpl::local_init() {
-   {
-      std::unique_lock<std::mutex> lck(cv_mtx);
-      cv.wait(lck, [this] { return ready; });
-   }
-   if (!is_running()) return;
-   LOGTRACEMOD(iomgr, "Initializing locals.");
-
-   struct epoll_event ev;
-   pthread_t t = pthread_self();
-   thread_info *info = get_tid_info(t);
-
-   epollfd = epoll_create1(0);
-   LOGTRACEMOD(iomgr, "EPoll created: {}", epollfd);
-
-   if (epollfd < 1) {
-      assert(0);
-      LOGERROR("epoll_ctl failed: {}", strerror(errno));
-   }
-
-   for (auto i = 0ul; i < MAX_PRI; ++i) {
-      epollfd_pri[i] = epoll_create1(0);
-      ev.events = EPOLLET | EPOLLIN | EPOLLOUT;
-      ev.data.fd = epollfd_pri[i];
-      if (epoll_ctl(epollfd, EPOLL_CTL_ADD,
-                    epollfd_pri[i], &ev) == -1) {
-         assert(0);
-         LOGERROR("epoll_ctl failed: {}", strerror(errno));
-      }
-   }
-
-   // add event fd to each thread
-   info->ev_fd = epollfd;
-   info->epollfd_pri = epollfd_pri;
-   info->inited = true;
-
-   for(auto i = 0u; i < global_fd.size(); ++i) {
-      /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
-       * some events can be missed.
-       */
-      ev.events = EPOLLET | global_fd[i]->ev;
-      ev.data.ptr = global_fd[i];
-      if (epoll_ctl(epollfd_pri[global_fd[i]->pri], EPOLL_CTL_ADD,
-                    global_fd[i]->fd, &ev) == -1) {
-         assert(0);
-         LOGERROR("epoll_ctl failed: {}", strerror(errno));
-      }
-
-      add_local_fd(global_fd[i]->ev_fd[info->id],
-                   [this] (int fd, void* cookie, uint32_t events)
-                   { process_evfd(fd, cookie, events); },
-                   EPOLLIN, 1, global_fd[i]);
-
-      LOGDEBUGMOD(iomgr, "registered global fds");
-   }
-
-   assert(num_ep == ep_list.size());
-   /* initialize all the thread local variables in end point */
-   for (auto i = 0u; i < num_ep; ++i) {
-      ep_list[i]->init_local();
-   }
-}
-
-bool
-ioMgrImpl::is_running() const {
-    return running.load(std::memory_order_relaxed);
-}
-
-void
-ioMgrImpl::add_ep(class EndPoint *ep) {
-   ep_list.push_back(ep);
-   if (ep_list.size() == num_ep) {
-      /* allow threads to run */
-      std::lock_guard<std::mutex> lck(cv_mtx);
-      ready = true;
-   }
-   cv.notify_all();
-   LOGTRACEMOD(iomgr, "Added Endpoint.");
-}
-
-void
-ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
-   auto info = new struct fd_info;
-   {  std::unique_lock<mutex_t> lck(map_mtx);
-      fd_info_map.insert(std::pair<int, fd_info*>(fd, info));
-      info->cb = cb;
-      info->is_running[fd_info::READ] = 0;
-      info->is_running[fd_info::WRITE] = 0;
-      info->fd = fd;
-      info->ev = iomgr_ev;
-      info->is_global = true;
-      info->pri = pri;
-      info->cookie = cookie;
-      info->ev_fd.resize(threads.size());
-      info->event.resize(threads.size());
-
-      for (auto i = 0u; i < threads.size(); ++i) {
-         info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
-         info->event[i] = 0;
-      }
-   }
-
-   global_fd.push_back(info);
-
-   struct epoll_event ev;
-   /* add it to all the threads */
-   for (auto i = 0u; threads.size() > i; ++i) {
-      auto& t_info = threads[i];
-      ev.events = EPOLLET | info->ev;
-      ev.data.ptr = info;
-      if (!t_info.inited) {
-         continue;
-      }
-      if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
-                    fd, &ev) == -1) {
-         assert(0);
-      }
-      add_fd_to_thread(t_info, info->ev_fd[i],
-                       [this] (int fd, void* cookie, uint32_t events)
-                       { process_evfd(fd, cookie, events); },
-                       EPOLLIN, 1, info);
-   }
-}
-
-void
-ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void *cookie) {
-   /* get local id */
-   pthread_t t = pthread_self();
-   thread_info *info = get_tid_info(t);
-
-   add_fd_to_thread(*info, fd, cb, iomgr_ev, pri, cookie);
-}
-
-void
-ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb,
-                        int iomgr_ev, int pri, void *cookie) {
-   struct fd_info*  info = nullptr;
-   {
-       std::unique_lock<mutex_t> lck(map_mtx);
-
-       auto it = fd_info_map.end();
-       bool happened {false};
-       std::tie(it, happened) = fd_info_map.emplace(std::make_pair(fd, nullptr));
-       if (it != fd_info_map.end() && !happened) {
-           info = it->second;
-       } else {
-           info = new struct fd_info;
-           it->second = info;
-       }
-
-       info->cb = cb;
-       info->is_running[fd_info::READ] = 0;
-       info->is_running[fd_info::WRITE] = 0;
-       info->fd = fd;
-       info->ev = iomgr_ev;
-       info->is_global = false;
-       info->pri = pri;
-       info->cookie = cookie;
-   }
-
-   epoll_event ev;
-   ev.events = EPOLLET | iomgr_ev;
-   ev.data.ptr = info;
-   if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD,
-                 fd, &ev) == -1) {
-      assert(0);
-   }
-   LOGDEBUGMOD(iomgr, "Added FD: {}", fd);
-   return;
-}
-
-void
-ioMgrImpl::callback(void *data, uint32_t event) {
-   struct fd_info *info = (struct fd_info *)data;
-   info->cb(info->fd, info->cookie, event);
-}
-
-bool
-ioMgrImpl::can_process(void *data, uint32_t ev) {
-   struct fd_info *info = (struct fd_info *)data;
-   int expected = 0;
-   int desired = 1;
-   bool ret = false;
-   if (ev & EPOLLIN) {
-      ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired,
-                                                           std::memory_order_acquire,
-                                                           std::memory_order_acquire);
-   } else if (ev & EPOLLOUT) {
-      ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired,
-                                                            std::memory_order_acquire,
-                                                            std::memory_order_acquire);
-   } else if (ev & EPOLLERR || ev & EPOLLHUP) {
-      LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
-   } else {
-      LOGCRITICAL("Unknown event: {}", ev);
-      assert(0);
-   }
-   return ret;
-}
-
-void
-ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
-   std::map<int, fd_info*>::iterator it;
-   fd_info* info {nullptr};
-   {  std::shared_lock<mutex_t> lck(map_mtx);
-      if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-         assert(it->first == fd);
-         info = it->second;
-      }
-   }
-   if (!info) return;
-
-   uint64_t min_cnt = UINTMAX_MAX;
-   int min_id = 0;
-
-   for(auto i = 0u; threads.size() > i; ++i) {
-      if (threads[i].count < min_cnt) {
-         min_id = i;
-         min_cnt = threads[i].count;
-      }
-   }
-   info->event[min_id] |= event;
-   uint64_t temp = 1;
-   while (0 > write(info->ev_fd[min_id], &temp, sizeof(uint64_t)) && errno == EAGAIN);
-}
-
-void
-ioMgrImpl::process_evfd(int fd, void *data, uint32_t event) {
-   struct fd_info *info = (struct fd_info *)data;
-   uint64_t temp;
-   pthread_t t = pthread_self();
-   thread_info *tinfo = get_tid_info(t);
-
-   if (info->event[tinfo->id] & EPOLLIN && can_process(info, event)) {
-      info->cb(info->fd, info->cookie, EPOLLIN);
-   }
-
-   if (info->event[tinfo->id] & EPOLLOUT && can_process(info, event)) {
-      info->cb(info->fd, info->cookie, EPOLLOUT);
-   }
-   info->event[tinfo->id] = 0;
-   process_done(fd, event);
-   while (0 > read(fd, &temp, sizeof(uint64_t)) && errno == EAGAIN);
-}
-
-void
-ioMgrImpl::process_done(int fd, int ev) {
-   std::map<int, fd_info*>::iterator it;
-   fd_info* info {nullptr};
-   {  std::shared_lock<mutex_t> lck(map_mtx);
-      if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-         assert(it->first == fd);
-         info = it->second;
-      }
-   }
-   if (info) {
-      if (ev & EPOLLIN) {
-         info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
-      } else if (ev & EPOLLOUT) {
-         info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
-      } else {
-         assert(0);
-      }
-   }
-}
-
-struct thread_info *
-ioMgrImpl::get_tid_info(pthread_t &tid) {
-   for (auto& t_info: threads) {
-      if (t_info.tid == tid) {
-         return &t_info;
-      }
-   }
-   assert(0);
-   return nullptr;
-}
-
-void
-ioMgrImpl::print_perf_cntrs() {
-   for(auto i = 0u; threads.size() > i; ++i) {
-      LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms",
-              i,
-              threads[i].count,
-              (threads[i].time_spent_ns/(1000 * 1000)));
-   }
-   for(auto const& ep : ep_list) {
-      ep->print_perf();
-   }
-}
-
-} /* iomgr */
+} // namespace iomgr
