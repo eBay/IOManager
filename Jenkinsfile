@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         PROJECT = 'iomgr'
-        CONAN_CHANNEL = 'develop'
+        CONAN_CHANNEL = 'iomgr_v3'
         CONAN_USER = 'sds'
         CONAN_PASS = credentials('CONAN_PASS')
     }
