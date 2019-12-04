@@ -141,13 +141,9 @@ bool ioMgrThreadContext::is_io_thread() const { return m_is_io_thread; }
 
 void ioMgrThreadContext::listen() {
     std::array< struct epoll_event, MAX_EVENTS > events;
-    int num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
 
-    // It is possible for io thread status is released while we are doing epoll wait. Catch at the exit and return
-    if (!m_is_io_thread) {
-        LOGINFO("listen will exit because this is no longer an iothread");
-        return;
-    } else if (num_fds == 0) {
+    int num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
+    if (num_fds == 0) {
         iomanager.idle_timeout_expired();
         return;
     } else if (num_fds < 0) {
@@ -163,6 +159,12 @@ void ioMgrThreadContext::listen() {
             LOGTRACEMOD(iomgr, "Processing event on msg fd: {}", m_msg_fd_info->fd);
             ++m_metrics->msg_recvd_count;
             on_msg_fd_notification();
+
+            // It is possible for io thread status by the msg processor. Catch at the exit and return
+            if (!m_is_io_thread) {
+                LOGINFO("listen will exit because this is no longer an iothread");
+                return;
+            }
         } else {
             Clock::time_point write_startTime = Clock::now();
             ++m_count;
