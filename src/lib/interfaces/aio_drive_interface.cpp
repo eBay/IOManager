@@ -299,7 +299,7 @@ void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, u
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
-void AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) {
+ssize_t AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_sync_write_error_flip", size)) { folly::throwSystemError("flip error"); }
 #endif
@@ -313,9 +313,11 @@ void AioDriveInterface::sync_write(int data_fd, const char* data, uint32_t size,
     }
     COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
+
+    return written_size;
 }
 
-void AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+ssize_t AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_sync_write_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
 #endif
@@ -328,9 +330,11 @@ void AioDriveInterface::sync_writev(int data_fd, const iovec* iov, int iovcnt, u
     }
     COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
+
+    return written_size;
 }
 
-void AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) {
+ssize_t AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_sync_read_error_flip", size)) { folly::throwSystemError("flip error"); }
 #endif
@@ -343,9 +347,11 @@ void AioDriveInterface::sync_read(int data_fd, char* data, uint32_t size, uint64
     }
     COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
+
+    return read_size;
 }
 
-void AioDriveInterface::sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+ssize_t AioDriveInterface::sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_sync_read_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
 #endif
@@ -358,5 +364,7 @@ void AioDriveInterface::sync_readv(int data_fd, const iovec* iov, int iovcnt, ui
     }
     COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
+
+    return read_size;
 }
 } // namespace iomgr
