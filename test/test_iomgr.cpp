@@ -137,10 +137,21 @@ static void init_workload() {
     work.next_io_offset = work.offset_start;
 }
 
+static void on_timeout(void* cookie) {
+    uint64_t timeout_id = (uint64_t)cookie;
+    LOGINFO("Received timeout for id = {}", timeout_id);
+}
+
 static void on_io_thread_status_changed(bool created) {
+    static std::atomic< uint64_t > _id = 0;
+
     if (created) {
         // sleep(2); // Wait for a second for fd to be opened and added before starting IO
         LOGINFO("New thread created, start workload on that thread");
+        auto hdl1 = iomanager.schedule_thread_timer(1000000, false, (void*)_id.fetch_add(1), on_timeout);
+        auto hdl2 = iomanager.schedule_thread_timer(1000001, false, (void*)_id.fetch_add(1), on_timeout);
+        iomanager.cancel_thread_timer(hdl2);
+        auto hdl3 = iomanager.schedule_thread_timer(50000000, true, (void*)_id.fetch_add(1), on_timeout);
         init_workload();
         issue_preload();
     } else {

@@ -27,17 +27,20 @@ namespace iomgr {
 
 using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >;
 
+struct timer_info;
 struct fd_info {
     enum { READ = 0, WRITE };
 
-    ev_callback        cb;
-    int                fd;
-    std::atomic< int > is_processing[2];
-    int                ev;
-    bool               is_global;
-    int                pri;
-    void*              cookie;
-    IOInterface*       io_interface;
+    ev_callback                   cb = nullptr;
+    int                           fd = -1;
+    std::atomic< int >            is_processing[2];
+    int                           ev = 0;
+    bool                          is_global = false;
+    int                           pri = 1;
+    void*                         cookie = nullptr;
+    bool                          is_timer_fd = false;
+    std::unique_ptr< timer_info > recurring_timer_info;
+    IOInterface*                  io_interface = nullptr;
 };
 
 // TODO: Make this part of an enum, to force add count upon adding new inbuilt io interface.
@@ -123,6 +126,13 @@ public:
     }
 
     DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
+
+    timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
+                                         timer_callback_t&& timer_fn) {
+        return m_thread_ctx->schedule_thread_timer(nanos_after, recurring, cookie, std::move(timer_fn));
+    }
+
+    void cancel_thread_timer(timer_handle_t thdl) { m_thread_ctx->cancel_thread_timer(thdl); }
 
 private:
     fd_info*    fd_to_info(int fd);

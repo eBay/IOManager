@@ -276,6 +276,8 @@ fd_info* IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_c
     info->pri = pri;
     info->cookie = cookie;
     info->io_interface = iface;
+    info->is_timer_fd = false;
+    info->recurring_timer_info = nullptr;
     return info;
 }
 
