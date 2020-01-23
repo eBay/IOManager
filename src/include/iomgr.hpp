@@ -1,45 +1,160 @@
-//
-// Created by Rishabh Mittal on 04/20/2018
-//
+/**
+ * Copyright eBay Corporation 2018
+ */
+
 #pragma once
 
+extern "C" {
+#include <event.h>
+#include <sys/time.h>
+}
+#include <atomic>
+#include <condition_variable>
+#include <map>
 #include <memory>
+#include <vector>
+#include <utility/thread_buffer.hpp>
+#include <utility/atomic_counter.hpp>
+#include <fds/sparse_vector.hpp>
+#include <folly/Synchronized.h>
+#include "iomgr_msg.hpp"
+#include "io_thread.hpp"
+#include "io_interface.hpp"
+#include "drive_interface.hpp"
 #include <functional>
+
 namespace iomgr {
 
-struct ioMgr;
-struct ioMgrImpl;
-using ev_callback = std::function<void(int fd, void *cookie, uint32_t events)>;
+using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >;
 
-class EndPoint {
- protected:
-   std::shared_ptr<ioMgr> iomgr;
+struct fd_info {
+    enum { READ = 0, WRITE };
 
- public:
-   explicit EndPoint(std::shared_ptr<ioMgr> iomgr) : iomgr(iomgr) {}
-   void stop() { iomgr = nullptr; }
-   virtual ~EndPoint() { }
-
-   virtual void init_local() = 0;
-   virtual void shutdown_local() = 0;
-   virtual void print_perf() = 0;
+    ev_callback        cb;
+    int                fd;
+    std::atomic< int > is_processing[2];
+    int                ev;
+    bool               is_global;
+    int                pri;
+    void*              cookie;
+    IOInterface*       io_interface;
 };
 
-struct ioMgr {
-   ioMgr(size_t const num_ep, size_t const num_threads);
-   ~ioMgr();
+// TODO: Make this part of an enum, to force add count upon adding new inbuilt io interface.
+static constexpr int inbuilt_interface_count = 1;
 
-   void start();
-   void stop();
-   void add_ep(EndPoint *ep);
-   void add_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
-   void add_local_fd(int const fd, ev_callback cb, int const ev, int const pri, void *cookie);
-   void print_perf_cntrs();
-   void fd_reschedule(int const fd, uint32_t const event);
-   void process_done(int const fd, int const ev);
+class DriveInterface;
 
- private:
-   std::shared_ptr<ioMgrImpl> _impl;
+enum class iomgr_state : uint16_t {
+    stopped = 0,
+    waiting_for_interfaces = 1,
+    waiting_for_threads = 2,
+    running = 3,
 };
 
-} /* iomgr */
+typedef std::function< void(bool is_started) > io_thread_state_notifier;
+
+class IOManager {
+public:
+    static IOManager& instance() {
+        static IOManager inst;
+        return inst;
+    }
+
+    IOManager();
+    ~IOManager();
+    void start(size_t num_iface, size_t num_threads = 0, const io_thread_state_notifier& notifier = nullptr);
+    void run_io_loop(bool is_iomgr_thread = false);
+    void stop();
+
+    fd_info* create_fd_info(IOInterface* iface, int fd, const ev_callback& cb, int ev, int pri, void* cookie);
+    void     add_interface(std::shared_ptr< IOInterface > iface);
+    void     add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
+
+    fd_info* add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+        return _add_fd(iface, fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
+    }
+    fd_info* add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+        return _add_fd(m_default_general_iface.get(), fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
+    }
+    fd_info* add_per_thread_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
+        return _add_fd(iface, fd, cb, iomgr_ev, pri, cookie, true /* is_per_thread_fd */);
+    }
+
+    fd_info* _add_fd(IOInterface* iface, int fd, ev_callback cb, int ev, int pri, void* cookie, bool is_per_thread_fd);
+    void     remove_fd(IOInterface* iface, fd_info* info, ioMgrThreadContext* iomgr_ctx = nullptr);
+    void     remove_fd(fd_info* info, ioMgrThreadContext* iomgr_ctx = nullptr) {
+        remove_fd(m_default_general_iface.get(), info, iomgr_ctx);
+    }
+
+    void print_perf_cntrs();
+    void fd_reschedule(int fd, uint32_t event);
+    void fd_reschedule(fd_info* info, uint32_t event);
+
+    void foreach_fd_info(std::function< void(fd_info*) > fd_cb);
+    void foreach_interface(std::function< void(IOInterface*) > iface_cb);
+
+    bool is_ready() const { return (get_state() == iomgr_state::running); }
+    bool is_interface_registered() const {
+        return ((uint16_t)get_state() > (uint16_t)iomgr_state::waiting_for_interfaces);
+    }
+
+    void wait_to_be_ready() {
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        m_cv.wait(lck, [this] { return is_ready(); });
+    }
+
+    void wait_for_interface_registration() {
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        m_cv.wait(lck, [this] { return is_interface_registered(); });
+    }
+
+    // Notification that iomanager thread is ready to serve
+    void iomgr_thread_ready();
+    void notify_thread_state(bool is_started) {
+        if (m_thread_state_notifier) m_thread_state_notifier(is_started);
+    }
+
+    uint32_t send_msg(int thread_num, const iomgr_msg& msg);
+
+    int64_t idle_timeout_interval_usec() const { return -1; };
+    void    idle_timeout_expired() {
+        if (m_idle_timeout_expired_cb) { m_idle_timeout_expired_cb(); }
+    }
+
+    DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
+
+private:
+    fd_info*    fd_to_info(int fd);
+    void        set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
+    iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
+    void        set_state_and_notify(iomgr_state state) {
+        set_state(state);
+        m_cv.notify_all();
+    }
+
+private:
+    size_t                          m_expected_ifaces = inbuilt_interface_count; // Total number of interfaces expected
+    std::atomic< iomgr_state >      m_state = iomgr_state::stopped;              // Current state of IOManager
+    sisl::atomic_counter< int16_t > m_yet_to_start_nthreads = 0; // Total number of iomanager threads yet to start
+
+    folly::Synchronized< std::vector< std::shared_ptr< IOInterface > > >    m_iface_list;
+    folly::Synchronized< std::unordered_map< int, fd_info* > >              m_fd_info_map;
+    folly::Synchronized< std::vector< std::shared_ptr< DriveInterface > > > m_drive_ifaces;
+
+    std::shared_ptr< DriveInterface >              m_default_drive_iface;
+    std::shared_ptr< DefaultIOInterface >          m_default_general_iface;
+    folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
+
+    sisl::ActiveOnlyThreadBuffer< ioMgrThreadContext > m_thread_ctx;
+
+    std::mutex              m_cv_mtx;
+    std::condition_variable m_cv;
+    std::function< void() > m_idle_timeout_expired_cb = nullptr;
+
+    std::vector< std::thread > m_iomgr_threads;
+    io_thread_state_notifier   m_thread_state_notifier = nullptr;
+};
+
+#define iomanager iomgr::IOManager::instance()
+} // namespace iomgr

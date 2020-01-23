@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "2.2.12"
+    version = "3.0.4"
     revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
@@ -26,10 +26,13 @@ class IOMgrConan(ConanFile):
             "folly/2019.09.23.00@bincrafters/stable",
             "libevent/2.1.11@bincrafters/stable",
             "sds_logging/6.1.0@sds/develop",
+            ("zstd/1.4.0@bincrafters/stable", "override"),
+            "sisl/0.3.15@sisl/develop",
+            "OpenSSL/1.1.1c@conan/stable",
             )
 
     generators = "cmake"
-    exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
+    exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
 
     def build(self):
         cmake = CMake(self)
@@ -52,7 +55,6 @@ class IOMgrConan(ConanFile):
         self.copy("*.so", dst="lib", keep_path=False)
         self.copy("*.dll", dst="lib", keep_path=False)
         self.copy("*.dylib", dst="lib", keep_path=False)
-        self.copy("*.lib", dst="lib", keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
