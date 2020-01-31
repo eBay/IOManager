@@ -272,9 +272,16 @@ void ioMgrThreadContext::on_msg_fd_notification() {
             m_is_io_thread = true;
             break;
 
-        case UNKNOWN:
         case WAKEUP:
         case SHUTDOWN:
+            if (iomanager.msg_notifier()) {
+                iomanager.msg_notifier()(msg);
+            } else {
+                LOGINFO("Received a message, but no message handler registered. Ignoring this message");
+            }
+            break;
+
+        case UNKNOWN:
         default: assert(0); break;
         }
     }

@@ -123,7 +123,7 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
 }
 
 void AioDriveInterface::async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
-    if (_aio_ctx->iocb_list.empty()) {
+    if (!_aio_ctx || _aio_ctx->iocb_list.empty()) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
         LOGWARN("Not enough available iocbs to schedule an async write: size {}, offset {}, doing sync write instead",
                 size, offset);
@@ -162,7 +162,7 @@ void AioDriveInterface::async_write(int data_fd, const char* data, uint32_t size
 }
 
 void AioDriveInterface::async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
-    if (_aio_ctx->iocb_list.empty()) {
+    if (!_aio_ctx || _aio_ctx->iocb_list.empty()) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
         LOGWARN("Not enough available iocbs to schedule an async read: size {}, offset {}, doing sync read instead",
                 size, offset);
@@ -201,7 +201,7 @@ void AioDriveInterface::async_read(int data_fd, char* data, uint32_t size, uint6
 
 void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie) {
-    if (_aio_ctx->iocb_list.empty()
+    if (!_aio_ctx || _aio_ctx->iocb_list.empty()
 #ifdef _PRERELEASE
         || Flip::instance().test_flip("io_write_iocb_empty_flip")
 #endif
@@ -251,7 +251,7 @@ void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, 
 void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie) {
 
-    if (_aio_ctx->iocb_list.empty()
+    if (!_aio_ctx || _aio_ctx->iocb_list.empty()
 #ifdef _PRERELEASE
         || Flip::instance().test_flip("io_read_iocb_empty_flip")
 #endif

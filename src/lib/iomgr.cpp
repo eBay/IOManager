@@ -31,11 +31,11 @@ IOManager::IOManager() { m_iface_list.wlock()->reserve(inbuilt_interface_count +
 IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads,
-                      const io_thread_state_notifier& notifier) {
+                      const io_thread_msg_notifier& notifier) {
     LOGINFO("Starting IOManager");
     m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nthreads.set(num_threads);
-    m_thread_state_notifier = notifier;
+    m_thread_msg_notifier = notifier;
 
     set_state(iomgr_state::waiting_for_interfaces);
 
