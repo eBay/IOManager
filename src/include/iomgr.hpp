@@ -26,6 +26,7 @@ extern "C" {
 namespace iomgr {
 
 using ev_callback = std::function< void(int fd, void* cookie, uint32_t events) >;
+using msg_callback_t = std::function< void(const iomgr_msg&) >;
 
 struct timer_info;
 struct fd_info {
@@ -55,7 +56,7 @@ enum class iomgr_state : uint16_t {
     running = 3,
 };
 
-typedef std::function< void(bool is_started) > io_thread_state_notifier;
+typedef std::function< void(const iomgr_msg&) > io_thread_msg_notifier;
 
 class IOManager {
 public:
@@ -66,7 +67,7 @@ public:
 
     IOManager();
     ~IOManager();
-    void start(size_t num_iface, size_t num_threads = 0, const io_thread_state_notifier& notifier = nullptr);
+    void start(size_t num_iface, size_t num_threads = 0, const io_thread_msg_notifier& notifier = nullptr);
     void run_io_loop(bool is_iomgr_thread = false);
     void stop();
 
@@ -102,6 +103,7 @@ public:
         return ((uint16_t)get_state() > (uint16_t)iomgr_state::waiting_for_interfaces);
     }
 
+    bool is_io_thread() { return m_thread_ctx->is_io_thread(); }
     void wait_to_be_ready() {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
         m_cv.wait(lck, [this] { return is_ready(); });
@@ -115,7 +117,9 @@ public:
     // Notification that iomanager thread is ready to serve
     void iomgr_thread_ready();
     void notify_thread_state(bool is_started) {
-        if (m_thread_state_notifier) m_thread_state_notifier(is_started);
+        if (m_thread_msg_notifier) {
+            m_thread_msg_notifier(iomgr_msg(is_started ? iomgr_msg_type::WAKEUP : iomgr_msg_type::SHUTDOWN));
+        }
     }
 
     uint32_t send_msg(int thread_num, const iomgr_msg& msg);
@@ -133,6 +137,8 @@ public:
     }
 
     void cancel_thread_timer(timer_handle_t thdl) { m_thread_ctx->cancel_thread_timer(thdl); }
+
+    io_thread_msg_notifier& msg_notifier() { return m_thread_msg_notifier; }
 
 private:
     fd_info*    fd_to_info(int fd);
@@ -163,7 +169,7 @@ private:
     std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
     std::vector< std::thread > m_iomgr_threads;
-    io_thread_state_notifier   m_thread_state_notifier = nullptr;
+    io_thread_msg_notifier     m_thread_msg_notifier = nullptr;
 };
 
 #define iomanager iomgr::IOManager::instance()

@@ -18,6 +18,7 @@ enum iomgr_msg_type {
     SHUTDOWN,             // Shutdown this thread
     DESIGNATE_IO_THREAD,  // Designate this thread as io thread
     RELINQUISH_IO_THREAD, // Unmark yourself from io thread and exit io loop
+    CUSTOM_MSG,           // Any custom message
 };
 
 struct iomgr_msg {

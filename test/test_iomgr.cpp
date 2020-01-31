@@ -142,10 +142,10 @@ static void on_timeout(void* cookie) {
     LOGINFO("Received timeout for id = {}", timeout_id);
 }
 
-static void on_io_thread_status_changed(bool created) {
+static void on_io_thread_msg(const iomgr_msg& msg) {
     static std::atomic< uint64_t > _id = 0;
 
-    if (created) {
+    if (msg.m_type == iomgr_msg_type::WAKEUP) {
         // sleep(2); // Wait for a second for fd to be opened and added before starting IO
         LOGINFO("New thread created, start workload on that thread");
         auto hdl1 = iomanager.schedule_thread_timer(1000000, false, (void*)_id.fetch_add(1), on_timeout);
@@ -154,7 +154,7 @@ static void on_io_thread_status_changed(bool created) {
         auto hdl3 = iomanager.schedule_thread_timer(50000000, true, (void*)_id.fetch_add(1), on_timeout);
         init_workload();
         issue_preload();
-    } else {
+    } else if (msg.m_type == iomgr_msg_type::SHUTDOWN) {
         LOGINFO("This thread is about to exit");
     }
 }
@@ -165,7 +165,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    iomanager.start(1, nthreads, on_io_thread_status_changed);
+    iomanager.start(1, nthreads, on_io_thread_msg);
 
     // Create and add AIO Drive Interface to the IOManager, Also open the device
     // NOTE: We do not need to add the fd to the device, since either Read or Write IO will always be triggered
