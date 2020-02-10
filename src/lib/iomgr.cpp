@@ -47,11 +47,18 @@ void IOManager::start(size_t const expected_custom_ifaces, size_t const num_thre
 }
 
 void IOManager::stop() {
+    LOGINFO("Stopping IOManager");
     iomgr_msg msg(iomgr_msg_type::RELINQUISH_IO_THREAD);
     send_msg(-1, std::move(msg));
     for (auto& t : m_iomgr_threads) {
         t.join();
     }
+    m_iomgr_threads.clear();
+    m_yet_to_start_nthreads.set(0);
+    m_expected_ifaces = inbuilt_interface_count;
+    m_drive_ifaces.wlock()->clear();
+    m_iface_list.wlock()->clear();
+    set_state(iomgr_state::stopped);
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface) {
