@@ -76,6 +76,7 @@ struct compare_timer {
 
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
 using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< fd_info > >;
+typedef std::function< bool(fd_info*) > fd_selector_t;
 
 class ioMgrThreadContext {
     friend class IOManager;
@@ -83,7 +84,7 @@ class ioMgrThreadContext {
 public:
     ioMgrThreadContext();
     ~ioMgrThreadContext();
-    void run(bool is_iomgr_thread = false);
+    void run(bool is_iomgr_thread = false, const fd_selector_t& fd_selector = nullptr);
     void listen();
     int  add_fd_to_thread(fd_info* info);
     int  remove_fd_from_thread(fd_info* info);
@@ -108,6 +109,7 @@ private:
     void on_user_fd_notification(fd_info* info, uint32_t event);
     void on_timer_fd_notification(fd_info* info);
     bool setup_timer_fd(fd_info* info);
+    bool is_fd_addable(fd_info* info);
 
 private:
     int                        m_epollfd = -1;         // Parent epoll context for this thread
@@ -119,6 +121,7 @@ private:
     bool                       m_is_io_thread = false;
     bool                       m_is_iomgr_thread = false; // Is this thread created by iomanager itself
     bool                       m_keep_running = true;
+    fd_selector_t              m_fd_selector = nullptr;
 
     folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
     std::unique_ptr< ioMgrThreadMetrics >            m_metrics;

@@ -73,7 +73,7 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
             LOGINFO("IOManager is asked to start {} number of threads, starting them", nthreads);
             for (auto i = 0; i < nthreads; i++) {
                 m_iomgr_threads.push_back(
-                    std::move(sisl::thread_factory("io_thread", &IOManager::run_io_loop, this, true)));
+                    std::move(sisl::thread_factory("io_thread", &IOManager::run_io_loop, this, true, nullptr)));
                 LOGTRACEMOD(iomgr, "Created iomanager thread...", i);
                 // t.detach();
             }
@@ -86,7 +86,9 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
     }
 }
 
-void IOManager::run_io_loop(bool is_iomgr_thread) { m_thread_ctx->run(is_iomgr_thread); }
+void IOManager::run_io_loop(bool is_iomgr_thread, const fd_selector_t& fd_selector) {
+    m_thread_ctx->run(is_iomgr_thread, fd_selector);
+}
 
 void IOManager::iomgr_thread_ready() {
     if (m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
@@ -109,10 +111,10 @@ fd_info* IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomg
     info->is_global = !is_per_thread_fd;
 
     if (is_per_thread_fd) {
-        m_thread_ctx->add_fd_to_thread(info);
+        if (m_thread_ctx->is_fd_addable(info)) { m_thread_ctx->add_fd_to_thread(info); }
     } else {
         m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
-            if (ctx->is_io_thread()) { ctx->add_fd_to_thread(info); }
+            if (ctx->is_io_thread() && ctx->is_fd_addable(info)) { ctx->add_fd_to_thread(info); }
         });
         m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
     }
