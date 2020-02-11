@@ -10,16 +10,18 @@ class IOMgrConan(ConanFile):
     url = "https://github.corp.ebay.com/SDS/iomgr"
     description = "iomgr"
 
-    settings = "arch", "os", "compiler", "build_type", "sanitize"
+    settings = "arch", "os", "compiler", "build_type"
     options = {
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
+        "sanitize": ['True', 'False'],
         }
     default_options = (
         'shared=False',
         'fPIC=True',
-        'coverage=False'
+        'coverage=False',
+        'sanitize=False',
         )
 
     requires = (
@@ -31,13 +33,20 @@ class IOMgrConan(ConanFile):
     generators = "cmake"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
 
+    def configure(self):
+        if self.settings.compiler != "gcc" or self.options.sanitize:
+            self.options.coverage = False
+
     def build(self):
         cmake = CMake(self)
         definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
+
+        if self.options.sanitize:
+            definitions['MEMORY_SANITIZER_ON'] = 'ON'
                 
-        if self.settings.sanitize != "address" and self.options.coverage == 'True':
+        if self.options.coverage:
             definitions['CONAN_BUILD_COVERAGE'] = 'ON'
             test_target = 'coverage'
 
@@ -56,9 +65,11 @@ class IOMgrConan(ConanFile):
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
-        if self.settings.sanitize != None:
+        if self.options.sanitize:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")
+            self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
+            self.cpp_info.exelinkflags.append("-fsanitize=undefined")
         elif self.options.coverage == 'True':
             self.cpp_info.libs.append('gcov')
 
