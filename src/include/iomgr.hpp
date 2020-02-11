@@ -68,7 +68,7 @@ public:
     IOManager();
     ~IOManager();
     void start(size_t num_iface, size_t num_threads = 0, const io_thread_msg_notifier& notifier = nullptr);
-    void run_io_loop(bool is_iomgr_thread = false);
+    void run_io_loop(bool is_iomgr_thread = false, const fd_selector_t& fd_selector = nullptr);
     void stop();
 
     fd_info* create_fd_info(IOInterface* iface, int fd, const ev_callback& cb, int ev, int pri, void* cookie);

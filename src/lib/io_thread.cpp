@@ -50,9 +50,10 @@ ioMgrThreadContext::~ioMgrThreadContext() {
     if (m_is_io_thread) { iothread_stop(); }
 }
 
-void ioMgrThreadContext::run(bool is_iomgr_thread) {
+void ioMgrThreadContext::run(bool is_iomgr_thread, const fd_selector_t& fd_selector) {
     if (!m_is_io_thread) {
         m_is_iomgr_thread = is_iomgr_thread;
+        m_fd_selector = fd_selector;
 
         m_thread_num = sisl::ThreadLocalContext::my_thread_num();
         LOGINFO("IOThread is assigned thread num {}", m_thread_num);
@@ -401,4 +402,5 @@ bool ioMgrThreadContext::setup_timer_fd(fd_info* info) {
     return true;
 }
 
+bool ioMgrThreadContext::is_fd_addable(fd_info* info) { return (!m_fd_selector || m_fd_selector(info)); }
 } // namespace iomgr
