@@ -53,6 +53,8 @@ void IOManager::stop() {
     for (auto& t : m_iomgr_threads) {
         t.join();
     }
+
+    m_global_timer = nullptr;
     m_iomgr_threads.clear();
     m_yet_to_start_nthreads.set(0);
     m_expected_ifaces = inbuilt_interface_count;
@@ -101,8 +103,8 @@ void IOManager::iomgr_thread_ready() {
     if (m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
 }
 
-fd_info* IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie,
-                            bool is_per_thread_fd) {
+std::shared_ptr< fd_info > IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri,
+                                              void* cookie, bool is_per_thread_fd) {
     // We can add per thread fd even when iomanager is not ready. However, global fds need IOManager
     // to be initialized, since it has to maintain global map
     if (!is_per_thread_fd && !is_ready()) {
@@ -114,21 +116,21 @@ fd_info* IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomg
     LOGTRACEMOD(iomgr, "fd {} is requested to add to IOManager, will add it to {} thread(s)", fd,
                 (is_per_thread_fd ? "this" : "all"));
 
-    fd_info* info = create_fd_info(iface, fd, cb, iomgr_ev, pri, cookie);
-    info->is_global = !is_per_thread_fd;
+    auto finfo = create_fd_info(iface, fd, cb, iomgr_ev, pri, cookie);
+    finfo->is_global = !is_per_thread_fd;
 
     if (is_per_thread_fd) {
-        if (m_thread_ctx->is_fd_addable(info)) { m_thread_ctx->add_fd_to_thread(info); }
+        if (m_thread_ctx->is_fd_addable(finfo)) { m_thread_ctx->add_fd_to_thread(finfo); }
     } else {
-        m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
-            if (ctx->is_io_thread() && ctx->is_fd_addable(info)) { ctx->add_fd_to_thread(info); }
+        m_thread_ctx.access_all_threads([finfo](ioMgrThreadContext* ctx) {
+            if (ctx->is_io_thread() && ctx->is_fd_addable(finfo)) { ctx->add_fd_to_thread(finfo); }
         });
-        m_fd_info_map.wlock()->insert(std::pair< int, fd_info* >(fd, info));
+        m_fd_info_map.wlock()->insert(std::pair< int, std::shared_ptr< fd_info > >(fd, finfo));
     }
-    return info;
+    return finfo;
 }
 
-void IOManager::remove_fd(IOInterface* iface, fd_info* info, ioMgrThreadContext* iomgr_ctx) {
+void IOManager::remove_fd(IOInterface* iface, std::shared_ptr< fd_info > info, ioMgrThreadContext* iomgr_ctx) {
     (void)iface;
     if (!is_ready()) {
         LOGDFATAL("Expected IOManager to be ready before we receive _remove_fd");
@@ -143,40 +145,7 @@ void IOManager::remove_fd(IOInterface* iface, fd_info* info, ioMgrThreadContext*
     } else {
         iomgr_ctx ? iomgr_ctx->remove_fd_from_thread(info) : m_thread_ctx->remove_fd_from_thread(info);
     }
-    delete (info);
 }
-
-#if 0
-void IOManager::callback(void* data, uint32_t event) {
-    fd_info* info = (fd_info*)data;
-    info->cb(info->fd, info->cookie, event);
-}
-
-bool IOManager::can_process(void* data, uint32_t ev) {
-    fd_info* info = (fd_info*)data;
-    int      expected = 0;
-    int      desired = 1;
-    bool     ret = false;
-    if (ev & EPOLLIN) {
-        ret = info->is_processing[fd_info::READ].compare_exchange_strong(expected, desired, std::memory_order_acquire,
-                                                                          std::memory_order_acquire);
-    } else if (ev & EPOLLOUT) {
-        ret = info->is_processing[fd_info::WRITE].compare_exchange_strong(expected, desired, std::memory_order_acquire,
-                                                                           std::memory_order_acquire);
-    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
-        LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
-    } else {
-        LOGCRITICAL("Unknown event: {}", ev);
-        assert(0);
-    }
-    if (ret) {
-        //		LOG(INFO) << "running for fd" << info->fd;
-    } else {
-        //		LOG(INFO) << "not allowed running for fd" << info->fd;
-    }
-    return ret;
-}
-#endif
 
 void IOManager::fd_reschedule(int fd, uint32_t event) { fd_reschedule(fd_to_info(fd), event); }
 
@@ -229,52 +198,9 @@ uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
     return msg_sent_count;
 }
 
-#if 0
-void IOManager::process_evfd(int evfd, void* data, uint32_t event) {
-    uint64_t temp;
-    while (0 > read(evfd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
-        ;
-
-    fd_info* base_info = (fd_info*)data;
-
-    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLIN && can_process(base_info, event)) {
-        base_info->cb(base_info->fd, base_info->cookie, EPOLLIN);
-    }
-
-    if (base_info->event[sisl::ThreadLocalContext::my_thread_num()] & EPOLLOUT && can_process(base_info, event)) {
-        base_info->cb(base_info->fd, base_info->cookie, EPOLLOUT);
-    }
-    base_info->event[sisl::ThreadLocalContext::my_thread_num()] = 0;
-
-    process_done(evfd, event);
-}
-
-void IOManager::process_done(int fd, int ev) { process_done(fd_to_info(fd), ev); }
-
-void IOManager::process_done(fd_info* info, int ev) {
-    if (ev & EPOLLIN) {
-        info->is_processing[fd_info::READ].fetch_sub(1, std::memory_order_release);
-    } else if (ev & EPOLLOUT) {
-        info->is_processing[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
-    } else {
-        assert(0);
-    }
-}
-
-void IOManager::print_perf_cntrs() {
-    m_thread_ctx.access_all_threads([](ioMgrThreadContext* ctx) {
-        if (!ctx->is_io_thread()) { return true; }
-        LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time spent {}ms", ctx->m_thread_num,
-                ctx->m_count, (ctx->m_time_spent_ns / (1000 * 1000)));
-    });
-
-    foreach_interface([](IOInterface* iface) { iface->print_perf(); });
-}
-#endif
-
-fd_info* IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_callback& cb, int ev, int pri,
-                                   void* cookie) {
-    fd_info* info = new fd_info;
+std::shared_ptr< fd_info > IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_callback& cb, int ev,
+                                                     int pri, void* cookie) {
+    auto info = std::make_shared< fd_info >();
 
     info->cb = cb;
     info->is_processing[fd_info::READ] = 0;
@@ -285,20 +211,18 @@ fd_info* IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_c
     info->pri = pri;
     info->cookie = cookie;
     info->io_interface = iface;
-    info->is_timer_fd = false;
-    info->recurring_timer_info = nullptr;
     return info;
 }
 
 fd_info* IOManager::fd_to_info(int fd) {
     auto it = m_fd_info_map.rlock()->find(fd);
     assert(it->first == fd);
-    fd_info* info = it->second;
+    auto finfo = it->second;
 
-    return info;
+    return finfo.get();
 }
 
-void IOManager::foreach_fd_info(std::function< void(fd_info*) > fd_cb) {
+void IOManager::foreach_fd_info(std::function< void(std::shared_ptr< fd_info >) > fd_cb) {
     m_fd_info_map.withRLock([&](auto& fd_infos) {
         for (auto& fdi : fd_infos) {
             fd_cb(fdi.second);
