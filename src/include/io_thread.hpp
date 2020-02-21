@@ -10,6 +10,7 @@
 #include <folly/MPMCQueue.h>
 #include "io_interface.hpp"
 #include "iomgr_msg.hpp"
+#include "iomgr_timer.hpp"
 #include <metrics/metrics.hpp>
 #include <chrono>
 #include <variant>
@@ -57,26 +58,7 @@ public:
     uint64_t rescheduled_out = 0;
 };
 
-typedef std::function< void(void*) > timer_callback_t;
-struct timer_info {
-    std::chrono::steady_clock::time_point expiry_time;
-    timer_callback_t                      cb;
-    void*                                 context;
-
-    timer_info(uint64_t nanos_after, void* cookie, timer_callback_t&& timer_fn) {
-        expiry_time = std::chrono::steady_clock::now() + std::chrono::nanoseconds(nanos_after);
-        cb = std::move(timer_fn);
-        context = cookie;
-    }
-};
-
-struct compare_timer {
-    bool operator()(const timer_info& ti1, const timer_info& ti2) const { return ti1.expiry_time > ti2.expiry_time; }
-};
-
-using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< fd_info > >;
-typedef std::function< bool(fd_info*) > fd_selector_t;
+typedef std::function< bool(std::shared_ptr< fd_info >) > fd_selector_t;
 
 class ioMgrThreadContext {
     friend class IOManager;
@@ -86,8 +68,8 @@ public:
     ~ioMgrThreadContext();
     void run(bool is_iomgr_thread = false, const fd_selector_t& fd_selector = nullptr);
     void listen();
-    int  add_fd_to_thread(fd_info* info);
-    int  remove_fd_from_thread(fd_info* info);
+    int  add_fd_to_thread(std::shared_ptr< fd_info > info);
+    int  remove_fd_from_thread(std::shared_ptr< fd_info > info);
     bool is_io_thread() const;
 
     /***
@@ -98,25 +80,18 @@ public:
     void put_msg(const iomgr_msg& msg);
     void put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf = nullptr, uint32_t size = 0);
 
-    timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
-                                         timer_callback_t&& timer_fn);
-    void           cancel_thread_timer(timer_handle_t thdl);
-
 private:
     void iothread_init(bool wait_till_ready);
     void iothread_stop();
     void on_msg_fd_notification();
     void on_user_fd_notification(fd_info* info, uint32_t event);
-    void on_timer_fd_notification(fd_info* info);
-    bool setup_timer_fd(fd_info* info);
-    bool is_fd_addable(fd_info* info);
+    bool is_fd_addable(std::shared_ptr< fd_info > info);
 
 private:
-    int                        m_epollfd = -1;         // Parent epoll context for this thread
-    int                        m_thread_num;           // Thread num
-    std::unique_ptr< fd_info > m_msg_fd_info;          // fd_info for the message fd
-    std::unique_ptr< fd_info > m_common_timer_fd_info; // fd_info for the timer fd
-    uint64_t                   m_count = 0;            // Count of operations this thread is handling.
+    int                        m_epollfd = -1; // Parent epoll context for this thread
+    int                        m_thread_num;   // Thread num
+    std::shared_ptr< fd_info > m_msg_fd_info;  // fd_info for the message fd
+    uint64_t                   m_count = 0;    // Count of operations this thread is handling.
     uint64_t                   m_time_spent_ns = 0;
     bool                       m_is_io_thread = false;
     bool                       m_is_iomgr_thread = false; // Is this thread created by iomanager itself
@@ -126,7 +101,6 @@ private:
     folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
     std::unique_ptr< ioMgrThreadMetrics >            m_metrics;
 
-    timer_heap_t                           m_timer_list;          // Timer info of non-recurring timers
-    std::set< std::shared_ptr< fd_info > > m_recurring_timer_fds; // fd infos of recurring timers
+    std::unique_ptr< timer > m_thread_timer;
 };
 } // namespace iomgr

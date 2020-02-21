@@ -60,7 +60,7 @@ struct aio_thread_context {
     int                             ev_fd = 0;
     io_context_t                    ioctx = 0;
     std::stack< struct iocb_info* > iocb_list;
-    fd_info*                        ev_fd_info = nullptr; // fd info after registering with IOManager
+    std::shared_ptr< fd_info >      ev_fd_info = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
         if (ev_fd) { close(ev_fd); }
