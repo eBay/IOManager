@@ -12,6 +12,7 @@ extern "C" {
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
 #include "include/io_thread.hpp"
+#include <fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -43,18 +44,24 @@ ioMgrThreadContext::~ioMgrThreadContext() {
     if (m_is_io_thread) { iothread_stop(); }
 }
 
-void ioMgrThreadContext::run(bool is_iomgr_thread, const fd_selector_t& fd_selector) {
+void ioMgrThreadContext::run(bool is_iomgr_thread, const fd_selector_t& fd_selector,
+                             const io_thread_msg_handler& this_thread_msg_handler) {
+    auto state = iomanager.get_state();
+    if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
+        LOGINFO("Starting a new IOThread while iomanager is stopping or stopped, not starting io loop");
+        return;
+    }
+
     if (!m_is_io_thread) {
         m_is_iomgr_thread = is_iomgr_thread;
         m_fd_selector = fd_selector;
+        m_this_thread_msg_handler = this_thread_msg_handler;
 
         m_thread_num = sisl::ThreadLocalContext::my_thread_num();
         LOGINFO("IOThread is assigned thread num {}", m_thread_num);
 
         iothread_init(true /* wait_for_iface_register */);
-        if (is_iomgr_thread) { iomanager.iomgr_thread_ready(); }
-
-        LOGINFO("IOThread is ready to go to listen loop");
+        if (m_keep_running) LOGINFO("IOThread is ready to go to listen loop");
     }
 
     while (m_keep_running) {
@@ -111,8 +118,12 @@ void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
     // Notify all the end points about new thread
     iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_start(this); });
 
-    // Notify the caller registered to iomanager for it
-    iomanager.notify_thread_state(true /* started */);
+    // Notify the caller registered to iomanager for it.
+    iomanager.io_thread_started(m_is_iomgr_thread);
+
+    // NOTE: This should be the last one before return, because notification might call iothread_stop() and thus need
+    // to have clean exit in those cases.
+    notify_thread_state(true /* started */);
     return;
 
 error:
@@ -130,11 +141,13 @@ error:
 }
 
 void ioMgrThreadContext::iothread_stop() {
+    m_keep_running = false;
+
     iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(this); });
     iomanager.foreach_fd_info([&](std::shared_ptr< fd_info > fdi) { remove_fd_from_thread(fdi); });
 
     // Notify the caller registered to iomanager for it
-    iomanager.notify_thread_state(false /* started */);
+    notify_thread_state(false /* started */);
 
     if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) {
         remove_fd_from_thread(m_msg_fd_info);
@@ -145,6 +158,9 @@ void ioMgrThreadContext::iothread_stop() {
     m_thread_timer = nullptr;
 
     if (m_epollfd != -1) { close(m_epollfd); }
+    m_is_io_thread = false;
+
+    iomanager.io_thread_stopped();
 }
 
 bool ioMgrThreadContext::is_io_thread() const { return m_is_io_thread; }
@@ -237,9 +253,7 @@ void ioMgrThreadContext::on_msg_fd_notification() {
 
         case RELINQUISH_IO_THREAD:
             LOGINFO("This thread is asked to be reliquished its status as io thread. Will exit io loop");
-            m_keep_running = false;
             iothread_stop();
-            m_is_io_thread = false;
             break;
 
         case DESIGNATE_IO_THREAD:
@@ -248,15 +262,25 @@ void ioMgrThreadContext::on_msg_fd_notification() {
             m_is_io_thread = true;
             break;
 
+        case RUN_METHOD: {
+            LOGTRACE("We are picked the thread to run the method");
+            auto method_to_run = (run_method_t*)msg.m_data_buf;
+            (*method_to_run)();
+            sisl::ObjectAllocator< run_method_t >::deallocate(method_to_run);
+            break;
+        }
+
         case WAKEUP:
         case SHUTDOWN:
-        case CUSTOM_MSG:
-            if (iomanager.msg_notifier()) {
-                iomanager.msg_notifier()(msg);
+        case CUSTOM_MSG: {
+            auto& handler = msg_handler();
+            if (handler) {
+                handler(msg);
             } else {
                 LOGINFO("Received a message, but no message handler registered. Ignoring this message");
             }
             break;
+        }
 
         case UNKNOWN:
         default: assert(0); break;
@@ -272,6 +296,7 @@ void ioMgrThreadContext::on_user_fd_notification(fd_info* info, uint32_t event) 
     LOGTRACEMOD(iomgr, "Processing event on user fd: {}", info->fd);
     info->cb(info->fd, info->cookie, event);
 
+    --m_count;
     m_time_spent_ns += get_elapsed_time_ns(write_startTime);
     LOGTRACEMOD(iomgr, "Call took: {}ns", m_time_spent_ns);
 }
@@ -279,4 +304,15 @@ void ioMgrThreadContext::on_user_fd_notification(fd_info* info, uint32_t event) 
 bool ioMgrThreadContext::is_fd_addable(std::shared_ptr< fd_info > info) {
     return (!m_fd_selector || m_fd_selector(info));
 }
+
+void ioMgrThreadContext::notify_thread_state(bool is_started) {
+    iomgr_msg msg(is_started ? iomgr_msg_type::WAKEUP : iomgr_msg_type::SHUTDOWN);
+    auto& handler = msg_handler();
+    if (handler) { handler(msg); }
+}
+
+io_thread_msg_handler& ioMgrThreadContext::msg_handler() {
+    return (m_this_thread_msg_handler) ? m_this_thread_msg_handler : iomanager.m_common_thread_msg_handler;
+}
+
 } // namespace iomgr
