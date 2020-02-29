@@ -37,6 +37,7 @@ struct compare_timer {
 struct fd_info;
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
 using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< fd_info > >;
+static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< fd_info >(nullptr));
 
 /**
  * @brief IOManager Timer: Class that provides timer functionality in async manner.

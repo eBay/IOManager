@@ -16,23 +16,23 @@ SDS_OPTIONS_ENABLE(logging)
 using namespace iomgr;
 
 // Constants
-static constexpr size_t nthreads = 8;
+static constexpr size_t nthreads = 4;
 static constexpr size_t total_dev_size = 512 * 1024 * 1024;
 static constexpr size_t io_size = 4096;
-static constexpr int    read_pct = 50;
+static constexpr int read_pct = 50;
 static constexpr size_t each_thread_size = total_dev_size / nthreads;
 // static constexpr size_t max_ios_per_thread = 10000000;
 static constexpr size_t max_ios_per_thread = 10000;
 
 std::shared_ptr< AioDriveInterface > g_aio_iface;
-int                                  g_dev_fd = -1;
+int g_dev_fd = -1;
 
 std::atomic< size_t > next_available_range = 0;
 
 struct Runner {
-    std::mutex              cv_mutex;
+    std::mutex cv_mutex;
     std::condition_variable comp_cv;
-    int                     n_running_threads = nthreads;
+    int n_running_threads = nthreads;
 
     void wait() {
         std::unique_lock< std::mutex > lk(cv_mutex);
@@ -51,15 +51,15 @@ struct Runner {
 struct Workload {
     size_t nios_issued = 0;
     size_t nios_completed = 0;
-    bool   is_preload_phase = true;
+    bool is_preload_phase = true;
     size_t offset_start = 0;
     size_t offset_end = 0;
     size_t next_io_offset = 0;
-    int    available_qs = 8;
+    int available_qs = 8;
 };
 
 static thread_local Workload work;
-static Runner                runner;
+static Runner runner;
 
 static void do_write_io(size_t offset) {
     std::array< size_t, io_size / sizeof(size_t) > wbuf;
@@ -177,9 +177,10 @@ int main(int argc, char* argv[]) {
     // Wait for IO to finish on all threads.
     runner.wait();
 
+    LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
+
     // Stop the IOManage for clean exit
     iomanager.stop();
 
-    LOGINFO("AioDriveInterfaceMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json());
     return 0;
 }

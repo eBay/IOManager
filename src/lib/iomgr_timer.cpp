@@ -110,6 +110,7 @@ timer_handle_t timer::schedule(uint64_t nanos_after, bool recurring, void* cooki
 }
 
 void timer::cancel(timer_handle_t thandle) {
+    if (thandle == null_timer_handle) return;
     std::visit(overloaded{[&](std::shared_ptr< fd_info > info) {
                               if (info->fd != -1) {
                                   iomanager.remove_fd(info);
