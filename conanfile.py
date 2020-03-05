@@ -27,7 +27,7 @@ class IOMgrConan(ConanFile):
     requires = (
             "folly/2019.09.30.00",
             "libevent/2.1.11",
-            "sds_logging/6.1.2@sds/develop",
+            "sds_logging/6.1.3@sds/develop",
             )
 
     generators = "cmake"
