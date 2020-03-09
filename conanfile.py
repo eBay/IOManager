@@ -26,7 +26,7 @@ class IOMgrConan(ConanFile):
 
     requires = (
             "sds_logging/6.1.3@sds/develop",
-            "sisl/1.0.2@sisl/develop",
+            "sisl/1.0.3@sisl/develop",
             "boost/1.72.0",
             "folly/2019.09.30.00",
             "libevent/2.1.11",
