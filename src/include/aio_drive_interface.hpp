@@ -27,11 +27,11 @@ namespace iomgr {
 
 #ifdef linux
 struct iocb_info : public iocb {
-    bool              is_read;
-    uint32_t          size;
-    uint64_t          offset;
+    bool is_read;
+    uint32_t size;
+    uint64_t offset;
     Clock::time_point start_time;
-    int               fd;
+    int fd;
 
     std::string to_string() const {
         std::stringstream ss;
@@ -56,11 +56,11 @@ public:
 struct fd_info;
 class ioMgrThreadContext;
 struct aio_thread_context {
-    struct io_event                 events[MAX_COMPLETIONS] = {{}};
-    int                             ev_fd = 0;
-    io_context_t                    ioctx = 0;
+    struct io_event events[MAX_COMPLETIONS] = {{}};
+    int ev_fd = 0;
+    io_context_t ioctx = 0;
     std::stack< struct iocb_info* > iocb_list;
-    std::shared_ptr< fd_info >      ev_fd_info = nullptr; // fd info after registering with IOManager
+    std::shared_ptr< fd_info > ev_fd_info = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
         if (ev_fd) { close(ev_fd); }
@@ -104,27 +104,31 @@ public:
     AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
-    void    attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    int     open_dev(std::string devname, int oflags) override;
-    void    add_fd(int fd, int priority = 9) override;
+    void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
+    void attach_batch_sentinel_cb(const io_interface_batch_sentinel_cb_t& cb) override {
+        m_io_batch_sentinel_cb_list.emplace_back(cb);
+    }
+    int open_dev(std::string devname, int oflags) override;
+    void add_fd(int fd, int priority = 9) override;
     ssize_t sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
     ssize_t sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    void    async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void    async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                         uint8_t* cookie) override;
-    void    async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void    async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                        uint8_t* cookie) override;
-    void    process_completions(int fd, void* cookie, int event);
-    void    on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override;
-    void    on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override;
+    void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
+    void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                      uint8_t* cookie) override;
+    void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
+    void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                     uint8_t* cookie) override;
+    void process_completions(int fd, void* cookie, int event);
+    void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override;
+    void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override;
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
-    AioDriveInterfaceMetrics                m_metrics;
-    io_interface_comp_cb_t                  m_comp_cb;
+    AioDriveInterfaceMetrics m_metrics;
+    io_interface_comp_cb_t m_comp_cb;
+    std::vector< io_interface_batch_sentinel_cb_t > m_io_batch_sentinel_cb_list;
 };
 #else
 class AioDriveInterface : public DriveInterface {

@@ -19,7 +19,8 @@ public:
     virtual drive_interface_type interface_type() const = 0;
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) = 0;
-    virtual int  open_dev(std::string devname, int oflags) = 0;
+    virtual void attach_batch_sentinel_cb(const io_interface_batch_sentinel_cb_t& cb) = 0;
+    virtual int open_dev(std::string devname, int oflags) = 0;
     virtual void add_fd(int fd, int priority = 9) = 0;
     virtual ssize_t sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) = 0;
     virtual ssize_t sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;

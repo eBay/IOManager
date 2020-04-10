@@ -93,7 +93,7 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
     uint64_t temp = 0;
 
     [[maybe_unused]] auto rsize = read(_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
-    int                   nevents = io_getevents(_aio_ctx->ioctx, 0, MAX_COMPLETIONS, _aio_ctx->events, NULL);
+    int nevents = io_getevents(_aio_ctx->ioctx, 0, MAX_COMPLETIONS, _aio_ctx->events, NULL);
     if (nevents == 0) { COUNTER_INCREMENT(m_metrics, spurious_events, 1); }
     if (nevents < 0) {
         /* TODO: Handle error by reporting failures */
@@ -104,7 +104,7 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
     for (int i = 0; i < nevents; i++) {
         auto& e = _aio_ctx->events[i];
 
-        auto              ret = static_cast< int64_t >(e.res);
+        auto ret = static_cast< int64_t >(e.res);
         struct iocb_info* info = static_cast< iocb_info* >(e.obj);
         _aio_ctx->iocb_list.push(info);
 
@@ -120,6 +120,13 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
 
         if (m_comp_cb) m_comp_cb(e.res2, (uint8_t*)e.data);
     }
+
+    // Call any batch completions hints
+    if (nevents) {
+        for (auto& cb : m_io_batch_sentinel_cb_list) {
+            cb(nevents);
+        }
+    }
 }
 
 void AioDriveInterface::async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) {
@@ -133,7 +140,7 @@ void AioDriveInterface::async_write(int data_fd, const char* data, uint32_t size
     }
 
     struct iocb_info* info = _aio_ctx->iocb_list.top();
-    struct iocb*      iocb = static_cast< struct iocb* >(info);
+    struct iocb* iocb = static_cast< struct iocb* >(info);
     _aio_ctx->iocb_list.pop();
 
     io_prep_pwrite(iocb, data_fd, (void*)data, size, offset);
@@ -171,7 +178,7 @@ void AioDriveInterface::async_read(int data_fd, char* data, uint32_t size, uint6
         return;
     }
     struct iocb_info* info = _aio_ctx->iocb_list.top();
-    struct iocb*      iocb = static_cast< struct iocb* >(info);
+    struct iocb* iocb = static_cast< struct iocb* >(info);
     _aio_ctx->iocb_list.pop();
 
     io_prep_pread(iocb, data_fd, data, size, offset);
@@ -214,7 +221,7 @@ void AioDriveInterface::async_writev(int data_fd, const iovec* iov, int iovcnt, 
         return;
     }
     struct iocb_info* info = _aio_ctx->iocb_list.top();
-    struct iocb*      iocb = static_cast< struct iocb* >(info);
+    struct iocb* iocb = static_cast< struct iocb* >(info);
     _aio_ctx->iocb_list.pop();
     io_prep_pwritev(iocb, data_fd, iov, iovcnt, offset);
     io_set_eventfd(iocb, _aio_ctx->ev_fd);
@@ -264,7 +271,7 @@ void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, u
         return;
     }
     struct iocb_info* info = _aio_ctx->iocb_list.top();
-    struct iocb*      iocb = static_cast< struct iocb* >(info);
+    struct iocb* iocb = static_cast< struct iocb* >(info);
     _aio_ctx->iocb_list.pop();
 
     io_prep_preadv(iocb, data_fd, iov, iovcnt, offset);
