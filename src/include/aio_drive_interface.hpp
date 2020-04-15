@@ -66,13 +66,6 @@ struct iocb_batch_t {
         return ss.str();
     }
 
-#if 0
-    iocb_info_t* iocb_to_info(struct iocb* b) {
-        int nth_index = (b - &iocb_buf[0]);
-        return &iocb_info[nth_index];
-    }
-#endif
-
     struct iocb** get_iocb_list() {
         return (struct iocb**)&iocb_info[0];
     }
@@ -188,85 +181,6 @@ struct aio_thread_context {
 
         return iocb;
     }
-
-#if 0
-    iocb_batch_t* alloc_iocb(bool batch_io) {
-        iocb_batch_t* ibatch;
-
-        if (batch_io && cur_iocb_batch) {
-            assert(can_be_batched());
-            ibatch = cur_iocb_batch;
-            ++ibatch->n_iocbs;
-        } else {
-            ibatch = iocb_free_list.top();
-            iocb_free_list.pop();
-
-            ibatch->n_iocbs = 1;
-            ibatch->part_of_batch = batch_io;
-            if (batch_io) cur_iocb_batch = ibatch;
-        }
-
-        return ibatch;
-    }
-
-    void free_iocb(struct iocb* iocb) {
-        auto ibatch = (iocb_batch_t*)iocb->data;
-        if (--ibatch->n_iocbs == 0) iocb_free_list.push(ibatch);
-    }
-
-    struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
-                           uint8_t* cookie) {
-        auto ibatch = alloc_iocb(batch_io);
-        assert(ibatch);
-
-        auto i_info = &ibatch->iocb_info[ibatch->n_iocbs - 1];
-        i_info->is_read = is_read;
-        i_info->data = (char*)data;
-        i_info->size = size;
-        i_info->offset = offset;
-        i_info->fd = fd;
-        i_info->cookie = cookie;
-        i_info->iovcnt = 0;
-
-        struct iocb* iocb = &ibatch->iocb_buf[ibatch->n_iocbs - 1];
-        iocb->data = (void*)ibatch;
-        (is_read) ? io_prep_pread(iocb, fd, (void*)data, size, offset)
-                  : io_prep_pwrite(iocb, fd, (void*)data, size, offset);
-        io_set_eventfd(iocb, ev_fd);
-
-        return ibatch;
-    }
-
-    iocb_batch_t* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
-                              uint64_t offset, uint8_t* cookie) {
-        auto ibatch = alloc_iocb(batch_io);
-        assert(ibatch);
-
-        auto i_info = &ibatch->iocb_info[ibatch->n_iocbs - 1];
-        i_info->is_read = is_read;
-        i_info->data = nullptr;
-        i_info->size = size;
-        i_info->offset = offset;
-        i_info->fd = fd;
-        i_info->cookie = cookie;
-        if (batch_io) {
-            // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
-            // corrupted data
-            assert(iovcnt <= max_batch_iov_cnt);
-            memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
-            iov = &i_info->iovs[0];
-            i_info->iovcnt = iovcnt;
-        } else {
-            i_info->iovcnt = iovcnt;
-        }
-
-        struct iocb* iocb = &ibatch->iocb_buf[ibatch->n_iocbs - 1];
-        (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
-        io_set_eventfd(iocb, ev_fd);
-
-        return ibatch;
-    }
-#endif
 
     iocb_batch_t move_cur_batch() {
         auto ret = cur_iocb_batch;
