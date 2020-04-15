@@ -10,6 +10,7 @@
 #include <mutex>
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
+#include <fds/utils.hpp>
 
 #ifdef linux
 #include <fcntl.h>
@@ -25,18 +26,55 @@ namespace iomgr {
 #define MAX_OUTSTANDING_IO 200               // if max outstanding IO is more than 200 then io_submit will fail.
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
+static constexpr int max_batch_iocb_count = 4;
+static constexpr int max_batch_iov_cnt = 4;
+
 #ifdef linux
-struct iocb_info : public iocb {
+struct iocb_info_t : public iocb {
     bool is_read;
+    char* user_data;
     uint32_t size;
     uint64_t offset;
-    Clock::time_point start_time;
     int fd;
+    iovec iovs[max_batch_iov_cnt];
+    int iovcnt;
 
     std::string to_string() const {
         std::stringstream ss;
-        ss << "is_read = " << is_read << ", size = " << size << ", offset = " << offset << ", fd = " << fd;
+        ss << "is_read = " << is_read << ", size = " << size << ", offset = " << offset << ", fd = " << fd
+           << ", iovcnt = " << iovcnt;
         return ss.str();
+    }
+};
+
+// inline iocb_info_t* to_iocb_info(user_io_info_t* p) { return container_of(p, iocb_info_t, user_io_info); }
+struct iocb_batch_t {
+    std::array< iocb_info_t*, max_batch_iocb_count > iocb_info;
+    int n_iocbs = 0;
+
+    iocb_batch_t() = default;
+
+    void reset() { n_iocbs = 0; }
+
+    std::string to_string() const {
+        std::stringstream ss;
+        ss << "Batch of " << n_iocbs << " : ";
+        for (auto i = 0; i < n_iocbs; ++i) {
+            auto i_info = iocb_info[i];
+            ss << "{(" << i << ") -> " << i_info->to_string() << " } ";
+        }
+        return ss.str();
+    }
+
+#if 0
+    iocb_info_t* iocb_to_info(struct iocb* b) {
+        int nth_index = (b - &iocb_buf[0]);
+        return &iocb_info[nth_index];
+    }
+#endif
+
+    struct iocb** get_iocb_list() {
+        return (struct iocb**)&iocb_info[0];
     }
 };
 
@@ -59,18 +97,181 @@ struct aio_thread_context {
     struct io_event events[MAX_COMPLETIONS] = {{}};
     int ev_fd = 0;
     io_context_t ioctx = 0;
-    std::stack< struct iocb_info* > iocb_list;
+    std::stack< iocb_info_t* > iocb_free_list;
+    iocb_batch_t cur_iocb_batch;
     std::shared_ptr< fd_info > ev_fd_info = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
         if (ev_fd) { close(ev_fd); }
         io_destroy(ioctx);
 
-        while (!iocb_list.empty()) {
-            auto info = iocb_list.top();
-            free(info);
-            iocb_list.pop();
+        while (!iocb_free_list.empty()) {
+            auto info = iocb_free_list.top();
+            delete info;
+            iocb_free_list.pop();
         }
+    }
+
+    void iocb_info_prealloc(uint32_t count) {
+        for (auto i = 0u; i < count; ++i) {
+            iocb_free_list.push(new iocb_info_t());
+        }
+    }
+
+    bool can_be_batched(int iovcnt) {
+        return ((iovcnt <= max_batch_iov_cnt) && (cur_iocb_batch.n_iocbs < max_batch_iocb_count));
+    }
+
+    bool can_submit_aio() { return (!iocb_free_list.empty()); }
+
+    iocb_info_t* alloc_iocb() {
+        auto info = iocb_free_list.top();
+        iocb_free_list.pop();
+        return info;
+    }
+
+    void free_iocb(struct iocb* iocb) {
+        auto info = static_cast< iocb_info_t* >(iocb);
+        iocb_free_list.push(info);
+    }
+
+    struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
+                           void* cookie) {
+        auto i_info = alloc_iocb();
+        i_info->is_read = is_read;
+        i_info->user_data = (char*)data;
+        i_info->size = size;
+        i_info->offset = offset;
+        i_info->fd = fd;
+        i_info->iovcnt = 0;
+
+        struct iocb* iocb = static_cast< struct iocb* >(i_info);
+        (is_read) ? io_prep_pread(iocb, fd, (void*)data, size, offset)
+                  : io_prep_pwrite(iocb, fd, (void*)data, size, offset);
+        io_set_eventfd(iocb, ev_fd);
+        iocb->data = cookie;
+
+        LOGTRACE("Issuing IO info: {}, batch? = {}", i_info->to_string(), batch_io);
+        if (batch_io) {
+            assert(can_be_batched(0));
+            cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
+        }
+        return iocb;
+    }
+
+    struct iocb* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
+                             uint64_t offset, uint8_t* cookie) {
+        auto i_info = alloc_iocb();
+
+        i_info->is_read = is_read;
+        i_info->user_data = nullptr;
+        i_info->size = size;
+        i_info->offset = offset;
+        i_info->fd = fd;
+
+        struct iocb* iocb = static_cast< struct iocb* >(i_info);
+        if (batch_io) {
+            // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
+            // corrupted data
+            assert(iovcnt <= max_batch_iov_cnt);
+            memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
+            iov = &i_info->iovs[0];
+            i_info->iovcnt = iovcnt;
+            cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
+        } else {
+            i_info->iovcnt = iovcnt;
+        }
+
+        (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
+        io_set_eventfd(iocb, ev_fd);
+        iocb->data = cookie;
+
+        return iocb;
+    }
+
+#if 0
+    iocb_batch_t* alloc_iocb(bool batch_io) {
+        iocb_batch_t* ibatch;
+
+        if (batch_io && cur_iocb_batch) {
+            assert(can_be_batched());
+            ibatch = cur_iocb_batch;
+            ++ibatch->n_iocbs;
+        } else {
+            ibatch = iocb_free_list.top();
+            iocb_free_list.pop();
+
+            ibatch->n_iocbs = 1;
+            ibatch->part_of_batch = batch_io;
+            if (batch_io) cur_iocb_batch = ibatch;
+        }
+
+        return ibatch;
+    }
+
+    void free_iocb(struct iocb* iocb) {
+        auto ibatch = (iocb_batch_t*)iocb->data;
+        if (--ibatch->n_iocbs == 0) iocb_free_list.push(ibatch);
+    }
+
+    struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
+                           uint8_t* cookie) {
+        auto ibatch = alloc_iocb(batch_io);
+        assert(ibatch);
+
+        auto i_info = &ibatch->iocb_info[ibatch->n_iocbs - 1];
+        i_info->is_read = is_read;
+        i_info->data = (char*)data;
+        i_info->size = size;
+        i_info->offset = offset;
+        i_info->fd = fd;
+        i_info->cookie = cookie;
+        i_info->iovcnt = 0;
+
+        struct iocb* iocb = &ibatch->iocb_buf[ibatch->n_iocbs - 1];
+        iocb->data = (void*)ibatch;
+        (is_read) ? io_prep_pread(iocb, fd, (void*)data, size, offset)
+                  : io_prep_pwrite(iocb, fd, (void*)data, size, offset);
+        io_set_eventfd(iocb, ev_fd);
+
+        return ibatch;
+    }
+
+    iocb_batch_t* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
+                              uint64_t offset, uint8_t* cookie) {
+        auto ibatch = alloc_iocb(batch_io);
+        assert(ibatch);
+
+        auto i_info = &ibatch->iocb_info[ibatch->n_iocbs - 1];
+        i_info->is_read = is_read;
+        i_info->data = nullptr;
+        i_info->size = size;
+        i_info->offset = offset;
+        i_info->fd = fd;
+        i_info->cookie = cookie;
+        if (batch_io) {
+            // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
+            // corrupted data
+            assert(iovcnt <= max_batch_iov_cnt);
+            memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
+            iov = &i_info->iovs[0];
+            i_info->iovcnt = iovcnt;
+        } else {
+            i_info->iovcnt = iovcnt;
+        }
+
+        struct iocb* iocb = &ibatch->iocb_buf[ibatch->n_iocbs - 1];
+        (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
+        io_set_eventfd(iocb, ev_fd);
+
+        return ibatch;
+    }
+#endif
+
+    iocb_batch_t move_cur_batch() {
+        auto ret = cur_iocb_batch;
+        cur_iocb_batch.reset();
+        return ret;
     }
 };
 
@@ -90,6 +291,8 @@ public:
         REGISTER_COUNTER(async_read_count, "Aio Drive async read count", "io_count", {"io_direction", "read"});
         REGISTER_COUNTER(sync_write_count, "Aio Drive sync write count", "io_count", {"io_direction", "write"});
         REGISTER_COUNTER(sync_read_count, "Aio Drive sync read count", "io_count", {"io_direction", "read"});
+        REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
+        REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
 
         REGISTER_HISTOGRAM(write_io_sizes, "Write IO Sizes", "io_sizes", {"io_direction", "write"},
                            HistogramBucketsType(ExponentialOfTwoBuckets));
@@ -105,8 +308,8 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    void attach_batch_sentinel_cb(const io_interface_batch_sentinel_cb_t& cb) override {
-        m_io_batch_sentinel_cb_list.emplace_back(cb);
+    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override {
+        m_io_end_of_batch_cb_list.emplace_back(cb);
     }
     int open_dev(std::string devname, int oflags) override;
     void add_fd(int fd, int priority = 9) override;
@@ -114,21 +317,27 @@ public:
     ssize_t sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
     ssize_t sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                      uint8_t* cookie) override;
-    void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie) override;
-    void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                     uint8_t* cookie) override;
+    void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+                     bool part_of_batch = false) override;
+    void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
+                      bool part_of_batch = false) override;
+    void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+                    bool part_of_batch = false) override;
+    void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
+                     bool part_of_batch = false) override;
     void process_completions(int fd, void* cookie, int event);
     void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override;
     void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override;
+    virtual void submit_batch() override;
+
+private:
+    void handle_io_failure(struct iocb* iocb);
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
-    std::vector< io_interface_batch_sentinel_cb_t > m_io_batch_sentinel_cb_list;
+    std::vector< io_interface_end_of_batch_cb_t > m_io_end_of_batch_cb_list;
 };
 #else
 class AioDriveInterface : public DriveInterface {

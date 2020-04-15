@@ -16,7 +16,7 @@ SDS_OPTIONS_ENABLE(logging)
 using namespace iomgr;
 
 // Constants
-static constexpr size_t nthreads = 4;
+static constexpr size_t nthreads = 1;
 static constexpr size_t total_dev_size = 512 * 1024 * 1024;
 static constexpr size_t io_size = 4096;
 static constexpr int read_pct = 50;
@@ -120,9 +120,7 @@ static void on_io_completion(int64_t res, uint8_t* cookie) {
         issue_preload();
     } else {
         ++work.nios_completed;
-        if ((work.nios_completed % 10000) == 0) {
-            LOGINFO("Total {} ios completed", work.nios_completed);
-        }
+        if ((work.nios_completed % 10000) == 0) { LOGINFO("Total {} ios completed", work.nios_completed); }
         if (work.nios_issued < max_ios_per_thread) {
             issue_rw_io();
         } else if (work.nios_completed == max_ios_per_thread) {
