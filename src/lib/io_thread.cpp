@@ -168,7 +168,11 @@ bool ioMgrThreadContext::is_io_thread() const { return m_is_io_thread; }
 void ioMgrThreadContext::listen() {
     std::array< struct epoll_event, MAX_EVENTS > events;
 
-    int num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
+    int num_fds = 0;
+    do {
+        num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
+    } while (num_fds < 0 && errno == EINTR);
+
     if (num_fds == 0) {
         iomanager.idle_timeout_expired();
         return;
