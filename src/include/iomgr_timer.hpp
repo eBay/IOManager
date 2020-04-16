@@ -77,6 +77,8 @@ public:
      */
     timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn);
     void           cancel(timer_handle_t thandle);
+    /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
+    void io_thread_stopped();
 
     static void on_timer_fd_notification(fd_info* finfo);
 

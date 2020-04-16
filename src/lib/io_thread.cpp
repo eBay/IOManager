@@ -157,6 +157,7 @@ void ioMgrThreadContext::iothread_stop() {
     if (m_epollfd != -1) { close(m_epollfd); }
     m_is_io_thread = false;
 
+    m_thread_timer.io_thread_stopped();
     iomanager.io_thread_stopped();
 }
 

@@ -35,19 +35,19 @@ timer::timer(bool is_thread_local) {
     m_common_timer_fd_info->tinfo = std::make_unique< timer_info >(this);
 }
 
-timer::~timer() {
+timer::~timer() {}
+
+void timer::iomgr_thread_stopped() {
     // Remove all timers in the non-recurring timer list
     while (!m_timer_list.empty()) {
         // auto& tinfo = m_timer_list.top(); // TODO: Check if we need to make upcall that timer is cancelled
         m_timer_list.pop();
     }
-
     // Now close the common timer
     if (m_common_timer_fd_info && (m_common_timer_fd_info->fd != -1)) {
         iomanager.remove_fd(m_common_timer_fd_info);
         close(m_common_timer_fd_info->fd);
     }
-
     // Now iterate over recurring timer list and remove them
     for (auto& finfo : m_recurring_timer_fds) {
         iomanager.remove_fd(finfo);
