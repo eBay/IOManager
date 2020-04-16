@@ -141,10 +141,10 @@ void timer::on_timer_armed(fd_info* finfo) {
             auto time_now = std::chrono::steady_clock::now();
             auto tinfo = m_timer_list.top();
             if (tinfo.expiry_time <= time_now) {
+                m_timer_list.pop();
                 UNLOCK_IF_GLOBAL();
                 tinfo.cb(tinfo.context);
                 LOCK_IF_GLOBAL();
-                m_timer_list.pop();
             } else {
                 break;
             }

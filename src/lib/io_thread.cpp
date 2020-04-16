@@ -154,9 +154,6 @@ void ioMgrThreadContext::iothread_stop() {
         close(m_msg_fd_info->fd);
     }
 
-    // Destruct the timer object which cancels all the timers (recurring and non-recurring)
-    m_thread_timer = nullptr;
-
     if (m_epollfd != -1) { close(m_epollfd); }
     m_is_io_thread = false;
 
