@@ -37,7 +37,7 @@ timer::timer(bool is_thread_local) {
 
 timer::~timer() {}
 
-void timer::iomgr_thread_stopped() {
+void timer::io_thread_stopped() {
     // Remove all timers in the non-recurring timer list
     while (!m_timer_list.empty()) {
         // auto& tinfo = m_timer_list.top(); // TODO: Check if we need to make upcall that timer is cancelled

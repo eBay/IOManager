@@ -154,10 +154,10 @@ void ioMgrThreadContext::iothread_stop() {
         close(m_msg_fd_info->fd);
     }
 
+    m_thread_timer->io_thread_stopped();
     if (m_epollfd != -1) { close(m_epollfd); }
     m_is_io_thread = false;
 
-    m_thread_timer.io_thread_stopped();
     iomanager.io_thread_stopped();
 }
 
