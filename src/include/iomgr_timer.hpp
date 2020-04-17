@@ -16,9 +16,9 @@ typedef std::function< void(void*) > timer_callback_t;
 class timer;
 struct timer_info {
     std::chrono::steady_clock::time_point expiry_time;
-    timer_callback_t                      cb = nullptr;
-    void*                                 context = nullptr;
-    timer*                                parent_timer = nullptr; // Parent timer this info associated to
+    timer_callback_t cb = nullptr;
+    void* context = nullptr;
+    timer* parent_timer = nullptr; // Parent timer this info associated to
 
     timer_info(timer* t) { parent_timer = t; }
 
@@ -76,20 +76,23 @@ public:
      * the caller needs to call cancel, failing which causes a memory leak.
      */
     timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn);
-    void           cancel(timer_handle_t thandle);
+    void cancel(timer_handle_t thandle);
+    /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
+    void io_thread_stopped();
 
     static void on_timer_fd_notification(fd_info* finfo);
 
 private:
     std::shared_ptr< fd_info > setup_timer_fd();
-    void                       on_timer_armed(fd_info* finfo);
+    void on_timer_armed(fd_info* finfo);
 
 private:
-    std::mutex                             m_list_mutex;           // Mutex that protects list and set
-    timer_heap_t                           m_timer_list;           // Timer info of non-recurring timers
-    std::set< std::shared_ptr< fd_info > > m_recurring_timer_fds;  // fd infos of recurring timers
-    std::shared_ptr< fd_info >             m_common_timer_fd_info; // fd_info for the common timer fd
-    bool                                   m_is_thread_local;
+    std::mutex m_list_mutex;                                      // Mutex that protects list and set
+    timer_heap_t m_timer_list;                                    // Timer info of non-recurring timers
+    std::set< std::shared_ptr< fd_info > > m_recurring_timer_fds; // fd infos of recurring timers
+    std::shared_ptr< fd_info > m_common_timer_fd_info;            // fd_info for the common timer fd
+    bool m_is_thread_local;
+    bool m_stop = false;
 };
 
 } // namespace iomgr
