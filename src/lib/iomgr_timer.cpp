@@ -35,7 +35,9 @@ timer::timer(bool is_thread_local) {
     m_common_timer_fd_info->tinfo = std::make_unique< timer_info >(this);
 }
 
-timer::~timer() {}
+timer::~timer() {
+    if (!m_stop) { io_thread_stopped(); }
+}
 
 void timer::io_thread_stopped() {
     // Remove all timers in the non-recurring timer list
@@ -53,6 +55,7 @@ void timer::io_thread_stopped() {
         iomanager.remove_fd(finfo);
         close(finfo->fd);
     }
+    m_stop = true;
 }
 
 timer_handle_t timer::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) {
