@@ -9,6 +9,7 @@
 
 namespace iomgr {
 typedef std::function< void(int64_t res, uint8_t* cookie) > io_interface_comp_cb_t;
+typedef std::function< void(int nevents) > io_interface_end_of_batch_cb_t;
 
 class ioMgrThreadContext;
 class IOInterface {
