@@ -78,7 +78,7 @@ public:
     timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn);
     void cancel(timer_handle_t thandle);
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
-    void io_thread_stopped();
+    void stop();
 
     static void on_timer_fd_notification(fd_info* finfo);
 
@@ -92,7 +92,7 @@ private:
     std::set< std::shared_ptr< fd_info > > m_recurring_timer_fds; // fd infos of recurring timers
     std::shared_ptr< fd_info > m_common_timer_fd_info;            // fd_info for the common timer fd
     bool m_is_thread_local;
-    bool m_stop = false;
+    bool m_stopped = false;
 };
 
 } // namespace iomgr

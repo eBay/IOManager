@@ -171,6 +171,7 @@ struct aio_thread_context {
             iov = &i_info->iovs[0];
             i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
+            LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
         } else {
             i_info->iovcnt = iovcnt;
         }
@@ -179,6 +180,7 @@ struct aio_thread_context {
         io_set_eventfd(iocb, ev_fd);
         iocb->data = cookie;
 
+        LOGTRACE("Issuing IO info: {}, batch? = {}", i_info->to_string(), batch_io);
         return iocb;
     }
 

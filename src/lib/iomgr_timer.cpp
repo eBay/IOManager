@@ -36,10 +36,10 @@ timer::timer(bool is_thread_local) {
 }
 
 timer::~timer() {
-    if (!m_stop) { io_thread_stopped(); }
+    if (!m_stopped) { stop(); }
 }
 
-void timer::io_thread_stopped() {
+void timer::stop() {
     // Remove all timers in the non-recurring timer list
     while (!m_timer_list.empty()) {
         // auto& tinfo = m_timer_list.top(); // TODO: Check if we need to make upcall that timer is cancelled
@@ -55,14 +55,14 @@ void timer::io_thread_stopped() {
         iomanager.remove_fd(finfo);
         close(finfo->fd);
     }
-    m_stop = true;
+    m_stopped = true;
 }
 
 timer_handle_t timer::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) {
-    struct timespec   now;
+    struct timespec now;
     struct itimerspec tspec;
-    timer_handle_t    thdl;
-    fd_info*          raw_finfo = nullptr;
+    timer_handle_t thdl;
+    fd_info* raw_finfo = nullptr;
 
     if (recurring) {
         tspec.it_interval.tv_sec = nanos_after / 1000000000;
