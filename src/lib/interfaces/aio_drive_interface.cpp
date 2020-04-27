@@ -42,6 +42,7 @@ int AioDriveInterface::open_dev(std::string devname, int oflags) {
     if (fd == -1) {
         std::cerr << "Unable to open the device " << devname << " errorno = " << errno << " error = " << strerror(errno)
                   << "\n";
+        return fd;
     }
     LOGINFO("Device {} opened with flags={} successfully, fd={}", devname, oflags, fd);
     return fd;
@@ -85,12 +86,13 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
     (void)cookie;
     (void)event;
 
-    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {}", fd, _aio_ctx->ev_fd);
     /* TODO need to handle the error events */
     uint64_t temp = 0;
 
     [[maybe_unused]] auto rsize = read(_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
     int nevents = io_getevents(_aio_ctx->ioctx, 0, MAX_COMPLETIONS, _aio_ctx->events, NULL);
+
+    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {} nevents = {}", fd, _aio_ctx->ev_fd, nevents);
     if (nevents == 0) {
         COUNTER_INCREMENT(m_metrics, spurious_events, 1);
     } else if (nevents < 0) {
@@ -108,6 +110,7 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
         auto iocb = (struct iocb*)e.obj;
         auto info = (iocb_info_t*)iocb;
 
+        LOGTRACEMOD(iomgr, "Event[{}]: Result {} res2={}", i, e.res, e.res2);
         if (ret < 0) {
             COUNTER_INCREMENT(m_metrics, completion_errors, 1);
             LOGDFATAL("Error in completion of aio, result: {} info: {}", ret, info->to_string());
@@ -126,6 +129,7 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
     // Call any batch completions hints
     if (nevents) {
         for (auto& cb : m_io_end_of_batch_cb_list) {
+            LOGTRACEMOD(iomgr, "Making end of batch cb list callback with nevents={}", nevents);
             cb(nevents);
         }
     }
@@ -268,6 +272,7 @@ void AioDriveInterface::async_readv(int data_fd, const iovec* iov, int iovcnt, u
 
 void AioDriveInterface::submit_batch() {
     auto ibatch = _aio_ctx->move_cur_batch();
+    LOGTRACEMOD(iomgr, "submit pending batch n_iocbs={}", ibatch.n_iocbs);
     if (ibatch.n_iocbs == 0) { return; } // No batch to submit
 
     COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
