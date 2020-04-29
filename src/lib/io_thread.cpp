@@ -92,7 +92,7 @@ void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
         LOGERROR("epoll_create failed: {}", strerror(errno));
         goto error;
     }
-    std::atomic_thread_fence();
+    std::atomic_thread_fence(std::memory_order_acquire);
     m_is_io_thread = true;
 
     LOGTRACEMOD(iomgr, "EPoll created: {}", m_epollfd);
@@ -157,7 +157,7 @@ void ioMgrThreadContext::iothread_stop() {
 
     m_thread_timer->stop();
     m_is_io_thread = false;
-    std::atomic_thread_fence();
+    std::atomic_thread_fence(std::memory_order_acquire);
     if (m_epollfd != -1) { close(m_epollfd); }
 
     m_metrics = nullptr;
