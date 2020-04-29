@@ -45,7 +45,10 @@ public:
         attach_gather_cb(std::bind(&ioMgrThreadMetrics::on_gather, this));
     }
 
-    ~ioMgrThreadMetrics() { deregister_me_from_farm(); }
+    ~ioMgrThreadMetrics() {
+        detach_gather_cb();
+        deregister_me_from_farm();
+    }
 
     void on_gather() {
         GAUGE_UPDATE(*this, iomgr_thread_io_count, io_count);
