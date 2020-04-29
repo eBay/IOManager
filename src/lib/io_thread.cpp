@@ -81,7 +81,6 @@ void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
     }
 
     LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread, thread_num= {}", m_thread_num);
-    m_is_io_thread = true;
 
     assert(m_metrics == nullptr);
     m_metrics = std::make_unique< ioMgrThreadMetrics >(m_thread_num);
@@ -93,6 +92,7 @@ void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
         LOGERROR("epoll_create failed: {}", strerror(errno));
         goto error;
     }
+    m_is_io_thread = true;
 
     LOGTRACEMOD(iomgr, "EPoll created: {}", m_epollfd);
 
@@ -154,9 +154,9 @@ void ioMgrThreadContext::iothread_stop() {
         close(m_msg_fd_info->fd);
     }
 
+    m_is_io_thread = false;
     m_thread_timer->stop();
     if (m_epollfd != -1) { close(m_epollfd); }
-    m_is_io_thread = false;
 
     m_metrics = nullptr;
     iomanager.io_thread_stopped();
