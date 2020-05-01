@@ -20,6 +20,7 @@ public:
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) = 0;
     virtual void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) = 0;
+    virtual void detach_end_of_batch_cb() = 0;
     virtual int open_dev(std::string devname, int oflags) = 0;
     virtual void add_fd(int fd, int priority = 9) = 0;
     virtual ssize_t sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) = 0;

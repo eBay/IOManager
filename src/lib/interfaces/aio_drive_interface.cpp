@@ -127,11 +127,9 @@ void AioDriveInterface::process_completions(int fd, void* cookie, int event) {
     }
 
     // Call any batch completions hints
-    if (nevents) {
-        for (auto& cb : m_io_end_of_batch_cb_list) {
-            LOGTRACEMOD(iomgr, "Making end of batch cb list callback with nevents={}", nevents);
-            cb(nevents);
-        }
+    if (nevents && m_io_end_of_batch_cb) {
+        LOGTRACEMOD(iomgr, "Making end of batch cb list callback with nevents={}", nevents);
+        m_io_end_of_batch_cb(nevents);
     }
 }
 

@@ -224,9 +224,8 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override {
-        m_io_end_of_batch_cb_list.emplace_back(cb);
-    }
+    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override { m_io_end_of_batch_cb = cb; }
+    void detach_end_of_batch_cb() override { m_io_end_of_batch_cb = nullptr; }
     int open_dev(std::string devname, int oflags) override;
     void add_fd(int fd, int priority = 9) override;
     ssize_t sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) override;
@@ -253,7 +252,7 @@ private:
     static thread_local aio_thread_context* _aio_ctx;
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
-    std::vector< io_interface_end_of_batch_cb_t > m_io_end_of_batch_cb_list;
+    io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
 };
 #else
 class AioDriveInterface : public DriveInterface {
