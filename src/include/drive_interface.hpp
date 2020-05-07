@@ -13,28 +13,29 @@ enum class drive_interface_type { aio, spdk, uioring };
 
 class DriveInterface : public IOInterface {
 public:
-    void on_io_thread_start(ioMgrThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
-    void on_io_thread_stopped(ioMgrThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
+    void on_io_thread_start(IOThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
+    void on_io_thread_stopped(IOThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
 
     virtual drive_interface_type interface_type() const = 0;
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) = 0;
     virtual void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) = 0;
     virtual void detach_end_of_batch_cb() = 0;
-    virtual int open_dev(std::string devname, int oflags) = 0;
-    virtual void add_fd(int fd, int priority = 9) = 0;
-    virtual ssize_t sync_write(int data_fd, const char* data, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_read(int data_fd, char* data, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
-    virtual void async_write(int data_fd, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+    virtual io_device_ptr open_dev(const std::string& devname, int oflags) = 0;
+
+    virtual ssize_t sync_write(io_device_t* iodev, const char* data, uint32_t size, uint64_t offset) = 0;
+    virtual ssize_t sync_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual ssize_t sync_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset) = 0;
+    virtual ssize_t sync_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual void async_write(io_device_t* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                              bool part_of_batch = false) = 0;
-    virtual void async_writev(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+    virtual void async_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                               uint8_t* cookie, bool part_of_batch = false) = 0;
-    virtual void async_read(int data_fd, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+    virtual void async_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                             bool part_of_batch = false) = 0;
-    virtual void async_readv(int data_fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                             bool part_of_batch = false) = 0;
+    virtual void async_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                             uint8_t* cookie, bool part_of_batch = false) = 0;
+    virtual size_t get_size(io_device_t* iodev, bool is_file) = 0;
     virtual void submit_batch() = 0;
 };
 } // namespace iomgr

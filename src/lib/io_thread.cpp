@@ -30,31 +30,31 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 #define ESTIMATED_MSGS_PER_THREAD 128
 
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
-    fd_info* info1 = (fd_info*)ev1.data.ptr;
-    fd_info* info2 = (fd_info*)ev2.data.ptr;
+    io_device_t* iodev1 = (io_device_t*)ev1.data.ptr;
+    io_device_t* iodev2 = (io_device_t*)ev2.data.ptr;
 
     // In case of equal priority, pick global fd which could get rescheduled
-    if (info1->pri == info2->pri) { return info1->is_global; }
-    return (info1->pri > info2->pri);
+    if (iodev1->pri == iodev2->pri) { return iodev1->is_global; }
+    return (iodev1->pri > iodev2->pri);
 }
 
-ioMgrThreadContext::ioMgrThreadContext() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {}
+IOThreadContextEPoll::IOThreadContextEPoll() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {}
 
-ioMgrThreadContext::~ioMgrThreadContext() {
+IOThreadContextEPoll::~IOThreadContextEPoll() {
     if (m_is_io_thread) { iothread_stop(); }
 }
 
-void ioMgrThreadContext::run(bool is_iomgr_thread, const fd_selector_t& fd_selector,
-                             const io_thread_msg_handler& this_thread_msg_handler) {
+void IOThreadContextEPoll::run(bool is_iomgr_thread, const iodev_selector_t& iodev_selector,
+                               const io_thread_msg_handler& this_thread_msg_handler) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
-        LOGINFO("Starting a new IOThread while iomanager is stopping or stopped, not starting io loop");
+        LOGINFO("Starting a new IOThreadContext while iomanager is stopping or stopped, not starting io loop");
         return;
     }
 
     if (!m_is_io_thread) {
         m_is_iomgr_thread = is_iomgr_thread;
-        m_fd_selector = fd_selector;
+        m_iodev_selector = iodev_selector;
         m_this_thread_msg_handler = this_thread_msg_handler;
 
         m_thread_num = sisl::ThreadLocalContext::my_thread_num();
@@ -69,7 +69,7 @@ void ioMgrThreadContext::run(bool is_iomgr_thread, const fd_selector_t& fd_selec
     }
 }
 
-void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
+void IOThreadContextEPoll::iothread_init(bool wait_for_iface_register) {
     if (!iomanager.is_interface_registered()) {
         if (!wait_for_iface_register) {
             LOGINFO("IOmanager interfaces are not registered yet and wait is off, it will not be an iothread");
@@ -98,23 +98,23 @@ void ioMgrThreadContext::iothread_init(bool wait_for_iface_register) {
     LOGTRACEMOD(iomgr, "EPoll created: {}", m_epollfd);
 
     // Create a message fd and add it to tht epollset
-    m_msg_fd_info = std::make_unique< fd_info >();
-    m_msg_fd_info->fd = eventfd(0, EFD_NONBLOCK);
-    if (m_msg_fd_info->fd == -1) {
+    m_msg_iodev = std::make_shared< io_device_t >();
+    m_msg_iodev->dev = backing_dev_t(eventfd(0, EFD_NONBLOCK));
+    if (m_msg_iodev->fd() == -1) {
         assert(0);
         LOGERROR("Unable to open the eventfd, marking this as non-io thread");
         goto error;
     }
-    m_msg_fd_info->ev = EPOLLIN;
-    m_msg_fd_info->pri = 1; // Set message fd as high priority. TODO: Make multiple messages fd for various priority
-    LOGINFO("Creating a message event fd {} and add to this thread epoll fd {}", m_msg_fd_info->fd, m_epollfd)
-    if (add_fd_to_thread(m_msg_fd_info) == -1) { goto error; }
+    m_msg_iodev->ev = EPOLLIN;
+    m_msg_iodev->pri = 1; // Set message fd as high priority. TODO: Make multiple messages fd for various priority
+    LOGINFO("Creating a message event fd {} and add to this thread epoll fd {}", m_msg_iodev->fd(), m_epollfd)
+    if (add_iodev_to_thread(m_msg_iodev) == -1) { goto error; }
 
     // Create a per thread timer
-    m_thread_timer = std::make_unique< timer >(true /* is_per_thread */);
+    m_thread_timer = std::make_unique< timer_epoll >(true /* is_per_thread */);
 
     // Add all iomanager existing fds to be added to this thread epoll
-    iomanager.foreach_fd_info([&](std::shared_ptr< fd_info > fdi) { add_fd_to_thread(fdi); });
+    iomanager.foreach_iodevice([&](const io_device_ptr& iodev) { add_iodev_to_thread(iodev); });
 
     // Notify all the end points about new thread
     iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_start(this); });
@@ -135,24 +135,24 @@ error:
         m_epollfd = -1;
     }
 
-    if (m_msg_fd_info) {
-        if (m_msg_fd_info->fd > 0) { close(m_msg_fd_info->fd); }
-        m_msg_fd_info = nullptr;
+    if (m_msg_iodev) {
+        if (m_msg_iodev->fd() > 0) { close(m_msg_iodev->fd()); }
+        m_msg_iodev = nullptr;
     }
 }
 
-void ioMgrThreadContext::iothread_stop() {
+void IOThreadContextEPoll::iothread_stop() {
     m_keep_running = false;
 
     iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(this); });
-    iomanager.foreach_fd_info([&](std::shared_ptr< fd_info > fdi) { remove_fd_from_thread(fdi); });
+    iomanager.foreach_iodevice([&](const io_device_ptr& iodev) { remove_iodev_from_thread(iodev); });
 
     // Notify the caller registered to iomanager for it
     notify_thread_state(false /* started */);
 
-    if (m_msg_fd_info && (m_msg_fd_info->fd != -1)) {
-        remove_fd_from_thread(m_msg_fd_info);
-        close(m_msg_fd_info->fd);
+    if (m_msg_iodev && (m_msg_iodev->fd() != -1)) {
+        remove_iodev_from_thread(m_msg_iodev);
+        close(m_msg_iodev->fd());
     }
 
     m_thread_timer->stop();
@@ -164,9 +164,7 @@ void ioMgrThreadContext::iothread_stop() {
     iomanager.io_thread_stopped();
 }
 
-bool ioMgrThreadContext::is_io_thread() const { return m_is_io_thread; }
-
-void ioMgrThreadContext::listen() {
+void IOThreadContextEPoll::listen() {
     std::array< struct epoll_event, MAX_EVENTS > events;
 
     int num_fds = 0;
@@ -186,8 +184,8 @@ void ioMgrThreadContext::listen() {
     std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
     for (auto i = 0; i < num_fds; ++i) {
         auto& e = events[i];
-        if (e.data.ptr == (void*)m_msg_fd_info.get()) {
-            LOGTRACEMOD(iomgr, "Processing event on msg fd: {}", m_msg_fd_info->fd);
+        if (e.data.ptr == (void*)m_msg_iodev.get()) {
+            LOGTRACEMOD(iomgr, "Processing event on msg fd: {}", m_msg_iodev->fd());
             ++m_metrics->msg_recvd_count;
             on_msg_fd_notification();
 
@@ -197,48 +195,58 @@ void ioMgrThreadContext::listen() {
                 return;
             }
         } else {
-            fd_info* info = (fd_info*)e.data.ptr;
-            if (info->tinfo) {
-                timer::on_timer_fd_notification(info);
+            io_device_t* iodev = (io_device_t*)e.data.ptr;
+            if (iodev->tinfo) {
+                timer_epoll::on_timer_fd_notification(iodev);
             } else {
-                on_user_fd_notification(info, e.events);
+                on_user_fd_notification(iodev, e.events);
             }
         }
     }
 }
 
-int ioMgrThreadContext::add_fd_to_thread(std::shared_ptr< fd_info > info) {
+int IOThreadContextEPoll::add_iodev_to_thread(const io_device_ptr& iodev) {
     struct epoll_event ev;
-    ev.events = EPOLLET | EPOLLEXCLUSIVE | info->ev;
-    ev.data.ptr = (void*)info.get();
-    if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, info->fd, &ev) == -1) {
-        LOGDFATAL("Adding fd {} to this thread's epoll fd {} failed, error = {}", info->fd, m_epollfd, strerror(errno));
+    ev.events = EPOLLET | EPOLLEXCLUSIVE | iodev->ev;
+    ev.data.ptr = (void*)iodev.get();
+    if (epoll_ctl(m_epollfd, EPOLL_CTL_ADD, iodev->fd(), &ev) == -1) {
+        LOGDFATAL("Adding fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
+                  strerror(errno));
         return -1;
     }
-    LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", info->fd, m_epollfd,
+    LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(), m_epollfd,
                 (void*)ev.data.ptr);
     return 0;
 }
 
-int ioMgrThreadContext::remove_fd_from_thread(std::shared_ptr< fd_info > info) {
-    if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, info->fd, nullptr) == -1) {
-        LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", info->fd, m_epollfd,
+int IOThreadContextEPoll::remove_iodev_from_thread(const io_device_ptr& iodev) {
+    if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
+        LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
         return -1;
     }
-    LOGDEBUGMOD(iomgr, "Removed fd {} from this io thread's epoll fd {}", info->fd, m_epollfd);
+    LOGDEBUGMOD(iomgr, "Removed fd {} from this io thread's epoll fd {}", iodev->fd(), m_epollfd);
     return 0;
 }
 
-void ioMgrThreadContext::put_msg(const iomgr_msg& msg) { m_msg_q.blockingWrite(msg); }
+bool IOThreadContextEPoll::send_msg(const iomgr_msg& msg) {
+    if (!m_msg_iodev) return false;
 
-void ioMgrThreadContext::put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf, uint32_t size) {
-    put_msg(iomgr_msg(type, info, event, buf, size));
+    LOGTRACEMOD(iomgr, "Sending msg of type {} to local thread msg fd = {}, ptr = {}", msg.m_type, m_msg_iodev->fd(),
+                (void*)m_msg_iodev.get());
+    put_msg(std::move(msg));
+    uint64_t temp = 1;
+    while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
+        ;
+
+    return true;
 }
 
-void ioMgrThreadContext::on_msg_fd_notification() {
+void IOThreadContextEPoll::put_msg(const iomgr_msg& msg) { m_msg_q.blockingWrite(msg); }
+
+void IOThreadContextEPoll::on_msg_fd_notification() {
     uint64_t temp;
-    while (0 > read(m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
+    while (0 > read(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
         ;
 
     // Start pulling all the messages and handle them.
@@ -249,10 +257,10 @@ void ioMgrThreadContext::on_msg_fd_notification() {
         ++m_metrics->msg_recvd_count;
         switch (msg.m_type) {
         case RESCHEDULE: {
-            auto info = msg.m_fd_info;
+            auto iodev = msg.m_iodev;
             ++m_metrics->rescheduled_in;
-            if (msg.m_event & EPOLLIN) { info->cb(info->fd, info->cookie, EPOLLIN); }
-            if (msg.m_event & EPOLLOUT) { info->cb(info->fd, info->cookie, EPOLLOUT); }
+            if (msg.m_event & EPOLLIN) { iodev->cb(iodev.get(), iodev->cookie, EPOLLIN); }
+            if (msg.m_event & EPOLLOUT) { iodev->cb(iodev.get(), iodev->cookie, EPOLLOUT); }
             break;
         }
 
@@ -293,30 +301,29 @@ void ioMgrThreadContext::on_msg_fd_notification() {
     }
 }
 
-void ioMgrThreadContext::on_user_fd_notification(fd_info* info, uint32_t event) {
+void IOThreadContextEPoll::on_user_fd_notification(io_device_t* iodev, int event) {
     Clock::time_point write_startTime = Clock::now();
     ++m_count;
     ++m_metrics->io_count;
 
-    LOGTRACEMOD(iomgr, "Processing event on user fd: {}", info->fd);
-    info->cb(info->fd, info->cookie, event);
+    LOGTRACEMOD(iomgr, "Processing event on user fd: {}", iodev->fd());
+    iodev->cb(iodev, iodev->cookie, event);
 
     --m_count;
-    m_time_spent_ns += get_elapsed_time_ns(write_startTime);
-    LOGTRACEMOD(iomgr, "Call took: {}ns", m_time_spent_ns);
+    LOGTRACEMOD(iomgr, "Call took: {}ns", get_elapsed_time_ns(write_startTime));
 }
 
-bool ioMgrThreadContext::is_fd_addable(std::shared_ptr< fd_info > info) {
-    return (!m_fd_selector || m_fd_selector(info));
+bool IOThreadContextEPoll::is_iodev_addable(const io_device_ptr& iodev) {
+    return (!m_iodev_selector || m_iodev_selector(iodev));
 }
 
-void ioMgrThreadContext::notify_thread_state(bool is_started) {
+void IOThreadContextEPoll::notify_thread_state(bool is_started) {
     iomgr_msg msg(is_started ? iomgr_msg_type::WAKEUP : iomgr_msg_type::SHUTDOWN);
     auto& handler = msg_handler();
     if (handler) { handler(msg); }
 }
 
-io_thread_msg_handler& ioMgrThreadContext::msg_handler() {
+io_thread_msg_handler& IOThreadContextEPoll::msg_handler() {
     return (m_this_thread_msg_handler) ? m_this_thread_msg_handler : iomanager.m_common_thread_msg_handler;
 }
 

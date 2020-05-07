@@ -25,7 +25,7 @@ static constexpr size_t each_thread_size = total_dev_size / nthreads;
 static constexpr size_t max_ios_per_thread = 10000;
 
 std::shared_ptr< AioDriveInterface > g_aio_iface;
-int g_dev_fd = -1;
+io_device_ptr g_iodev = nullptr;
 
 std::atomic< size_t > next_available_range = 0;
 
@@ -66,17 +66,20 @@ static void do_write_io(size_t offset) {
     wbuf.fill(offset);
 
     // memset(wbuf, offset, io_size);
-    g_aio_iface->async_write(g_dev_fd, (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_aio_iface->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Write on Offset {}", offset);
 }
 
 static void do_read_io(size_t offset) {
     std::array< size_t, io_size / sizeof(size_t) > rbuf;
-    g_aio_iface->async_read(g_dev_fd, (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_aio_iface->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Read on Offset {}", offset);
 }
 
 static void issue_preload() {
+    static std::once_flag flag1;
+    std::call_once(flag1, [&]() { g_iodev = g_aio_iface->open_dev("/tmp/f1", O_CREAT | O_RDWR); });
+
     if (work.next_io_offset >= work.offset_end) {
         work.is_preload_phase = false;
         LOGINFO("We are done with the preload");
@@ -103,7 +106,7 @@ static void do_verify() {
     LOGINFO("All IOs completed for this thread, running verification");
     std::array< size_t, io_size / sizeof(size_t) > rbuf;
     for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
-        g_aio_iface->sync_read(g_dev_fd, (char*)rbuf.data(), io_size, offset);
+        g_aio_iface->sync_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset);
         for (auto i = 0; i < rbuf.size(); ++i) {
             assert(rbuf[i] == offset);
         }
@@ -169,7 +172,6 @@ int main(int argc, char* argv[]) {
     // NOTE: We do not need to add the fd to the device, since either Read or Write IO will always be triggered
     // by the application on AIO fd (unlike network or other fd, where we will be pinged asynchornously)
     g_aio_iface = std::make_shared< AioDriveInterface >(on_io_completion);
-    g_dev_fd = g_aio_iface->open_dev("/tmp/f1", O_CREAT | O_RDWR);
     iomanager.add_interface(std::dynamic_pointer_cast< IOInterface >(g_aio_iface));
 
     // Wait for IO to finish on all threads.

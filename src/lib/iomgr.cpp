@@ -8,6 +8,11 @@ extern "C" {
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/types.h>
+
+#include <spdk/log.h>
+#include <spdk/env.h>
+#include <spdk/thread.h>
+#include "spdk/bdev.h"
 }
 
 #include <cerrno>
@@ -31,20 +36,40 @@ IOManager::IOManager() { m_iface_list.wlock()->reserve(inbuilt_interface_count +
 
 IOManager::~IOManager() = default;
 
-void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads,
+void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads, bool is_spdk,
                       const io_thread_msg_handler& handler) {
     LOGINFO("Starting IOManager");
+    m_is_spdk = is_spdk;
     m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nthreads.set(num_threads);
     m_common_thread_msg_handler = handler;
 
     set_state(iomgr_state::waiting_for_interfaces);
 
+    // Start the SPDK
+    if (is_spdk) { start_spdk(); }
+
     /* Create all in-built interfaces here.
      * TODO: Can we create aio_drive_end_point by default itself
      * */
-    m_default_general_iface = std::make_shared< DefaultIOInterface >();
+    m_default_general_iface = std::make_shared< GenericIOInterface >();
     add_interface(m_default_general_iface);
+}
+
+void IOManager::start_spdk() {
+    struct spdk_env_opts opts;
+    spdk_env_opts_init(&opts);
+    opts.name = "IOManager";
+    opts.shm_id = -1;
+
+    int rc = spdk_env_init(&opts);
+    if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
+
+    spdk_unaffinitize_thread();
+
+    // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
+    rc = spdk_thread_lib_init(NULL, 0);
+    if (rc != 0) { throw std::runtime_error("SPDK Thread Lib Init failed"); }
 }
 
 void IOManager::stop() {
@@ -116,12 +141,13 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
     }
 }
 
-void IOManager::run_io_loop(bool is_iomgr_thread, const fd_selector_t& fd_selector,
+void IOManager::run_io_loop(bool is_iomgr_thread, const iodev_selector_t& iodev_selector,
                             const io_thread_msg_handler& override_msg_handler) {
-    m_thread_ctx->run(is_iomgr_thread, fd_selector, override_msg_handler);
+    *(m_thread_ctx.get()) = std::make_unique< IOThreadContextEPoll >();
+    this_thread_ctx()->run(is_iomgr_thread, iodev_selector, override_msg_handler);
 }
 
-void IOManager::stop_io_loop() { m_thread_ctx->iothread_stop(); }
+void IOManager::stop_io_loop() { this_thread_ctx()->iothread_stop(); }
 
 void IOManager::io_thread_started(bool is_iomgr_thread) {
     m_yet_to_stop_nthreads.increment();
@@ -132,6 +158,48 @@ void IOManager::io_thread_stopped() {
     if (m_yet_to_stop_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
 }
 
+void IOManager::add_io_device(const io_device_ptr& iodev) {
+    // We can add per thread device even when iomanager is not ready. However, global devices need IOManager
+    // to be initialized, since it has to maintain global map
+    if (iodev->is_global && (get_state() != iomgr_state::running)) {
+        LOGINFO("IOManager is not ready to add iodevice, will wait for it to be ready");
+        wait_to_be_ready();
+        LOGINFO("IOManager is ready now, proceed to add devices to the list");
+    }
+
+    if (iodev->is_global) {
+        all_threads_ctx([iodev](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread() && ctx->is_iodev_addable(iodev)) { ctx->add_iodev_to_thread(iodev); }
+        });
+        m_iodev_map.wlock()->insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
+    } else {
+        if (this_thread_ctx()->is_iodev_addable(iodev)) { this_thread_ctx()->add_iodev_to_thread(iodev); }
+    }
+}
+
+void IOManager::remove_io_device(const io_device_ptr& iodev) {
+    auto state = get_state();
+    if ((state != iomgr_state::running) && (state != iomgr_state::stopping)) {
+        LOGDFATAL("Expected IOManager to be running or stopping state before we receive remove io device");
+        return;
+    }
+
+    if (iodev->is_global) {
+        ([iodev](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread()) { ctx->remove_iodev_from_thread(iodev); }
+        });
+        m_iodev_map.wlock()->erase(iodev->dev);
+    } else {
+        this_thread_ctx()->remove_iodev_from_thread(iodev);
+    }
+}
+
+void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
+    iomgr_msg msg(iomgr_msg_type::RESCHEDULE, iodev, event);
+    send_to_least_busy_thread(msg);
+}
+
+#if 0
 std::shared_ptr< fd_info > IOManager::_add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri,
                                               void* cookie, bool is_per_thread_fd) {
     // We can add per thread fd even when iomanager is not ready. However, global fds need IOManager
@@ -149,17 +217,17 @@ std::shared_ptr< fd_info > IOManager::_add_fd(IOInterface* iface, int fd, ev_cal
     finfo->is_global = !is_per_thread_fd;
 
     if (is_per_thread_fd) {
-        if (m_thread_ctx->is_fd_addable(finfo)) { m_thread_ctx->add_fd_to_thread(finfo); }
+        if (this_thread_ctx()->is_fd_addable(finfo)) { this_thread_ctx()->add_fd_to_thread(finfo); }
     } else {
-        m_thread_ctx.access_all_threads([finfo](ioMgrThreadContext* ctx) {
-            if (ctx->is_io_thread() && ctx->is_fd_addable(finfo)) { ctx->add_fd_to_thread(finfo); }
+        all_threads_ctx([finfo](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread() && ctx->is_fd_addable(finfo)) { ctx->add_fd_to_thread(finfo); }
         });
         m_fd_info_map.wlock()->insert(std::pair< int, std::shared_ptr< fd_info > >(fd, finfo));
     }
     return finfo;
 }
 
-void IOManager::remove_fd(IOInterface* iface, std::shared_ptr< fd_info > info, ioMgrThreadContext* iomgr_ctx) {
+void IOManager::remove_fd(IOInterface* iface, std::shared_ptr< fd_info > info, IOThreadContext* iomgr_ctx) {
     (void)iface;
     auto state = get_state();
     if ((state != iomgr_state::running) && (state != iomgr_state::stopping)) {
@@ -168,12 +236,12 @@ void IOManager::remove_fd(IOInterface* iface, std::shared_ptr< fd_info > info, i
     }
 
     if (info->is_global) {
-        m_thread_ctx.access_all_threads([info](ioMgrThreadContext* ctx) {
-            if (ctx->is_io_thread()) { ctx->remove_fd_from_thread(info); }
+        ([info](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread()) { ctx->remove_fd_from_thread(info); }
         });
         m_fd_info_map.wlock()->erase(info->fd);
     } else {
-        iomgr_ctx ? iomgr_ctx->remove_fd_from_thread(info) : m_thread_ctx->remove_fd_from_thread(info);
+        iomgr_ctx ? iomgr_ctx->remove_fd_from_thread(info) : this_thread_ctx()->remove_fd_from_thread(info);
     }
 }
 
@@ -183,6 +251,7 @@ void IOManager::fd_reschedule(fd_info* info, uint32_t event) {
     iomgr_msg msg(iomgr_msg_type::RESCHEDULE, info, event);
     send_to_least_busy_thread(msg);
 }
+#endif
 
 void IOManager::run_in_io_thread(const run_method_t& fn) {
     auto run_method = sisl::ObjectAllocator< run_method_t >::make_object();
@@ -205,7 +274,7 @@ void IOManager::create_io_thread_and_run(const run_method_t& fn) {
             started = true;
         }
         cv.notify_all();
-        m_thread_ctx->run(false, nullptr, [](iomgr_msg& msg) {
+        this_thread_ctx()->run(false, nullptr, [](iomgr_msg& msg) {
 
         });
     });
@@ -236,10 +305,10 @@ void IOManager::send_to_least_busy_thread(const iomgr_msg& msg) {
 }
 
 int IOManager::find_least_busy_thread_id() {
-    uint64_t min_cnt = UINTMAX_MAX;
+    int64_t min_cnt = INTMAX_MAX;
     int min_id = 0;
-    m_thread_ctx.access_all_threads([&min_id, &min_cnt](ioMgrThreadContext* ctx) {
-        if (!ctx->is_io_thread()) { return; }
+    all_threads_ctx([&min_id, &min_cnt](IOThreadContext* ctx) {
+        if (!ctx || !ctx->is_io_thread()) { return; }
         if (ctx->m_count < min_cnt) {
             min_id = ctx->m_thread_num;
             min_cnt = ctx->m_count;
@@ -251,38 +320,39 @@ int IOManager::find_least_busy_thread_id() {
 uint32_t IOManager::send_msg(int thread_num, const iomgr_msg& msg) {
     uint32_t msg_sent_count = 0;
     if (thread_num == -1) {
-        m_thread_ctx.access_all_threads([msg, &msg_sent_count](ioMgrThreadContext* ctx) {
-            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
-
-            LOGTRACEMOD(iomgr, "Sending msg of type {} to local thread msg fd = {}, ptr = {}", msg.m_type,
-                        ctx->m_msg_fd_info->fd, (void*)ctx->m_msg_fd_info.get());
-            ctx->put_msg(std::move(msg));
-            uint64_t temp = 1;
-            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
-                ;
-            msg_sent_count++;
+        all_threads_ctx([msg, &msg_sent_count](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread() && ctx->send_msg(msg)) { ++msg_sent_count; }
         });
     } else {
-        m_thread_ctx.access_specific_thread(thread_num, [msg, &msg_sent_count](ioMgrThreadContext* ctx) {
-            if (!ctx->m_msg_fd_info || !ctx->m_is_io_thread) return;
-
-            ctx->put_msg(std::move(msg));
-            uint64_t temp = 1;
-            while (0 > write(ctx->m_msg_fd_info->fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
-                ;
-            msg_sent_count++;
+        specific_thread_ctx(thread_num, [msg, &msg_sent_count](IOThreadContext* ctx) {
+            if (ctx && ctx->is_io_thread() && ctx->send_msg(msg)) { ++msg_sent_count; }
         });
     }
     return msg_sent_count;
 }
 
+uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
+    size = sisl::round_up(size, align);
+    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
+                     : (uint8_t*)std::aligned_alloc(align, size);
+}
+
+sisl::aligned_unique_ptr< uint8_t > IOManager::iobuf_alloc_unique(size_t align, size_t size) {
+    return m_is_spdk ? nullptr : sisl::make_aligned_unique< uint8_t >(align, size);
+}
+
+std::shared_ptr< uint8_t > IOManager::iobuf_alloc_shared(size_t align, size_t size) {
+    return m_is_spdk ? nullptr : sisl::make_aligned_shared< uint8_t >(align, size);
+}
+
+void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : free(buf); }
+
+#if 0
 std::shared_ptr< fd_info > IOManager::create_fd_info(IOInterface* iface, int fd, const iomgr::ev_callback& cb, int ev,
                                                      int pri, void* cookie) {
     auto info = std::make_shared< fd_info >();
 
     info->cb = cb;
-    info->is_processing[fd_info::READ] = 0;
-    info->is_processing[fd_info::WRITE] = 0;
     info->fd = fd;
     info->ev = ev;
     info->is_global = false;
@@ -307,6 +377,15 @@ void IOManager::foreach_fd_info(std::function< void(std::shared_ptr< fd_info >) 
         }
     });
 }
+#endif
+
+void IOManager::foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb) {
+    m_iodev_map.withRLock([&](auto& iodevs) {
+        for (auto& iodev : iodevs) {
+            iodev_cb(iodev.second);
+        }
+    });
+}
 
 void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) {
     m_iface_list.withRLock([&](auto& iface_list) {
@@ -314,5 +393,15 @@ void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) 
             iface_cb(iface.get());
         }
     });
+}
+
+IOThreadContext* IOManager::this_thread_ctx() { return m_thread_ctx.get()->get(); }
+void IOManager::all_threads_ctx(const std::function< void(IOThreadContext* ctx) >& cb) {
+    m_thread_ctx.access_all_threads([&cb](std::unique_ptr< IOThreadContext >* pctx) { cb(pctx->get()); });
+}
+
+void IOManager::specific_thread_ctx(int thread_num, const std::function< void(IOThreadContext* ctx) >& cb) {
+    m_thread_ctx.access_specific_thread(thread_num,
+                                        [&cb](std::unique_ptr< IOThreadContext >* pctx) { cb(pctx->get()); });
 }
 } // namespace iomgr
