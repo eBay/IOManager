@@ -8,7 +8,8 @@ set(TEST_IOMGR_FILES
     )
 enable_testing()
 add_executable(test_iomgr ${TEST_IOMGR_FILES})
-target_link_libraries(test_iomgr 
+
+target_link_libraries(test_iomgr
                        iomgr
                        ${CONAN_LIBS}
                        ${CMAKE_THREAD_LIBS_INIT})

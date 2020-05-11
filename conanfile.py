@@ -75,4 +75,3 @@ class IOMgrConan(ConanFile):
             self.cpp_info.exelinkflags.append("-fsanitize=undefined")
         elif self.options.coverage == 'True':
             self.cpp_info.libs.append('gcov')
-

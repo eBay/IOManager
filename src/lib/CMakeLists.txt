@@ -6,4 +6,4 @@ set (IOMGR_SRC
       interfaces/generic_interface.cpp)
 
 add_library (iomgr ${IOMGR_SRC})
-target_link_libraries(iomgr ${CONAN_LIBS} ${LIB_AIO} dpdk)
+target_link_libraries(iomgr ${CONAN_LIBS} dpdk)
