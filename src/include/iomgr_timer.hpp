@@ -34,10 +34,10 @@ struct compare_timer {
     bool operator()(const timer_info& ti1, const timer_info& ti2) const { return ti1.expiry_time > ti2.expiry_time; }
 };
 
-struct fd_info;
+struct io_device_t;
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< fd_info > >;
-static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< fd_info >(nullptr));
+using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< io_device_t > >;
+static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< io_device_t >(nullptr));
 
 /**
  * @brief IOManager Timer: Class that provides timer functionality in async manner.
@@ -61,8 +61,8 @@ static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< 
  */
 class timer {
 public:
-    timer(bool is_per_thread);
-    ~timer();
+    timer(bool is_thread_local) { m_is_thread_local = is_thread_local; }
+    virtual ~timer() = default;
 
     /**
      * @brief Schedule a timer to be called back. Actual working is detailed in above section
@@ -75,26 +75,41 @@ public:
      * @return timer_handle_t Returns a handle which it needs to use to cancel the timer. In case of recurring timer,
      * the caller needs to call cancel, failing which causes a memory leak.
      */
-    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn);
-    void cancel(timer_handle_t thandle);
+    virtual timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie,
+                                    timer_callback_t&& timer_fn) = 0;
+    virtual void cancel(timer_handle_t thandle) = 0;
+
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
-    void stop();
+    virtual void stop() = 0;
 
-    static void on_timer_fd_notification(fd_info* finfo);
-
-private:
-    std::shared_ptr< fd_info > setup_timer_fd();
-    void on_timer_armed(fd_info* finfo);
-
-private:
-    std::mutex m_list_mutex;                                      // Mutex that protects list and set
-    timer_heap_t m_timer_list;                                    // Timer info of non-recurring timers
-    std::set< std::shared_ptr< fd_info > > m_recurring_timer_fds; // fd infos of recurring timers
-    std::shared_ptr< fd_info > m_common_timer_fd_info;            // fd_info for the common timer fd
+protected:
+    std::mutex m_list_mutex;   // Mutex that protects list and set
+    timer_heap_t m_timer_list; // Timer info of non-recurring timers
     bool m_is_thread_local;
     bool m_stopped = false;
 };
 
+class timer_epoll : public timer {
+public:
+    timer_epoll(bool is_per_thread);
+    ~timer_epoll();
+
+    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) override;
+    void cancel(timer_handle_t thandle) override;
+
+    /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
+    void stop() override;
+
+    static void on_timer_fd_notification(io_device_t* iodev);
+
+private:
+    std::shared_ptr< io_device_t > setup_timer_fd();
+    void on_timer_armed(io_device_t* iodev);
+
+private:
+    std::shared_ptr< io_device_t > m_common_timer_io_dev;                // fd_info for the common timer fd
+    std::set< std::shared_ptr< io_device_t > > m_recurring_timer_iodevs; // fd infos of recurring timers
+};
 } // namespace iomgr
 
 #endif
