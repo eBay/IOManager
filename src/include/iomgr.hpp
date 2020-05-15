@@ -138,6 +138,7 @@ public:
     }
 
     uint32_t send_msg(int thread_num, const iomgr_msg& msg);
+    void send_to_least_busy_thread(const iomgr_msg& msg);
     uint8_t* iobuf_alloc(size_t align, size_t size);
     sisl::aligned_unique_ptr< uint8_t > iobuf_alloc_unique(size_t align, size_t size);
     std::shared_ptr< uint8_t > iobuf_alloc_shared(size_t align, size_t size);
@@ -200,7 +201,6 @@ private:
         }
         m_cv.notify_all();
     }
-    void send_to_least_busy_thread(const iomgr_msg& msg);
     int find_least_busy_thread_id();
     IOThreadContext* this_thread_ctx();
     void all_threads_ctx(const std::function< void(IOThreadContext* ctx) >& cb);
