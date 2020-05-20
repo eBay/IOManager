@@ -4,6 +4,7 @@
 extern "C" {
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
+#include <spdk/thread.h>
 }
 namespace iomgr {
 
@@ -120,7 +121,8 @@ void timer_epoll::cancel(timer_handle_t thandle) {
                               }
                               PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
                           },
-                          [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); }},
+                          [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
+                          [&](timer_info* tinfo) { assert(0); }},
                thandle);
 }
 
@@ -171,4 +173,83 @@ std::shared_ptr< io_device_t > timer_epoll::setup_timer_fd() {
     }
     return iodev;
 }
+
+/************************ Timer Spdk *****************************/
+timer_spdk::timer_spdk(bool is_per_thread) : timer(is_per_thread) {
+    m_base_poller = spdk_poller_register(
+        [](void* context) -> int {
+            timer_spdk* this_timer = (timer_spdk*)context;
+            this_timer->check_and_call_expired_timers();
+            return 0;
+        },
+        (void*)this, non_recurring_check_freq_usec);
+}
+
+timer_spdk::~timer_spdk() {}
+
+timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) {
+    timer_handle_t thdl;
+    if (recurring) {
+        auto tinfo = new timer_info(nanos_after, cookie, std::move(timer_fn), this);
+        tinfo->poller = spdk_poller_register(
+            [](void* context) -> int {
+                timer_info* tinfo = (timer_info*)context;
+                tinfo->cb(tinfo->context);
+                return 0;
+            },
+            (void*)tinfo, nanos_after * 1000);
+        PROTECTED_REGION(m_recurring_timer_infos.insert(tinfo)); // Add to list of recurring timer fds
+        thdl = timer_handle_t(tinfo);
+    } else {
+        // Create a timer_info and add it to the heap.
+        PROTECTED_REGION(auto heap_hdl =
+                             m_timer_list.emplace(nanos_after, cookie, std::move(timer_fn), this, m_base_poller));
+        thdl = timer_handle_t(heap_hdl);
+    }
+    return thdl;
+}
+
+void timer_spdk::cancel(timer_handle_t thandle) {
+    std::visit(overloaded{[&](timer_info* tinfo) {
+                              spdk_poller_unregister(&tinfo->poller);
+                              delete (tinfo);
+                              PROTECTED_REGION(m_recurring_timer_infos.erase(tinfo));
+                          },
+                          [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
+                          [&](std::shared_ptr< io_device_t > iodev) { assert(0); }},
+               thandle);
+
+    auto tinfo = std::get< timer_info* >(thandle);
+    spdk_poller_unregister(&tinfo->poller);
+    delete (tinfo);
+}
+
+void timer_spdk::stop() {
+    for (auto it = m_recurring_timer_infos.begin(); it != m_recurring_timer_infos.end();) {
+        auto tinfo = *it;
+        spdk_poller_unregister(&tinfo->poller);
+        delete (tinfo);
+        it = m_recurring_timer_infos.erase(it);
+    }
+
+    spdk_poller_unregister(&m_base_poller);
+}
+
+void timer_spdk::check_and_call_expired_timers() {
+    LOCK_IF_GLOBAL();
+    while (!m_timer_list.empty()) {
+        auto time_now = std::chrono::steady_clock::now();
+        auto tinfo = m_timer_list.top();
+        if (tinfo.expiry_time <= time_now) {
+            m_timer_list.pop();
+            UNLOCK_IF_GLOBAL();
+            tinfo.cb(tinfo.context);
+            LOCK_IF_GLOBAL();
+        } else {
+            break;
+        }
+    }
+    UNLOCK_IF_GLOBAL();
+}
+
 } // namespace iomgr

@@ -10,6 +10,7 @@
 #include <set>
 #include <boost/heap/binomial_heap.hpp>
 
+struct spdk_poller;
 namespace iomgr {
 typedef std::function< void(void*) > timer_callback_t;
 
@@ -19,14 +20,16 @@ struct timer_info {
     timer_callback_t cb = nullptr;
     void* context = nullptr;
     timer* parent_timer = nullptr; // Parent timer this info associated to
+    spdk_poller* poller = nullptr;
 
     timer_info(timer* t) { parent_timer = t; }
 
-    timer_info(uint64_t nanos_after, void* cookie, timer_callback_t&& timer_fn, timer* t) {
+    timer_info(uint64_t nanos_after, void* cookie, timer_callback_t&& timer_fn, timer* t, spdk_poller* p = nullptr) {
         expiry_time = std::chrono::steady_clock::now() + std::chrono::nanoseconds(nanos_after);
         cb = std::move(timer_fn);
         context = cookie;
         parent_timer = t;
+        poller = p;
     }
 };
 
@@ -36,7 +39,7 @@ struct compare_timer {
 
 struct io_device_t;
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< io_device_t > >;
+using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< io_device_t >, timer_info* >;
 static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< io_device_t >(nullptr));
 
 /**
@@ -92,7 +95,7 @@ protected:
 class timer_epoll : public timer {
 public:
     timer_epoll(bool is_per_thread);
-    ~timer_epoll();
+    ~timer_epoll() override;
 
     timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) override;
     void cancel(timer_handle_t thandle) override;
@@ -110,6 +113,28 @@ private:
     std::shared_ptr< io_device_t > m_common_timer_io_dev;                // fd_info for the common timer fd
     std::set< std::shared_ptr< io_device_t > > m_recurring_timer_iodevs; // fd infos of recurring timers
 };
+
+class timer_spdk : public timer {
+public:
+    timer_spdk(bool is_per_thread);
+    ~timer_spdk() override;
+
+    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) override;
+    void cancel(timer_handle_t thandle) override;
+
+    /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
+    void stop() override;
+
+private:
+    void check_and_call_expired_timers();
+
+private:
+    static constexpr uint64_t non_recurring_check_freq_usec = 50;
+
+    std::set< timer_info* > m_recurring_timer_infos; // timer infos of recurring timers
+    spdk_poller* m_base_poller;
+};
+
 } // namespace iomgr
 
 #endif

@@ -25,9 +25,10 @@ extern "C" {
 #include <functional>
 #include <fds/utils.hpp>
 
-namespace iomgr {
+struct spdk_bdev_desc;
+struct spdk_bdev;
 
-using msg_callback_t = std::function< void(const iomgr_msg&) >;
+namespace iomgr {
 
 struct timer_info;
 struct io_device_t {
@@ -46,6 +47,11 @@ struct io_device_t {
     }
 
     int fd() { return std::get< int >(dev); }
+    spdk_bdev_desc* bdev_desc();
+    spdk_bdev* bdev();
+    bool is_spdk_dev() const { return std::holds_alternative< spdk_bdev_desc* >(dev); }
+
+    std::string dev_id();
 };
 
 // TODO: Make this part of an enum, to force add count upon adding new inbuilt io interface.
@@ -61,18 +67,24 @@ enum class iomgr_state : uint16_t {
     stopping = 4,
 };
 
+using msg_handler_t = std::function< void(const iomgr_msg&) >;
+
 class IOManager {
 public:
-    friend class IOThreadContext;
-    friend class IOThreadContextEPoll;
+    friend class IOReactor;
+    friend class IOReactorEPoll;
 
     static IOManager& instance() {
         static IOManager inst;
         return inst;
     }
 
+    static constexpr uint32_t max_msg_modules = 64;
+
     IOManager();
     ~IOManager();
+
+    /********* Start/Stop Control Related Operations ********/
     void start(size_t num_iface, size_t num_threads = 0, bool is_spdk = false,
                const io_thread_msg_handler& notifier = nullptr);
     void stop();
@@ -80,46 +92,26 @@ public:
                      const io_thread_msg_handler& override_msg_handler = nullptr);
     void stop_io_loop();
 
-    // std::shared_ptr< io_device_t > create_fd_info(IOInterface* iface, int fd, const ev_callback& cb, int ev, int pri,
-    //                                              void* cookie);
+    /********* Interface/Device Related Operations ********/
     void add_interface(std::shared_ptr< IOInterface > iface);
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
     void add_io_device(const io_device_ptr& iodev);
     void remove_io_device(const io_device_ptr& iodev);
     void device_reschedule(const io_device_ptr& iodev, int event);
-
-#if 0
-    std::shared_ptr< io_device_t > add_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri,
-                                          void* cookie) {
-        return _add_fd(iface, fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
-    }
-    std::shared_ptr< io_device_t > add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-        return _add_fd(m_default_general_iface.get(), fd, cb, iomgr_ev, pri, cookie, false /* is_per_thread_fd */);
-    }
-    std::shared_ptr< io_device_t > add_per_thread_fd(IOInterface* iface, int fd, ev_callback cb, int iomgr_ev, int pri,
-                                                     void* cookie) {
-        return _add_fd(iface, fd, cb, iomgr_ev, pri, cookie, true /* is_per_thread_fd */);
-    }
-
-    std::shared_ptr< io_device_t > _add_fd(IOInterface* iface, int fd, ev_callback cb, int ev, int pri, void* cookie,
-                                           bool is_per_thread_fd);
-    void remove_fd(IOInterface* iface, std::shared_ptr< io_device_t > info, IOThreadContext* iomgr_ctx = nullptr);
-    void remove_fd(std::shared_ptr< io_device_t > info, IOThreadContext* iomgr_ctx = nullptr) {
-        remove_fd(m_default_general_iface.get(), info, iomgr_ctx);
-    }
-
-    void fd_reschedule(int fd, uint32_t event);
-    void fd_reschedule(fd_info* info, uint32_t event);
-#endif
-
     void run_in_io_thread(const run_method_t& fn);
 
+    /********* Access related methods ***********/
+    io_thread_id_t my_io_thread_id() const;
+    IOReactor* this_reactor() const;
+    DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
+    GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
+
+    /********* State Machine Related Operations ********/
+    bool is_io_thread() { return this_reactor()->is_io_thread(); }
     bool is_ready() const { return (get_state() == iomgr_state::running); }
     bool is_interface_registered() const {
         return ((uint16_t)get_state() > (uint16_t)iomgr_state::waiting_for_interfaces);
     }
-
-    bool is_io_thread() { return this_thread_ctx()->is_io_thread(); }
     void wait_to_be_ready() {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
         m_cv.wait(lck, [this] { return (get_state() == iomgr_state::running); });
@@ -137,19 +129,25 @@ public:
         m_cv.wait(lck, [this] { return is_interface_registered(); });
     }
 
-    uint32_t send_msg(int thread_num, const iomgr_msg& msg);
+    /******** Message related infra ********/
+    bool send_msg(io_thread_id_t to_thread, const iomgr_msg& msg);
+    uint32_t broadcast_msg(const iomgr_msg& msg);
+    void send_to_least_busy_iomgr_thread(const iomgr_msg& msg);
+    msg_module_id_t register_msg_module(const msg_handler_t& handler);
+    msg_handler_t& get_msg_module(msg_module_id_t id);
+    io_thread_msg_handler& msg_handler() { return m_common_thread_msg_handler; }
+
+    /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size);
     sisl::aligned_unique_ptr< uint8_t > iobuf_alloc_unique(size_t align, size_t size);
     std::shared_ptr< uint8_t > iobuf_alloc_shared(size_t align, size_t size);
     void iobuf_free(uint8_t* buf);
 
+    /******** Timer related Operations ********/
     int64_t idle_timeout_interval_usec() const { return -1; };
     void idle_timeout_expired() {
         if (m_idle_timeout_expired_cb) { m_idle_timeout_expired_cb(); }
     }
-
-    DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
-    GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
 
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn) {
@@ -167,22 +165,15 @@ public:
     timer_handle_t schedule_timer(uint64_t nanos_after, bool recurring, void* cookie, bool is_per_thread,
                                   timer_callback_t&& timer_fn) {
         return (is_per_thread
-                    ? this_thread_ctx()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn))
+                    ? this_reactor()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn))
                     : m_global_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn)));
     }
 
     void cancel_timer(timer_handle_t thdl, bool is_per_thread) {
-        return (is_per_thread ? this_thread_ctx()->m_thread_timer->cancel(thdl) : m_global_timer->cancel(thdl));
+        return (is_per_thread ? this_reactor()->m_thread_timer->cancel(thdl) : m_global_timer->cancel(thdl));
     }
 
-    io_thread_msg_handler& msg_handler() { return m_common_thread_msg_handler; }
-
 private:
-#if 0
-    fd_info* fd_to_info(int fd);
-
-    void foreach_fd_info(std::function< void(std::shared_ptr< fd_info >) > fd_cb);
-#endif
     void foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb);
     void foreach_interface(std::function< void(IOInterface*) > iface_cb);
 
@@ -195,16 +186,15 @@ private:
     void set_state_and_notify(iomgr_state state) {
         set_state(state);
         // Setup the global timer if we are moving to running state
-        if ((state == iomgr_state::running) && !m_is_spdk) {
+        if (state == iomgr_state::running) {
             m_global_timer = std::make_unique< timer_epoll >(false /* is_per_thread */);
         }
         m_cv.notify_all();
     }
-    void send_to_least_busy_thread(const iomgr_msg& msg);
-    int find_least_busy_thread_id();
-    IOThreadContext* this_thread_ctx();
-    void all_threads_ctx(const std::function< void(IOThreadContext* ctx) >& cb);
-    void specific_thread_ctx(int thread_num, const std::function< void(IOThreadContext* ctx) >& cb);
+
+    io_thread_id_t find_least_busy_iomgr_thread_id();
+    void all_reactors(const std::function< void(IOReactor* ctx) >& cb);
+    void specific_reactor(int thread_num, const std::function< void(IOReactor* ctx) >& cb);
 
 private:
     size_t m_expected_ifaces = inbuilt_interface_count;          // Total number of interfaces expected
@@ -220,7 +210,7 @@ private:
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
-    sisl::ActiveOnlyThreadBuffer< std::unique_ptr< IOThreadContext > > m_thread_ctx;
+    sisl::ActiveOnlyThreadBuffer< std::unique_ptr< IOReactor > > m_reactors;
 
     std::mutex m_cv_mtx;
     std::condition_variable m_cv;
@@ -230,6 +220,11 @@ private:
     io_thread_msg_handler m_common_thread_msg_handler = nullptr;
     bool m_is_spdk = false;
     std::unique_ptr< timer > m_global_timer;
+
+    std::mutex m_msg_hdlrs_mtx;
+    std::array< msg_handler_t, max_msg_modules > m_msg_handlers;
+    uint32_t m_msg_handlers_count = 0;
+    msg_module_id_t m_internal_msg_module_id;
 };
 
 #define iomanager iomgr::IOManager::instance()

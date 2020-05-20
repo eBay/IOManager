@@ -5,24 +5,20 @@
 #pragma once
 
 #include <sds_logging/logging.h>
-#include <pthread.h>
-#include <iostream>
-#include <folly/MPMCQueue.h>
 #include "io_interface.hpp"
 #include "iomgr_msg.hpp"
 #include "iomgr_timer.hpp"
 #include <metrics/metrics.hpp>
 #include <chrono>
-#include <variant>
-#include <boost/heap/binomial_heap.hpp>
 
 SDS_LOGGING_DECL(iomgr);
 
+struct spdk_thread;
 namespace iomgr {
 
-constexpr size_t MAX_PRI = 10;
 typedef std::function< void(const iomgr_msg&) > io_thread_msg_handler;
 typedef std::function< void(void) > run_method_t;
+typedef std::variant< int, spdk_thread* > io_thread_id_t;
 
 struct io_device_t;
 
@@ -65,36 +61,43 @@ public:
 // typedef std::function< bool(std::shared_ptr< fd_info >) > fd_selector_t;
 typedef std::function< bool(const io_device_ptr&) > iodev_selector_t;
 
-class IOThreadContext {
+class IOReactor {
     friend class IOManager;
 
 public:
-    virtual ~IOThreadContext() = default;
-
+    virtual ~IOReactor();
     virtual void run(bool is_iomgr_thread = false, const iodev_selector_t& iodev_selector = nullptr,
-                     const io_thread_msg_handler& this_thread_msg_handler = nullptr) = 0;
-    virtual void listen() = 0;
-    virtual int add_iodev_to_thread(const io_device_ptr& iodev) = 0;
-    virtual int remove_iodev_from_thread(const io_device_ptr& iodev) = 0;
+                     const io_thread_msg_handler& this_thread_msg_handler = nullptr);
     bool is_io_thread() const { return m_is_io_thread; };
+    bool is_iomgr_thread() const { return m_is_iomgr_thread; }
 
-    /***
-     * Put the message to the message q for this thread.
-     * @param msg
-     */
-    // void put_msg(iomgr_msg&& msg);
+    virtual io_thread_id_t my_io_thread_id() const = 0;
+    virtual void listen() = 0;
+    virtual int add_iodev_to_reactor(const io_device_ptr& iodev) = 0;
+    virtual int remove_iodev_from_reactor(const io_device_ptr& iodev) = 0;
     virtual bool send_msg(const iomgr_msg& msg) = 0;
-    // virtual void put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf = nullptr, uint32_t size = 0) = 0;
 
-    virtual void iothread_init(bool wait_till_ready) = 0;
-    virtual void iothread_stop() = 0;
-    virtual bool is_iodev_addable(const io_device_ptr& iodev) = 0;
+    virtual void init(bool wait_till_ready);
+    virtual void stop();
+    virtual bool is_iodev_addable(const io_device_ptr& iodev) const;
+    virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
+    virtual void handle_msg(const iomgr_msg& msg);
 
 protected:
-    bool m_is_io_thread = false;
+    virtual bool iocontext_init() = 0;
+    virtual void iocontext_exit() = 0;
+
+    void on_user_iodev_notification(io_device_t* iodev, int event);
+    void notify_thread_state(bool is_started);
+    io_thread_msg_handler& msg_handler();
+
+protected:
+    int m_thread_num; // Thread num
+
+protected:
+    std::atomic< bool > m_is_io_thread = false;
     bool m_is_iomgr_thread = false; // Is this thread created by iomanager itself
     int64_t m_count = 0;            // Count of operations this thread is handling.
-    int m_thread_num;               // Thread num
     bool m_keep_running = true;
     std::unique_ptr< ioMgrThreadMetrics > m_metrics;
 
@@ -102,43 +105,6 @@ protected:
     io_thread_msg_handler m_this_thread_msg_handler;
 
     iodev_selector_t m_iodev_selector = nullptr;
-};
-
-class IOThreadContextEPoll : public IOThreadContext {
-    friend class IOManager;
-
-public:
-    IOThreadContextEPoll();
-    ~IOThreadContextEPoll();
-    void run(bool is_iomgr_thread = false, const iodev_selector_t& iodev_selector = nullptr,
-             const io_thread_msg_handler& this_thread_msg_handler = nullptr) override;
-    void listen() override;
-    int add_iodev_to_thread(const io_device_ptr& iodev) override;
-    int remove_iodev_from_thread(const io_device_ptr& iodev) override;
-
-    /***
-     * Put the message to the message q for this thread.
-     * @param msg
-     */
-    // void put_msg(iomgr_msg&& msg);
-    // void put_msg(iomgr_msg_type type, fd_info* info, int event, void* buf = nullptr, uint32_t size = 0) override;
-    bool send_msg(const iomgr_msg& msg) override;
-
-    bool is_iodev_addable(const io_device_ptr& iodev) override;
-
-private:
-    void iothread_init(bool wait_till_ready) override;
-    void iothread_stop() override;
-
-    void put_msg(const iomgr_msg& msg);
-    void on_msg_fd_notification();
-    void on_user_fd_notification(io_device_t* iodev, int event);
-    void notify_thread_state(bool is_started);
-    io_thread_msg_handler& msg_handler();
-
-private:
-    int m_epollfd = -1;                                       // Parent epoll context for this thread
-    io_device_ptr m_msg_iodev;                                // iodev for the messages
-    folly::MPMCQueue< iomgr_msg, std::atomic, true > m_msg_q; // Q of message for this thread
+    uint32_t m_n_iodevices = 0;
 };
 } // namespace iomgr

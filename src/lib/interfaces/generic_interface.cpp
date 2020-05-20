@@ -23,8 +23,8 @@ io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_i
 }
 
 void GenericIOInterface::remove_io_device(const io_device_ptr& iodev) { iomanager.remove_io_device(iodev); }
-void GenericIOInterface::on_io_thread_start(__attribute__((unused)) IOThreadContext* ctx) {}
-void GenericIOInterface::on_io_thread_stopped(__attribute__((unused)) IOThreadContext* ctx) {
+void GenericIOInterface::on_io_thread_start(__attribute__((unused)) IOReactor* ctx) {}
+void GenericIOInterface::on_io_thread_stopped(__attribute__((unused)) IOReactor* ctx) {
     // TODO: See if we need to remove_io_device from per thread
 }
 } // namespace iomgr

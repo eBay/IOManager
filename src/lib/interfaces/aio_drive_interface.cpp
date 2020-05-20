@@ -12,6 +12,7 @@
 #include <sys/uio.h>
 #include <fstream>
 #include <sys/epoll.h>
+#include <fmt/format.h>
 
 #ifdef __linux__
 #include <linux/fs.h>
@@ -46,8 +47,8 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags
     /* it doesn't need to keep track of any fds */
     auto fd = open(devname.c_str(), oflags);
     if (fd == -1) {
-        std::cerr << "Unable to open the device " << devname << " errorno = " << errno << " error = " << strerror(errno)
-                  << "\n";
+        folly::throwSystemError(
+            fmt::format("Unable to open the device={} errno={} strerror={}", devname, errno, strerror(errno)));
         return nullptr;
     }
 
@@ -61,7 +62,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags
     return iodev;
 }
 
-void AioDriveInterface::on_io_thread_start(IOThreadContext* iomgr_ctx) {
+void AioDriveInterface::on_io_thread_start(IOReactor* iomgr_ctx) {
     (void)iomgr_ctx;
     _aio_ctx = new aio_thread_context();
     _aio_ctx->ev_fd = eventfd(0, EFD_NONBLOCK);
@@ -72,15 +73,13 @@ void AioDriveInterface::on_io_thread_start(IOThreadContext* iomgr_ctx) {
     int err = io_setup(MAX_OUTSTANDING_IO, &_aio_ctx->ioctx);
     if (err) {
         LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
-        std::stringstream ss;
-        ss << "io_setup failed with ret status " << err << " errno = " << errno;
-        folly::throwSystemError(ss.str());
+        folly::throwSystemError(fmt::format("io_setup failed with ret status {} errno {}", err, errno));
     }
 
     _aio_ctx->iocb_info_prealloc(MAX_OUTSTANDING_IO);
 }
 
-void AioDriveInterface::on_io_thread_stopped([[maybe_unused]] IOThreadContext* iomgr_ctx) {
+void AioDriveInterface::on_io_thread_stopped([[maybe_unused]] IOReactor* iomgr_ctx) {
     iomanager.generic_interface()->remove_io_device(_aio_ctx->ev_io_dev);
     delete _aio_ctx;
 }
@@ -324,10 +323,8 @@ ssize_t AioDriveInterface::_sync_write(int fd, const char* data, uint32_t size, 
 
     ssize_t written_size = pwrite(fd, data, (ssize_t)size, (off_t)offset);
     if (written_size != size) {
-        std::stringstream ss;
-        ss << "Error trying to write offset " << offset << " size to write = " << size
-           << " size written = " << written_size << " err no" << errno << " fd =" << fd << "\n";
-        folly::throwSystemError(ss.str());
+        folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
+                                            offset, size, written_size, errno, fd));
     }
     COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
@@ -346,10 +343,9 @@ ssize_t AioDriveInterface::_sync_writev(int fd, const iovec* iov, int iovcnt, ui
 #endif
     ssize_t written_size = pwritev(fd, iov, iovcnt, offset);
     if (written_size != size) {
-        std::stringstream ss;
-        ss << "Error trying to write offset " << offset << " size to write = " << size
-           << " size written = " << written_size << " err no" << errno << " fd =" << fd << "\n";
-        folly::throwSystemError(ss.str());
+        folly::throwSystemError(
+            fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
+                        size, written_size, iovcnt, errno, fd));
     }
     COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
@@ -367,10 +363,8 @@ ssize_t AioDriveInterface::_sync_read(int fd, char* data, uint32_t size, uint64_
 #endif
     ssize_t read_size = pread(fd, data, (ssize_t)size, (off_t)offset);
     if (read_size != size) {
-        std::stringstream ss;
-        ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
-           << " err no" << errno << " fd =" << fd << "\n";
-        folly::throwSystemError(ss.str());
+        folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
+                                            offset, size, read_size, errno, fd));
     }
     COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
@@ -389,10 +383,9 @@ ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uin
 #endif
     ssize_t read_size = preadv(fd, iov, iovcnt, (off_t)offset);
     if (read_size != size) {
-        std::stringstream ss;
-        ss << "Error trying to read offset " << offset << " size to read = " << size << " size read = " << read_size
-           << " err no" << errno << " fd =" << fd << "\n";
-        folly::throwSystemError(ss.str());
+        folly::throwSystemError(
+            fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,
+                        size, read_size, iovcnt, errno, fd));
     }
     COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
@@ -409,9 +402,7 @@ size_t AioDriveInterface::get_size(io_device_t* iodev, bool is_file) {
         if (ioctl(iodev->fd(), BLKGETSIZE64, &devsize) >= 0) { return devsize; }
     }
 
-    std::stringstream ss;
-    ss << "device stat failed for dev = " << iodev->fd() << " errno = " << errno << "\n";
-    folly::throwSystemError(ss.str());
+    folly::throwSystemError(fmt::format("device stat failed for dev {} errno = {}", iodev->fd(), errno));
     return 0;
 }
 } // namespace iomgr
