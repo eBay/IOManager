@@ -23,8 +23,8 @@ IOReactor::~IOReactor() {
     if (m_is_io_thread.load()) { stop(); }
 }
 
-void IOReactor::run(bool is_iomgr_thread, const iodev_selector_t& iodev_selector,
-                    const io_thread_msg_handler& this_thread_msg_handler) {
+void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selector,
+                    const thread_state_notifier_t& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
         LOGINFO("Starting a new IOReactor while iomanager is stopping or stopped, not starting io loop");
@@ -32,9 +32,9 @@ void IOReactor::run(bool is_iomgr_thread, const iodev_selector_t& iodev_selector
     }
 
     if (!m_is_io_thread) {
-        m_is_iomgr_thread = is_iomgr_thread;
+        m_is_iomgr_thread = is_iomgr_created;
         m_iodev_selector = iodev_selector;
-        m_this_thread_msg_handler = this_thread_msg_handler;
+        m_this_thread_notifier = thread_state_notifier;
 
         m_thread_num = sisl::ThreadLocalContext::my_thread_num();
         LOGINFO("IOThread is assigned thread num {}", m_thread_num);
@@ -98,64 +98,99 @@ void IOReactor::stop() {
     iomanager.io_thread_stopped();
 }
 
-void IOReactor::handle_msg(const iomgr_msg& msg) {
+int IOReactor::add_iodev_to_reactor(const io_device_ptr& iodev) {
+    auto ret = _add_iodev_to_reactor(iodev);
+    if (ret == 0) {
+        ++m_n_iodevices;
+        if (iodev->io_interface) { iodev->io_interface->on_add_iodev_to_reactor(this, iodev); }
+    }
+    return ret;
+}
+
+int IOReactor::remove_iodev_from_reactor(const io_device_ptr& iodev) {
+    auto ret = _remove_iodev_from_reactor(iodev);
+    if (ret == 0) {
+        --m_n_iodevices;
+        if (iodev->io_interface) { iodev->io_interface->on_remove_iodev_from_reactor(this, iodev); }
+    }
+    return ret;
+}
+
+bool IOReactor::deliver_msg(iomgr_msg* msg) {
+    if (msg->is_sync_msg()) { sync_iomgr_msg::cast(msg)->pending(); }
+
+    // If the sender and receiver are same thread, take a shortcut to directly handle the message. Of course, this
+    // will cause out-of-order delivery of messages. However, there is no good way to prevent deadlock
+    if (iomanager.this_reactor() == this) {
+        handle_msg(msg);
+        return true;
+    } else {
+        return put_msg(msg);
+    }
+}
+
+void IOReactor::handle_msg(iomgr_msg* msg) {
     ++m_metrics->msg_recvd_count;
-    switch (msg.get_type< iomgr_msg_type >()) {
-    case iomgr_msg_type::RESCHEDULE: {
-        auto iodev = msg.m_iodev;
-        ++m_metrics->rescheduled_in;
-        if (msg.m_event & EPOLLIN) { iodev->cb(iodev.get(), iodev->cookie, EPOLLIN); }
-        if (msg.m_event & EPOLLOUT) { iodev->cb(iodev.get(), iodev->cookie, EPOLLOUT); }
-        break;
-    }
 
-    case iomgr_msg_type::RELINQUISH_IO_THREAD:
-        LOGINFO("This thread is asked to be reliquished its status as io thread. Will exit io loop");
-        stop();
-        break;
+    // If the message is for a different module, pass it on to their handler
+    if (msg->m_dest_module != iomanager.m_internal_msg_module_id) {
+        auto& handler = iomanager.get_msg_module(msg->m_dest_module);
+        if (!handler) {
+            LOGINFO("Received a msg of type={} dest_module={}, but no handler registered. Ignoring this msg",
+                    msg->m_type, msg->m_dest_module);
 
-    case iomgr_msg_type::DESIGNATE_IO_THREAD:
-        LOGINFO("This thread is asked to be designated its status as io thread. Will start running io loop");
-        m_keep_running = true;
-        m_is_io_thread = true;
-        break;
-
-    case iomgr_msg_type::RUN_METHOD: {
-        LOGTRACE("We are picked the thread to run the method");
-        auto method_to_run = (run_method_t*)msg.m_data_buf;
-        (*method_to_run)();
-        sisl::ObjectAllocator< run_method_t >::deallocate(method_to_run);
-        break;
-    }
-
-    case iomgr_msg_type::ADD_DEVICE: {
-        add_iodev_to_reactor(msg.m_iodev);
-        sync_iomgr_msg::to_sync_msg(msg).done();
-        break;
-    }
-
-    case iomgr_msg_type::REMOVE_DEVICE: {
-        add_iodev_to_reactor(msg.m_iodev);
-        sync_iomgr_msg::to_sync_msg(msg).done();
-        break;
-    }
-
-    case iomgr_msg_type::WAKEUP:
-    case iomgr_msg_type::SHUTDOWN:
-    case iomgr_msg_type::CUSTOM_MSG: {
-        auto& handler = msg_handler();
-        if (handler) {
-            handler(msg);
         } else {
-            LOGINFO("Received a message, but no message handler registered. Ignoring this message");
+            handler(msg);
         }
-        break;
+    } else {
+        switch (msg->m_type) {
+        case iomgr_msg_type::RESCHEDULE: {
+            auto iodev = msg->iodevice_data();
+            ++m_metrics->rescheduled_in;
+            if (msg->event() & EPOLLIN) { iodev->cb(iodev.get(), iodev->cookie, EPOLLIN); }
+            if (msg->event() & EPOLLOUT) { iodev->cb(iodev.get(), iodev->cookie, EPOLLOUT); }
+            break;
+        }
+
+        case iomgr_msg_type::RELINQUISH_IO_THREAD:
+            LOGINFO("This thread is asked to be reliquished its status as io thread. Will exit io loop");
+            stop();
+            break;
+
+        case iomgr_msg_type::DESIGNATE_IO_THREAD:
+            LOGINFO("This thread is asked to be designated its status as io thread. Will start running io loop");
+            m_keep_running = true;
+            m_is_io_thread = true;
+            break;
+
+        case iomgr_msg_type::RUN_METHOD: {
+            LOGTRACE("We are picked the thread to run the method");
+            msg->method_data()();
+            break;
+        }
+
+        case iomgr_msg_type::ADD_DEVICE: {
+            add_iodev_to_reactor(msg->iodevice_data());
+            break;
+        }
+
+        case iomgr_msg_type::REMOVE_DEVICE: {
+            remove_iodev_from_reactor(msg->iodevice_data());
+            break;
+        }
+
+        case iomgr_msg_type::UNKNOWN:
+        default:
+            LOGDFATAL("Received a unknown msg type={}, to internal message handler. Ignoring this message",
+                      msg->m_type);
+            break;
+        }
     }
 
-    case iomgr_msg_type::UNKNOWN:
-    default:
-        assert(0);
-        break;
+    if (msg->is_sync_msg()) {
+        sync_iomgr_msg::cast(msg)->done();
+    } else {
+        msg->free_yourself();
     }
 }
 
@@ -174,13 +209,8 @@ bool IOReactor::is_iodev_addable(const io_device_ptr& iodev) const {
 }
 
 void IOReactor::notify_thread_state(bool is_started) {
-    iomgr_msg msg(is_started ? (int)iomgr_msg_type::WAKEUP : (int)iomgr_msg_type::SHUTDOWN);
-    auto& handler = msg_handler();
-    if (handler) { handler(msg); }
-}
-
-io_thread_msg_handler& IOReactor::msg_handler() {
-    return (m_this_thread_msg_handler) ? m_this_thread_msg_handler : iomanager.m_common_thread_msg_handler;
+    if (m_this_thread_notifier) { m_this_thread_notifier(is_started); }
+    if (iomanager.thread_state_notifier()) { iomanager.thread_state_notifier()(is_started); }
 }
 
 } // namespace iomgr

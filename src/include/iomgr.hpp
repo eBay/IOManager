@@ -67,7 +67,17 @@ enum class iomgr_state : uint16_t {
     stopping = 4,
 };
 
-using msg_handler_t = std::function< void(const iomgr_msg&) >;
+template < class... Ts >
+struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+template < class... Ts >
+overloaded(Ts...)->overloaded< Ts... >;
+
+enum class thread_regex { any_io, all_io, any_tloop, all_tloop, any_iloop, all_iloop };
+using thread_specifier = std::variant< thread_regex, io_thread_id_t >;
+
+using msg_handler_t = std::function< void(iomgr_msg*) >;
 
 class IOManager {
 public:
@@ -86,10 +96,12 @@ public:
 
     /********* Start/Stop Control Related Operations ********/
     void start(size_t num_iface, size_t num_threads = 0, bool is_spdk = false,
-               const io_thread_msg_handler& notifier = nullptr);
+               const thread_state_notifier_t& notifier = nullptr);
     void stop();
-    void run_io_loop(bool is_iomgr_thread = false, const iodev_selector_t& iodev_selector = nullptr,
-                     const io_thread_msg_handler& override_msg_handler = nullptr);
+    void run_io_loop(bool is_tloop_thread, const iodev_selector_t& iodev_selector = nullptr,
+                     const thread_state_notifier_t& addln_notifier = nullptr) {
+        _run_io_loop(false, is_tloop_thread, iodev_selector, addln_notifier);
+    }
     void stop_io_loop();
 
     /********* Interface/Device Related Operations ********/
@@ -98,7 +110,9 @@ public:
     void add_io_device(const io_device_ptr& iodev);
     void remove_io_device(const io_device_ptr& iodev);
     void device_reschedule(const io_device_ptr& iodev, int event);
-    void run_in_io_thread(const run_method_t& fn);
+    // void run_in_any_io_thread(const run_method_t& fn);
+    bool run_in_specific_thread(io_thread_id_t thread, const run_method_t& fn, bool wait_for_completion = false);
+    void run_on(const thread_specifier& specifier, const run_method_t& fn);
 
     /********* Access related methods ***********/
     io_thread_id_t my_io_thread_id() const;
@@ -129,13 +143,14 @@ public:
         m_cv.wait(lck, [this] { return is_interface_registered(); });
     }
 
+    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
+
     /******** Message related infra ********/
-    bool send_msg(io_thread_id_t to_thread, const iomgr_msg& msg);
-    uint32_t broadcast_msg(const iomgr_msg& msg);
-    void send_to_least_busy_iomgr_thread(const iomgr_msg& msg);
+    bool send_msg(io_thread_id_t to_thread, iomgr_msg* msg);
+    bool send_msg_to(const thread_specifier& specifier, iomgr_msg* msg);
+
     msg_module_id_t register_msg_module(const msg_handler_t& handler);
     msg_handler_t& get_msg_module(msg_module_id_t id);
-    io_thread_msg_handler& msg_handler() { return m_common_thread_msg_handler; }
 
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size);
@@ -177,8 +192,11 @@ private:
     void foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb);
     void foreach_interface(std::function< void(IOInterface*) > iface_cb);
 
-    void io_thread_started(bool is_iomgr_thread); // Notification that iomanager thread is ready to serve
-    void io_thread_stopped();                     // Notification that IO thread is reliquished
+    void _run_io_loop(bool is_iomgr_created, bool is_tloop_thread, const iodev_selector_t& iodev_selector,
+                      const thread_state_notifier_t& addln_notifier);
+
+    void io_thread_started(bool is_iomgr_created); // Notification that iomanager thread is ready to serve
+    void io_thread_stopped();                      // Notification that IO thread is reliquished
 
     void start_spdk();
     void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
@@ -217,14 +235,14 @@ private:
     std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
     std::vector< std::thread > m_iomgr_threads;
-    io_thread_msg_handler m_common_thread_msg_handler = nullptr;
-    bool m_is_spdk = false;
+    bool m_is_tloop = false;
     std::unique_ptr< timer > m_global_timer;
 
     std::mutex m_msg_hdlrs_mtx;
     std::array< msg_handler_t, max_msg_modules > m_msg_handlers;
     uint32_t m_msg_handlers_count = 0;
     msg_module_id_t m_internal_msg_module_id;
+    thread_state_notifier_t m_common_thread_state_notifier = nullptr;
 };
 
 #define iomanager iomgr::IOManager::instance()

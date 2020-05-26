@@ -13,7 +13,7 @@ namespace iomgr {
 
 SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
     // m_my_msg_modid = iomanager.register_msg_module(bind_this(handle_msg, 1));
-    m_my_msg_modid = iomanager.register_msg_module([this](const iomgr_msg& msg) { handle_msg(msg); });
+    m_my_msg_modid = iomanager.register_msg_module([this](iomgr_msg* msg) { handle_msg(msg); });
 }
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
@@ -109,7 +109,7 @@ void SpdkDriveInterface::async_write(io_device_t* iodev, const char* data, uint3
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, false /*is_read*/, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iomanager.this_reactor()->is_iomgr_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
+    iomanager.this_reactor()->is_tight_loop_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
 }
 
 void SpdkDriveInterface::async_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -117,7 +117,7 @@ void SpdkDriveInterface::async_read(io_device_t* iodev, char* data, uint32_t siz
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, true /*is_read*/, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iomanager.this_reactor()->is_iomgr_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
+    iomanager.this_reactor()->is_tight_loop_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
 }
 
 void SpdkDriveInterface::async_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -126,7 +126,7 @@ void SpdkDriveInterface::async_writev(io_device_t* iodev, const iovec* iov, int 
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iomanager.this_reactor()->is_iomgr_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
+    iomanager.this_reactor()->is_tight_loop_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
 }
 
 void SpdkDriveInterface::async_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -135,12 +135,12 @@ void SpdkDriveInterface::async_readv(io_device_t* iodev, const iovec* iov, int i
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iomanager.this_reactor()->is_iomgr_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
+    iomanager.this_reactor()->is_tight_loop_thread() ? submit_io(iocb) : do_async_in_iomgr_thread(iocb);
 }
 
 ssize_t SpdkDriveInterface::sync_write(io_device_t* iodev, const char* data, uint32_t size, uint64_t offset) {
-    // We should never do sync io on a reactor thread/
-    assert(!iomanager.this_reactor()->is_iomgr_thread());
+    // We should never do sync io on a tight loop thread
+    assert(!iomanager.this_reactor()->is_tight_loop_thread());
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, false /*is_read*/, size, offset, nullptr);
     iocb->user_data = (char*)data;
@@ -149,8 +149,8 @@ ssize_t SpdkDriveInterface::sync_write(io_device_t* iodev, const char* data, uin
 
 ssize_t SpdkDriveInterface::sync_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                         uint64_t offset) {
-    // We should never do sync io on a reactor thread/
-    assert(!iomanager.this_reactor()->is_iomgr_thread());
+    // We should never do sync io on a tight loop thread
+    assert(!iomanager.this_reactor()->is_tight_loop_thread());
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, false /*is_read*/, size, offset, nullptr);
     iocb->iovs = (iovec*)iov;
@@ -159,8 +159,8 @@ ssize_t SpdkDriveInterface::sync_writev(io_device_t* iodev, const iovec* iov, in
 }
 
 ssize_t SpdkDriveInterface::sync_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset) {
-    // We should never do sync io on a reactor thread/
-    assert(!iomanager.this_reactor()->is_iomgr_thread());
+    // We should never do sync io on a tight loop thread
+    assert(!iomanager.this_reactor()->is_tight_loop_thread());
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, true /*is_read*/, size, offset, nullptr);
     iocb->user_data = (char*)data;
@@ -169,8 +169,8 @@ ssize_t SpdkDriveInterface::sync_read(io_device_t* iodev, char* data, uint32_t s
 
 ssize_t SpdkDriveInterface::sync_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                        uint64_t offset) {
-    // We should never do sync io on a reactor thread/
-    assert(!iomanager.this_reactor()->is_iomgr_thread());
+    // We should never do sync io on a tight loop thread
+    assert(!iomanager.this_reactor()->is_tight_loop_thread());
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(iodev, true /*is_read*/, size, offset, nullptr);
     iocb->iovs = (iovec*)iov;
@@ -186,10 +186,8 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
         m_sync_cv.notify_all();
     };
 
-    iomgr_msg msg((int)spdk_msg_type::QUEUE_IO, m_my_msg_modid);
-    msg.m_data_buf = (void*)iocb;
-    msg.m_data_size = sizeof(SpdkIocb);
-    iomanager.send_to_least_busy_iomgr_thread(msg);
+    auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
+    iomanager.send_msg_to(thread_regex::any_tloop, msg);
 
     {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
@@ -206,26 +204,22 @@ void SpdkDriveInterface::do_async_in_iomgr_thread(SpdkIocb* iocb) {
 
     iocb->comp_cb = [this, iocb, reply_thread_id](int64_t res, uint8_t* cookie) {
         iocb->result = res;
-        iomgr_msg reply((int)spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid);
-        reply.m_data_buf = (void*)iocb;
-        reply.m_data_size = sizeof(SpdkIocb);
+        auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.send_msg(reply_thread_id, reply);
     };
 
-    iomgr_msg msg((int)spdk_msg_type::QUEUE_IO, m_my_msg_modid);
-    msg.m_data_buf = (void*)iocb;
-    msg.m_data_size = sizeof(SpdkIocb);
-    iomanager.send_to_least_busy_iomgr_thread(msg);
+    auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
+    iomanager.send_msg_to(thread_regex::any_tloop, msg);
 }
 
-void SpdkDriveInterface::handle_msg(const iomgr_msg& msg) {
-    switch (msg.get_type< spdk_msg_type >()) {
+void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
+    switch (msg->m_type) {
     case spdk_msg_type::QUEUE_IO:
-        submit_io(msg.m_data_buf);
+        submit_io((void*)msg->data_buf().bytes);
         break;
 
     case spdk_msg_type::ASYNC_IO_DONE:
-        auto iocb = (SpdkIocb*)msg.m_data_buf;
+        auto iocb = (SpdkIocb*)msg->data_buf().bytes;
         m_comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie);
         sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
         break;

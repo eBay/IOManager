@@ -16,8 +16,7 @@ SDS_LOGGING_DECL(iomgr);
 struct spdk_thread;
 namespace iomgr {
 
-typedef std::function< void(const iomgr_msg&) > io_thread_msg_handler;
-typedef std::function< void(void) > run_method_t;
+typedef std::function< void(bool) > thread_state_notifier_t;
 typedef std::variant< int, spdk_thread* > io_thread_id_t;
 
 struct io_device_t;
@@ -66,30 +65,32 @@ class IOReactor {
 
 public:
     virtual ~IOReactor();
-    virtual void run(bool is_iomgr_thread = false, const iodev_selector_t& iodev_selector = nullptr,
-                     const io_thread_msg_handler& this_thread_msg_handler = nullptr);
+    virtual void run(bool is_iomgr_created = false, const iodev_selector_t& iodev_selector = nullptr,
+                     const thread_state_notifier_t& thread_state_notifier = nullptr);
     bool is_io_thread() const { return m_is_io_thread; };
-    bool is_iomgr_thread() const { return m_is_iomgr_thread; }
+    bool deliver_msg(iomgr_msg* msg);
 
+    virtual bool is_tight_loop_thread() const = 0;
     virtual io_thread_id_t my_io_thread_id() const = 0;
     virtual void listen() = 0;
-    virtual int add_iodev_to_reactor(const io_device_ptr& iodev) = 0;
-    virtual int remove_iodev_from_reactor(const io_device_ptr& iodev) = 0;
-    virtual bool send_msg(const iomgr_msg& msg) = 0;
+    int add_iodev_to_reactor(const io_device_ptr& iodev);
+    int remove_iodev_from_reactor(const io_device_ptr& iodev);
 
+    virtual bool put_msg(iomgr_msg* msg) = 0;
     virtual void init(bool wait_till_ready);
     virtual void stop();
     virtual bool is_iodev_addable(const io_device_ptr& iodev) const;
     virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
-    virtual void handle_msg(const iomgr_msg& msg);
+    virtual void handle_msg(iomgr_msg* msg);
 
 protected:
     virtual bool iocontext_init() = 0;
     virtual void iocontext_exit() = 0;
+    virtual int _add_iodev_to_reactor(const io_device_ptr& iodev) = 0;
+    virtual int _remove_iodev_from_reactor(const io_device_ptr& iodev) = 0;
 
     void on_user_iodev_notification(io_device_t* iodev, int event);
     void notify_thread_state(bool is_started);
-    io_thread_msg_handler& msg_handler();
 
 protected:
     int m_thread_num; // Thread num
@@ -102,7 +103,7 @@ protected:
     std::unique_ptr< ioMgrThreadMetrics > m_metrics;
 
     std::unique_ptr< timer > m_thread_timer;
-    io_thread_msg_handler m_this_thread_msg_handler;
+    thread_state_notifier_t m_this_thread_notifier;
 
     iodev_selector_t m_iodev_selector = nullptr;
     uint32_t m_n_iodevices = 0;

@@ -13,11 +13,7 @@
 #include "spdk/bdev.h"
 
 namespace iomgr {
-static void _handle_thread_msg(void* _msg) {
-    auto msg = (iomgr_msg*)_msg;
-    iomanager.this_reactor()->handle_msg(*msg);
-    sisl::ObjectAllocator< iomgr_msg >::deallocate(msg);
-}
+static void _handle_thread_msg(void* _msg) { iomanager.this_reactor()->handle_msg((iomgr_msg*)_msg); }
 
 bool IOReactorSPDK::iocontext_init() {
     // Create SPDK LW thread for this io thread
@@ -42,19 +38,10 @@ void IOReactorSPDK::iocontext_exit() {
     }
 }
 
-int IOReactorSPDK::add_iodev_to_reactor(const io_device_ptr& iodev) {
-    ++m_n_iodevices;
-    iodev->io_interface->on_add_iodev_to_reactor(this, iodev);
-    return 0;
-}
+int IOReactorSPDK::_add_iodev_to_reactor(const io_device_ptr& iodev) { return 0; }
+int IOReactorSPDK::_remove_iodev_from_reactor(const io_device_ptr& iodev) { return 0; }
 
-int IOReactorSPDK::remove_iodev_from_reactor(const io_device_ptr& iodev) {
-    --m_n_iodevices;
-    iodev->io_interface->on_remove_iodev_from_reactor(this, iodev);
-    return 0;
-}
-
-bool IOReactorSPDK::send_msg(const iomgr_msg& msg) {
+bool IOReactorSPDK::put_msg(iomgr_msg* msg) {
     // TODO: Once we support multiple threads, loop and send it to all spdk threads
     deliver_to_thread(m_sthread, msg);
     return true;
@@ -64,9 +51,8 @@ bool IOReactorSPDK::is_iodev_addable(const io_device_ptr& iodev) const {
     return (iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev));
 }
 
-void IOReactorSPDK::deliver_to_thread(spdk_thread* to_thread, const iomgr_msg& msg) {
-    auto cover_msg = sisl::ObjectAllocator< iomgr_msg >::make_object(msg);
-    if (msg.is_sync_msg) { sync_iomgr_msg::to_sync_msg(msg).pending(); }
-    spdk_thread_send_msg(to_thread, _handle_thread_msg, cover_msg);
+void IOReactorSPDK::deliver_to_thread(spdk_thread* to_thread, iomgr_msg* msg) {
+    if (msg->m_is_sync_msg) { ((sync_iomgr_msg*)msg)->pending(); }
+    spdk_thread_send_msg(to_thread, _handle_thread_msg, msg);
 }
 } // namespace iomgr

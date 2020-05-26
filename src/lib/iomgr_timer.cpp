@@ -19,13 +19,6 @@ namespace iomgr {
 #define UNLOCK_IF_GLOBAL()                                                                                             \
     if (!m_is_thread_local) m_list_mutex.unlock();
 
-template < class... Ts >
-struct overloaded : Ts... {
-    using Ts::operator()...;
-};
-template < class... Ts >
-overloaded(Ts...)->overloaded< Ts... >;
-
 timer_epoll::timer_epoll(bool is_thread_local) : timer(is_thread_local) {
     m_common_timer_io_dev = setup_timer_fd();
     if (!m_common_timer_io_dev) {

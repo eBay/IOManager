@@ -13,9 +13,9 @@ struct SpdkDriveDeviceContext {
     struct spdk_io_channel* channel;
 };
 
-enum class spdk_msg_type {
-    QUEUE_IO = 0,
-    ASYNC_IO_DONE,
+struct spdk_msg_type {
+    static constexpr int QUEUE_IO = 100;
+    static constexpr int ASYNC_IO_DONE = 101;
 };
 
 struct SpdkIocb;
@@ -45,7 +45,7 @@ public:
 
 private:
     void do_async_in_iomgr_thread(SpdkIocb* iocb);
-    void handle_msg(const iomgr_msg& msg);
+    void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
 
 private:

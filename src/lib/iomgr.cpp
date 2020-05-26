@@ -37,21 +37,21 @@ IOManager::IOManager() { m_iface_list.wlock()->reserve(inbuilt_interface_count +
 
 IOManager::~IOManager() = default;
 
-void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads, bool is_spdk,
-                      const io_thread_msg_handler& handler) {
+void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads, bool is_tloop,
+                      const thread_state_notifier_t& notifier) {
     LOGINFO("Starting IOManager");
-    m_is_spdk = is_spdk;
+    m_is_tloop = is_tloop;
     m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nthreads.set(num_threads);
 
     // One common module and other internal handler
-    register_msg_module(handler);
-    m_internal_msg_module_id = register_msg_module([this](const iomgr_msg& msg) { this_reactor()->handle_msg(msg); });
+    m_common_thread_state_notifier = notifier;
+    m_internal_msg_module_id = register_msg_module([this](iomgr_msg* msg) { this_reactor()->handle_msg(msg); });
 
     set_state(iomgr_state::waiting_for_interfaces);
 
     // Start the SPDK
-    if (is_spdk) { start_spdk(); }
+    if (is_tloop) { start_spdk(); }
 
     /* Create all in-built interfaces here.
      * TODO: Can we create aio_drive_end_point by default itself
@@ -84,12 +84,12 @@ void IOManager::stop() {
     // IO threads, which hangs the iomanager stop
     m_yet_to_stop_nthreads.increment();
 
-    // Send all the threads to reliquish its io thread status
-    iomgr_msg msg((int)iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id);
-    send_msg(-1, std::move(msg));
-
     // Free up and unregister fds for global timer
-    m_global_timer = nullptr;
+    m_global_timer.reset(nullptr);
+
+    // Send all the threads to reliquish its io thread status
+    send_msg_to(thread_regex::all_io,
+                iomgr_msg::create(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id));
 
     // Now decrement and check if all io threads have already reliquished the io thread status.
     if (m_yet_to_stop_nthreads.decrement_testz()) {
@@ -111,6 +111,8 @@ void IOManager::stop() {
     m_drive_ifaces.wlock()->clear();
     m_iface_list.wlock()->clear();
     assert(get_state() == iomgr_state::stopped);
+
+    LOGINFO("IOManager Stopped and all IO threads are relinquished");
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface) {
@@ -131,8 +133,8 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
             set_state_and_notify(iomgr_state::waiting_for_threads);
             LOGINFO("IOManager is asked to start {} number of threads, starting them", nthreads);
             for (auto i = 0; i < nthreads; i++) {
-                m_iomgr_threads.push_back(std::move(
-                    sisl::thread_factory("iomgr_thread", &IOManager::run_io_loop, this, true, nullptr, nullptr)));
+                m_iomgr_threads.push_back(std::move(sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this,
+                                                                         true, m_is_tloop, nullptr, nullptr)));
                 LOGTRACEMOD(iomgr, "Created iomanager reactor thread...", i);
                 // t.detach();
             }
@@ -145,21 +147,21 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
     }
 }
 
-void IOManager::run_io_loop(bool is_iomgr_thread, const iodev_selector_t& iodev_selector,
-                            const io_thread_msg_handler& override_msg_handler) {
-    if (is_iomgr_thread && m_is_spdk) {
+void IOManager::_run_io_loop(bool is_iomgr_created, bool is_tloop_thread, const iodev_selector_t& iodev_selector,
+                             const thread_state_notifier_t& addln_notifier) {
+    if (is_tloop_thread) {
         *(m_reactors.get()) = std::make_unique< IOReactorSPDK >();
     } else {
         *(m_reactors.get()) = std::make_unique< IOReactorEPoll >();
     }
-    this_reactor()->run(is_iomgr_thread, iodev_selector, override_msg_handler);
+    this_reactor()->run(is_iomgr_created, iodev_selector, addln_notifier);
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
 
-void IOManager::io_thread_started(bool is_iomgr_thread) {
+void IOManager::io_thread_started(bool is_iomgr_created) {
     m_yet_to_stop_nthreads.increment();
-    if (is_iomgr_thread && m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
+    if (is_iomgr_created && m_yet_to_start_nthreads.decrement_testz()) { set_state_and_notify(iomgr_state::running); }
 }
 
 void IOManager::io_thread_stopped() {
@@ -177,13 +179,12 @@ void IOManager::add_io_device(const io_device_ptr& iodev) {
 
     if (iodev->is_global) {
         // Send a sync message to add device to all io threads
-        sync_iomgr_msg smsg((int)iomgr_msg_type::ADD_DEVICE, m_internal_msg_module_id, iodev);
+        auto smsg = sync_iomgr_msg::create(iomgr_msg_type::ADD_DEVICE, m_internal_msg_module_id, iodev, 0);
         all_reactors([&](IOReactor* reactor) {
-            if (reactor && reactor->is_io_thread() && reactor->is_iodev_addable(iodev)) {
-                reactor->send_msg(smsg.msg());
-            }
+            if (reactor && reactor->is_io_thread() && reactor->is_iodev_addable(iodev)) { reactor->deliver_msg(smsg); }
         });
-        smsg.wait();
+        smsg->wait();
+        smsg->free_yourself();
         m_iodev_map.wlock()->insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
     } else {
         auto r = this_reactor();
@@ -204,11 +205,12 @@ void IOManager::remove_io_device(const io_device_ptr& iodev) {
     }
 
     if (iodev->is_global) {
-        sync_iomgr_msg smsg((int)iomgr_msg_type::REMOVE_DEVICE, m_internal_msg_module_id, iodev);
+        auto smsg = sync_iomgr_msg::create(iomgr_msg_type::REMOVE_DEVICE, m_internal_msg_module_id, iodev, 0);
         all_reactors([&](IOReactor* reactor) {
-            if (reactor && reactor->is_io_thread()) { reactor->send_msg(smsg.msg()); }
+            if (reactor && reactor->is_io_thread()) { reactor->deliver_msg(smsg); }
         });
-        smsg.wait();
+        smsg->wait();
+        smsg->free_yourself();
         m_iodev_map.wlock()->erase(iodev->dev);
     } else {
         auto r = this_reactor();
@@ -222,26 +224,87 @@ void IOManager::remove_io_device(const io_device_ptr& iodev) {
 }
 
 void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
-    iomgr_msg msg((int)iomgr_msg_type::RESCHEDULE, m_internal_msg_module_id, iodev, event);
-    send_to_least_busy_iomgr_thread(msg);
+    send_msg_to(m_is_tloop ? thread_regex::any_tloop : thread_regex::any_io,
+                iomgr_msg::create(iomgr_msg_type::RESCHEDULE, m_internal_msg_module_id, iodev, event));
 }
 
-void IOManager::run_in_io_thread(const run_method_t& fn) {
+static bool match_regex(thread_regex t, IOReactor* reactor) {
+    if (!reactor || !reactor->is_io_thread()) { return false; }
+    if ((t == thread_regex::all_io) || (t == thread_regex::any_io)) { return true; }
+    if (reactor->is_tight_loop_thread()) {
+        return (t == thread_regex::all_tloop) || (t == thread_regex::any_tloop);
+    } else {
+        return (t == thread_regex::all_iloop) || (t == thread_regex::any_iloop);
+    }
+}
+
+void IOManager::run_on(const thread_specifier& specifier, const run_method_t& fn) {
+    send_msg_to(specifier, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+}
+
+bool IOManager::send_msg_to(const thread_specifier& specifier, iomgr_msg* msg) {
+    bool sent = true;
+    int64_t min_cnt = INTMAX_MAX;
+    io_thread_id_t min_id = io_thread_id_t(0);
+
+    iomgr_msg* unsent_msg = nullptr;
+    iomgr_msg* cur_msg = const_cast< iomgr_msg* >(msg);
+    std::visit(overloaded{[&](thread_regex t) {
+                              do {
+                                  all_reactors([&](IOReactor* reactor) {
+                                      if (match_regex(t, reactor)) {
+                                          if ((t == thread_regex::any_tloop) || (t == thread_regex::any_iloop)) {
+                                              min_id = reactor->my_io_thread_id();
+                                              min_cnt = reactor->m_count;
+                                          } else {
+                                              auto new_msg = cur_msg->clone();
+                                              reactor->deliver_msg(cur_msg);
+                                              unsent_msg = cur_msg = new_msg;
+                                          }
+                                      }
+                                  });
+                                  if (min_cnt != INTMAX_MAX) { sent = send_msg(min_id, cur_msg); }
+                              } while (!sent);
+                          },
+                          [&](io_thread_id_t thread) { sent = send_msg(thread, cur_msg); }},
+               specifier);
+
+    if (unsent_msg) { unsent_msg->free_yourself(); }
+    return sent;
+}
+
+#if 0
+void IOManager::run_in_any_io_thread(const run_method_t& fn) {
     auto run_method = sisl::ObjectAllocator< run_method_t >::make_object();
     *run_method = fn;
 
-    iomgr_msg msg((int)iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, nullptr, -1, (void*)run_method,
+    iomgr_msg msg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, nullptr, -1, (void*)run_method,
                   sizeof(run_method_t));
     send_to_least_busy_iomgr_thread(msg);
 }
+#endif
 
+bool IOManager::run_in_specific_thread(io_thread_id_t thread, const run_method_t& fn, bool wait_for_completion) {
+    bool ret;
+    if (wait_for_completion) {
+        auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, msg_data_t(fn));
+        ret = send_msg(thread, smsg);
+        smsg->wait();
+        smsg->free_yourself();
+    } else {
+        ret = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, msg_data_t(fn)));
+    }
+    return ret;
+}
+
+#if 0
 void IOManager::send_to_least_busy_iomgr_thread(const iomgr_msg& msg) {
     bool sent = false;
     do {
         auto min_id = find_least_busy_iomgr_thread_id();
 
-        // Try to send msg to the thread. send_msg could fail if thread is not alive (i,e between access_all_threads)
-        // and next method, thread exits.
+        // Try to send msg to the thread. send_msg could fail if thread is not alive (i,e between
+        // access_all_threads) and next method, thread exits.
         sent = send_msg(min_id, msg);
     } while (!sent);
 }
@@ -258,17 +321,9 @@ io_thread_id_t IOManager::find_least_busy_iomgr_thread_id() {
     });
     return min_id;
 }
+#endif
 
-uint32_t IOManager::broadcast_msg(const iomgr_msg& msg) {
-    uint32_t msg_sent_count = 0;
-
-    all_reactors([&msg, &msg_sent_count](IOReactor* reactor) {
-        if (reactor && reactor->is_io_thread() && reactor->send_msg(msg)) { ++msg_sent_count; }
-    });
-    return msg_sent_count;
-}
-
-bool IOManager::send_msg(io_thread_id_t to_thread, const iomgr_msg& msg) {
+bool IOManager::send_msg(io_thread_id_t to_thread, iomgr_msg* msg) {
     bool ret = false;
 
     if (std::holds_alternative< spdk_thread* >(to_thread)) {
@@ -277,7 +332,7 @@ bool IOManager::send_msg(io_thread_id_t to_thread, const iomgr_msg& msg) {
         ret = true;
     } else {
         specific_reactor(std::get< int >(to_thread), [&msg, &ret](IOReactor* reactor) {
-            if (reactor && reactor->is_io_thread() && reactor->send_msg(msg)) { ret = true; }
+            if (reactor && reactor->is_io_thread() && reactor->deliver_msg(msg)) { ret = true; }
         });
     }
     return ret;
@@ -285,19 +340,19 @@ bool IOManager::send_msg(io_thread_id_t to_thread, const iomgr_msg& msg) {
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
     size = sisl::round_up(size, align);
-    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
-                     : (uint8_t*)std::aligned_alloc(align, size);
+    return m_is_tloop ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
+                      : (uint8_t*)std::aligned_alloc(align, size);
 }
 
 sisl::aligned_unique_ptr< uint8_t > IOManager::iobuf_alloc_unique(size_t align, size_t size) {
-    return m_is_spdk ? nullptr : sisl::make_aligned_unique< uint8_t >(align, size);
+    return m_is_tloop ? nullptr : sisl::make_aligned_unique< uint8_t >(align, size);
 }
 
 std::shared_ptr< uint8_t > IOManager::iobuf_alloc_shared(size_t align, size_t size) {
-    return m_is_spdk ? nullptr : sisl::make_aligned_shared< uint8_t >(align, size);
+    return m_is_tloop ? nullptr : sisl::make_aligned_shared< uint8_t >(align, size);
 }
 
-void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : free(buf); }
+void IOManager::iobuf_free(uint8_t* buf) { m_is_tloop ? spdk_free((void*)buf) : free(buf); }
 
 void IOManager::foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb) {
     m_iodev_map.withRLock([&](auto& iodevs) {
@@ -332,8 +387,8 @@ msg_module_id_t IOManager::register_msg_module(const msg_handler_t& handler) {
     return m_msg_handlers_count - 1;
 }
 
-// It is ok not to take a lock to get msg modules, since we don't support unregister a module. Taking a lock here
-// defeats the purpose of per thread messages here.
+// It is ok not to take a lock to get msg modules, since we don't support unregister a module. Taking a lock
+// here defeats the purpose of per thread messages here.
 msg_handler_t& IOManager::get_msg_module(msg_module_id_t id) { return m_msg_handlers[id]; }
 
 io_thread_id_t IOManager::my_io_thread_id() const { return this_reactor()->my_io_thread_id(); };

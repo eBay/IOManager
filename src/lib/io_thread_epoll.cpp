@@ -27,7 +27,7 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 }
 
 #define MAX_EVENTS 20
-#define ESTIMATED_MSGS_PER_THREAD 128
+#define ESTIMATED_MSGS_PER_THREAD 10000
 
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     io_device_t* iodev1 = (io_device_t*)ev1.data.ptr;
@@ -136,7 +136,7 @@ void IOReactorEPoll::listen() {
     }
 }
 
-int IOReactorEPoll::add_iodev_to_reactor(const io_device_ptr& iodev) {
+int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev) {
     struct epoll_event ev;
     ev.events = EPOLLET | EPOLLEXCLUSIVE | iodev->ev;
     ev.data.ptr = (void*)iodev.get();
@@ -147,38 +147,31 @@ int IOReactorEPoll::add_iodev_to_reactor(const io_device_ptr& iodev) {
     }
     LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(), m_epollfd,
                 (void*)ev.data.ptr);
-    ++m_n_iodevices;
-    iodev->io_interface->on_add_iodev_to_reactor(this, iodev);
     return 0;
 }
 
-int IOReactorEPoll::remove_iodev_from_reactor(const io_device_ptr& iodev) {
+int IOReactorEPoll::_remove_iodev_from_reactor(const io_device_ptr& iodev) {
     if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
         LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
         return -1;
     }
     LOGDEBUGMOD(iomgr, "Removed fd {} from this io thread's epoll fd {}", iodev->fd(), m_epollfd);
-    --m_n_iodevices;
-    iodev->io_interface->on_remove_iodev_from_reactor(this, iodev);
     return 0;
 }
 
-bool IOReactorEPoll::send_msg(const iomgr_msg& msg) {
+bool IOReactorEPoll::put_msg(iomgr_msg* msg) {
     if (!m_msg_iodev) return false;
 
-    if (msg.is_sync_msg) { sync_iomgr_msg::to_sync_msg(msg).pending(); }
-    LOGTRACEMOD(iomgr, "Sending msg of type {} to local thread msg fd = {}, ptr = {}", msg.m_type, m_msg_iodev->fd(),
+    LOGTRACEMOD(iomgr, "Put msg of type {} to local thread msg fd = {}, ptr = {}", msg->m_type, m_msg_iodev->fd(),
                 (void*)m_msg_iodev.get());
-    put_msg(msg);
+    m_msg_q.blockingWrite(msg);
     uint64_t temp = 1;
     while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
         ;
 
     return true;
 }
-
-void IOReactorEPoll::put_msg(const iomgr_msg& msg) { m_msg_q.blockingWrite(msg); }
 
 void IOReactorEPoll::on_msg_fd_notification() {
     uint64_t temp;
@@ -187,11 +180,9 @@ void IOReactorEPoll::on_msg_fd_notification() {
 
     // Start pulling all the messages and handle them.
     while (true) {
-        iomgr_msg msg;
+        iomgr_msg* msg;
         if (!m_msg_q.read(msg)) { break; }
-
-        ++m_metrics->msg_recvd_count;
-        iomanager.get_msg_module(msg.m_dest_module)(msg);
+        handle_msg(msg);
     }
 }
 } // namespace iomgr

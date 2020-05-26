@@ -9,19 +9,20 @@ class IOReactorSPDK : public IOReactor {
 
 public:
     IOReactorSPDK() = default;
-    int add_iodev_to_reactor(const io_device_ptr& iodev) override;
-    int remove_iodev_from_reactor(const io_device_ptr& iodev) override;
-    bool send_msg(const iomgr_msg& msg) override;
 
     bool is_iodev_addable(const io_device_ptr& iodev) const override;
     io_thread_id_t my_io_thread_id() const override { return io_thread_id_t(m_sthread); };
 
-    static void deliver_to_thread(spdk_thread*, const iomgr_msg&);
+    static void deliver_to_thread(spdk_thread*, iomgr_msg* msg);
 
 private:
     bool iocontext_init() override;
     void iocontext_exit() override;
     void listen() override;
+    int _add_iodev_to_reactor(const io_device_ptr& iodev) override;
+    int _remove_iodev_from_reactor(const io_device_ptr& iodev) override;
+    bool put_msg(iomgr_msg* msg) override;
+    bool is_tight_loop_thread() const override { return true; };
 
 private:
     spdk_thread* m_sthread = nullptr;
