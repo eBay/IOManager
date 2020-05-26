@@ -209,10 +209,17 @@ private:
         }
         m_cv.notify_all();
     }
+<<<<<<< HEAD
 
     io_thread_id_t find_least_busy_iomgr_thread_id();
     void all_reactors(const std::function< void(IOReactor* ctx) >& cb);
     void specific_reactor(int thread_num, const std::function< void(IOReactor* ctx) >& cb);
+=======
+    int find_least_busy_thread_id();
+    IOThreadContext* this_thread_ctx();
+    void all_threads_ctx(const std::function< void(IOThreadContext* ctx) >& cb);
+    void specific_thread_ctx(int thread_num, const std::function< void(IOThreadContext* ctx) >& cb);
+>>>>>>> bf06773944fe6d33ca395d250e714286d941eeb4
 
 private:
     size_t m_expected_ifaces = inbuilt_interface_count;          // Total number of interfaces expected
