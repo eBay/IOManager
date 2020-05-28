@@ -13,8 +13,8 @@ enum class drive_interface_type { aio, spdk, uioring };
 
 class DriveInterface : public IOInterface {
 public:
-    void on_io_thread_start(IOThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
-    void on_io_thread_stopped(IOThreadContext* iomgr_ctx) override { (void)iomgr_ctx; };
+    void on_io_thread_start(IOReactor* iomgr_ctx) override { (void)iomgr_ctx; };
+    void on_io_thread_stopped(IOReactor* iomgr_ctx) override { (void)iomgr_ctx; };
 
     virtual drive_interface_type interface_type() const = 0;
 

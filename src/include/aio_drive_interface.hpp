@@ -40,10 +40,7 @@ struct iocb_info_t : public iocb {
     int iovcnt;
 
     std::string to_string() const {
-        std::stringstream ss;
-        ss << "is_read = " << is_read << ", size = " << size << ", offset = " << offset << ", fd = " << fd
-           << ", iovcnt = " << iovcnt;
-        return ss.str();
+        return fmt::format("is_read={}, size={}, offset={}, fd={}, iovcnt={}", is_read, size, offset, fd, iovcnt);
     }
 };
 
@@ -85,7 +82,7 @@ public:
 };
 
 struct io_device_t;
-class IOThreadContext;
+class IOReactor;
 struct aio_thread_context {
     struct io_event events[MAX_COMPLETIONS] = {{}};
     int ev_fd = 0;
@@ -240,10 +237,13 @@ public:
     void async_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     void process_completions(io_device_t* iodev, void* cookie, int event);
-    void on_io_thread_start(IOThreadContext* iomgr_ctx) override;
-    void on_io_thread_stopped(IOThreadContext* iomgr_ctx) override;
+    void on_io_thread_start(IOReactor* iomgr_ctx) override;
+    void on_io_thread_stopped(IOReactor* iomgr_ctx) override;
     size_t get_size(io_device_t* iodev, bool is_file) override;
     virtual void submit_batch() override;
+
+    virtual void on_add_iodev_to_reactor(IOReactor* ctx, const io_device_ptr& iodev) override {}
+    virtual void on_remove_iodev_from_reactor(IOReactor* ctx, const io_device_ptr& iodev) override {}
 
 private:
     void handle_io_failure(struct iocb* iocb);
@@ -262,8 +262,8 @@ private:
 class AioDriveInterface : public DriveInterface {
 public:
     AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr) {}
-    void on_io_thread_start(IOThreadContext* iomgr_ctx) override {}
-    void on_io_thread_stopped(IOThreadContext* iomgr_ctx) override {}
+    void on_io_thread_start(IOReactor* iomgr_ctx) override {}
+    void on_io_thread_stopped(IOReactor* iomgr_ctx) override {}
 };
 #endif
 } // namespace iomgr
