@@ -15,14 +15,14 @@ extern "C" {
 #include "spdk/bdev.h"
 }
 
+#include <sds_logging/logging.h>
+
 #include <cerrno>
 #include <chrono>
 #include <ctime>
 #include <functional>
-#include <vector>
 #include <thread>
-
-#include <sds_logging/logging.h>
+#include <vector>
 
 #include "include/drive_interface.hpp"
 #include "include/iomgr.hpp"
