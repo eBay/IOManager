@@ -11,7 +11,7 @@ extern "C" {
 
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
-#include "include/io_thread_epoll.hpp"
+#include "include/reactor_epoll.hpp"
 #include <fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
@@ -30,41 +30,42 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 #define ESTIMATED_MSGS_PER_THREAD 10000
 
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
-    io_device_t* iodev1 = (io_device_t*)ev1.data.ptr;
-    io_device_t* iodev2 = (io_device_t*)ev2.data.ptr;
+    IODevice* iodev1 = (IODevice*)ev1.data.ptr;
+    IODevice* iodev2 = (IODevice*)ev2.data.ptr;
 
     // In case of equal priority, pick global fd which could get rescheduled
-    if (iodev1->pri == iodev2->pri) { return iodev1->is_global; }
+    if (iodev1->pri == iodev2->pri) { return iodev1->is_global(); }
     return (iodev1->pri > iodev2->pri);
 }
 
 IOReactorEPoll::IOReactorEPoll() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {}
 
-bool IOReactorEPoll::iocontext_init() {
+bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
     // Create a epollset for one per thread
     m_epollfd = epoll_create1(0);
     if (m_epollfd < 1) {
         assert(0);
-        LOGERROR("epoll_create failed: {}", strerror(errno));
+        REACTOR_LOG(ERROR, base, thr->thread_addr, "epoll_create failed: {}", strerror(errno));
         goto error;
     }
     std::atomic_thread_fence(std::memory_order_acquire);
-    m_is_io_thread = true;
+    thr->thread_impl = m_reactor_num;
 
-    LOGTRACEMOD(iomgr, "EPoll created: {}", m_epollfd);
+    REACTOR_LOG(TRACE, iomgr, thr->thread_addr, "EPoll created: {}", m_epollfd);
 
     // Create a message fd and add it to tht epollset
-    m_msg_iodev = std::make_shared< io_device_t >();
+    m_msg_iodev = std::make_shared< IODevice >();
     m_msg_iodev->dev = backing_dev_t(eventfd(0, EFD_NONBLOCK));
     if (m_msg_iodev->fd() == -1) {
         assert(0);
-        LOGERROR("Unable to open the eventfd, marking this as non-io thread");
+        REACTOR_LOG(ERROR, base, thr->thread_addr, "Unable to open the eventfd, marking this as non-io reactor");
         goto error;
     }
     m_msg_iodev->ev = EPOLLIN;
     m_msg_iodev->pri = 1; // Set message fd as high priority. TODO: Make multiple messages fd for various priority
-    LOGINFO("Creating a message event fd {} and add to this thread epoll fd {}", m_msg_iodev->fd(), m_epollfd)
-    if (add_iodev_to_reactor(m_msg_iodev) == -1) { goto error; }
+    REACTOR_LOG(INFO, base, thr->thread_addr, "Creating a message event fd {} and add to this thread epoll fd {}",
+                m_msg_iodev->fd(), m_epollfd)
+    if (add_iodev_to_thread(m_msg_iodev, thr) == -1) { goto error; }
 
     // Create a per thread timer
     m_thread_timer = std::make_unique< timer_epoll >(true /* is_per_thread */);
@@ -83,16 +84,14 @@ error:
     return false;
 }
 
-void IOReactorEPoll::iocontext_exit() {
+void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
     if (m_msg_iodev && (m_msg_iodev->fd() != -1)) {
-        remove_iodev_from_reactor(m_msg_iodev);
+        remove_iodev_from_thread(m_msg_iodev, thr);
         close(m_msg_iodev->fd());
     }
 
     m_thread_timer->stop();
     if (m_epollfd != -1) { close(m_epollfd); }
-
-    m_metrics = nullptr;
 }
 
 void IOReactorEPoll::listen() {
@@ -107,7 +106,7 @@ void IOReactorEPoll::listen() {
         iomanager.idle_timeout_expired();
         return;
     } else if (num_fds < 0) {
-        LOGERROR("epoll wait failed: {} strerror {}", errno, strerror(errno));
+        REACTOR_LOG(ERROR, base, , "epoll wait failed: {} strerror {}", errno, strerror(errno));
         return;
     }
 
@@ -116,17 +115,17 @@ void IOReactorEPoll::listen() {
     for (auto i = 0; i < num_fds; ++i) {
         auto& e = events[i];
         if (e.data.ptr == (void*)m_msg_iodev.get()) {
-            LOGTRACEMOD(iomgr, "Processing event on msg fd: {}", m_msg_iodev->fd());
-            ++m_metrics->msg_recvd_count;
+            REACTOR_LOG(TRACE, iomgr, , "Processing event on msg fd: {}", m_msg_iodev->fd());
+            ++m_io_threads[0]->m_metrics->msg_recvd_count;
             on_msg_fd_notification();
 
             // It is possible for io thread status by the msg processor. Catch at the exit and return
-            if (!m_is_io_thread) {
-                LOGINFO("listen will exit because this is no longer an iothread");
+            if (!m_is_io_reactor) {
+                REACTOR_LOG(INFO, base, , "listen will exit because this is no longer an io reactor");
                 return;
             }
         } else {
-            io_device_t* iodev = (io_device_t*)e.data.ptr;
+            IODevice* iodev = (IODevice*)e.data.ptr;
             if (iodev->tinfo) {
                 timer_epoll::on_timer_fd_notification(iodev);
             } else {
@@ -136,7 +135,7 @@ void IOReactorEPoll::listen() {
     }
 }
 
-int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev) {
+int IOReactorEPoll::_add_iodev_to_thread(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     struct epoll_event ev;
     ev.events = EPOLLET | EPOLLEXCLUSIVE | iodev->ev;
     ev.data.ptr = (void*)iodev.get();
@@ -145,26 +144,28 @@ int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev) {
                   strerror(errno));
         return -1;
     }
-    LOGDEBUGMOD(iomgr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(), m_epollfd,
-                (void*)ev.data.ptr);
+    REACTOR_LOG(DEBUG, iomgr, thr->thread_addr, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(),
+                m_epollfd, (void*)ev.data.ptr);
     return 0;
 }
 
-int IOReactorEPoll::_remove_iodev_from_reactor(const io_device_ptr& iodev) {
+int IOReactorEPoll::_remove_iodev_from_thread(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
         LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
         return -1;
     }
-    LOGDEBUGMOD(iomgr, "Removed fd {} from this io thread's epoll fd {}", iodev->fd(), m_epollfd);
+    REACTOR_LOG(DEBUG, iomgr, thr->thread_addr, "Removed fd {} from this io thread's epoll fd {}", iodev->fd(),
+                m_epollfd);
     return 0;
 }
 
 bool IOReactorEPoll::put_msg(iomgr_msg* msg) {
     if (!m_msg_iodev) return false;
 
-    LOGTRACEMOD(iomgr, "Put msg of type {} to local thread msg fd = {}, ptr = {}", msg->m_type, m_msg_iodev->fd(),
-                (void*)m_msg_iodev.get());
+    REACTOR_LOG(DEBUG, iomgr, msg->m_dest_thread, "Put msg of type {} to its msg fd = {}, ptr = {}", msg->m_type,
+                m_reactor_num, msg->m_dest_thread, m_msg_iodev->fd(), (void*)m_msg_iodev.get());
+
     m_msg_q.blockingWrite(msg);
     uint64_t temp = 1;
     while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
@@ -184,5 +185,15 @@ void IOReactorEPoll::on_msg_fd_notification() {
         if (!m_msg_q.read(msg)) { break; }
         handle_msg(msg);
     }
+}
+
+void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
+    ++m_io_threads[0]->m_metrics->outstanding_ops;
+    ++m_io_threads[0]->m_metrics->io_count;
+
+    REACTOR_LOG(TRACE, iomgr, , "Processing event on user iodev: {}", iodev->dev_id());
+    iodev->cb(iodev, iodev->cookie, event);
+
+    --m_io_threads[0]->m_metrics->outstanding_ops;
 }
 } // namespace iomgr
