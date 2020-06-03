@@ -25,25 +25,27 @@ class SpdkDriveInterface : public DriveInterface {
 public:
     SpdkDriveInterface(const io_interface_comp_cb_t& cb);
     io_device_ptr open_dev(const std::string& devname, int oflags) override;
-    ssize_t sync_write(io_device_t* iodev, const char* data, uint32_t size, uint64_t offset) override;
-    ssize_t sync_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    ssize_t sync_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset) override;
-    ssize_t sync_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    void async_write(io_device_t* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+    void close_dev(const io_device_ptr& iodev) override;
+    ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
+    ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
+    ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
-    void async_writev(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
+    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                       bool part_of_batch = false) override;
-    void async_read(io_device_t* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
+    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                     bool part_of_batch = false) override;
-    void async_readv(io_device_t* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
+    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
-    void on_io_thread_start(IOReactor* iomgr_ctx) override;
-    void on_io_thread_stopped(IOReactor* iomgr_ctx) override;
-
-    virtual void on_add_iodev_to_reactor(IOReactor* ctx, const io_device_ptr& iodev) override;
-    virtual void on_remove_iodev_from_reactor(IOReactor* ctx, const io_device_ptr& iodev) override;
 
 private:
+    void init_iface_thread_ctx(const io_thread_t& thr) override {}
+    void clear_iface_thread_ctx(const io_thread_t& thr) override {}
+
+    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+
     void do_async_in_iomgr_thread(SpdkIocb* iocb);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
@@ -56,7 +58,7 @@ private:
 };
 
 struct SpdkIocb {
-    SpdkIocb(io_device_t* iodev, bool is_read, uint32_t size, uint64_t offset, void* cookie) :
+    SpdkIocb(IODevice* iodev, bool is_read, uint32_t size, uint64_t offset, void* cookie) :
             iodev(iodev),
             is_read(is_read),
             size(size),
@@ -82,7 +84,7 @@ struct SpdkIocb {
         return fmt::format("is_read={}, size={}, offset={}, iovcnt={}", is_read, size, offset, iovcnt);
     }
 
-    io_device_t* iodev;
+    IODevice* iodev;
     bool is_read;
     uint32_t size;
     uint64_t offset;

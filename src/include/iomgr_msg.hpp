@@ -9,11 +9,13 @@
 #include <folly/Traits.h>
 #include <fds/utils.hpp>
 #include <fds/obj_allocator.hpp>
+#include "reactor.hpp"
 
 namespace iomgr {
 
-struct io_device_t;
-typedef std::shared_ptr< io_device_t > io_device_ptr;
+struct IODevice;
+typedef std::shared_ptr< IODevice > io_device_ptr;
+
 using msg_module_id_t = uint32_t;
 
 struct iomgr_msg_type {
@@ -21,25 +23,50 @@ struct iomgr_msg_type {
     static constexpr int RESCHEDULE = 1;
     static constexpr int DESIGNATE_IO_THREAD = 2;  // Designate this thread as io thread
     static constexpr int RELINQUISH_IO_THREAD = 3; // Unmark yourself from io thread and exit io loop
+#if 0
     static constexpr int ADD_DEVICE = 4;           // Add an iodevice to the io thread
     static constexpr int REMOVE_DEVICE = 5;        // Remove an iodevice to the io thread
-    static constexpr int RUN_METHOD = 6;           // Run the method in your thread
+#endif
+    static constexpr int RUN_METHOD = 6; // Run the method in your thread
 };
 
 struct reschedule_data_t {
-    std::shared_ptr< io_device_t > iodev;
+    std::shared_ptr< IODevice > iodev;
     int event;
 };
 
-typedef std::function< void(void) > run_method_t;
+typedef std::function< void(io_thread_addr_t) > run_method_t;
 using msg_data_t = std::variant< sisl::blob, reschedule_data_t, run_method_t >;
+
+struct _sync_sem_block {
+    std::mutex m_mtx;
+    std::condition_variable m_cv;
+    int32_t m_pending = 0;
+
+    void pending() {
+        std::lock_guard< std::mutex > lck(m_mtx);
+        ++m_pending;
+    }
+
+    int32_t num_pending() {
+        std::lock_guard< std::mutex > lck(m_mtx);
+        return m_pending;
+    }
+
+    void done() {
+        std::lock_guard< std::mutex > lck(m_mtx);
+        --m_pending;
+        m_cv.notify_one();
+    }
+};
 
 struct iomgr_msg {
     friend class sisl::ObjectAllocator< iomgr_msg >;
 
-    int m_type = 0;                    // Type of the message (different meaning for different modules)
-    msg_module_id_t m_dest_module = 0; // Default to internal module
-    bool m_is_sync_msg = false;
+    int m_type = 0;                               // Type of the message (different meaning for different modules)
+    msg_module_id_t m_dest_module = 0;            // Default to internal module
+    io_thread_addr_t m_dest_thread;               // Where this message is headed to
+    std::shared_ptr< _sync_sem_block > m_msg_sem; // Semaphore for sync messages
     msg_data_t m_data;
 
     template < class... Args >
@@ -47,20 +74,20 @@ struct iomgr_msg {
         return sisl::ObjectAllocator< iomgr_msg >::make_object(std::forward< Args >(args)...);
     }
 
-    virtual void free_yourself() { sisl::ObjectAllocator< iomgr_msg >::deallocate(this); }
+    static void free(iomgr_msg* msg) { sisl::ObjectAllocator< iomgr_msg >::deallocate(msg); }
 
     virtual iomgr_msg* clone() {
         auto new_msg = sisl::ObjectAllocator< iomgr_msg >::make_object(m_type, m_dest_module, m_data);
-        new_msg->m_is_sync_msg = m_is_sync_msg;
+        new_msg->m_msg_sem = m_msg_sem;
         return new_msg;
     }
 
-    bool is_sync_msg() const { return m_is_sync_msg; }
+    bool has_sem_block() const { return (m_msg_sem != nullptr); }
     // iomgr_msg &operator=(const iomgr_msg &msg) = default;
     sisl::blob data_buf() const { return std::get< sisl::blob >(m_data); }
     const run_method_t& method_data() const { return std::get< run_method_t >(m_data); }
     const reschedule_data_t& schedule_data() const { return std::get< reschedule_data_t >(m_data); }
-    const std::shared_ptr< io_device_t >& iodevice_data() const { return schedule_data().iodev; }
+    const std::shared_ptr< IODevice >& iodevice_data() const { return schedule_data().iodev; }
     int event() const { return schedule_data().event; }
 
 protected:
@@ -69,23 +96,45 @@ protected:
     iomgr_msg(int type, msg_module_id_t module, const msg_data_t& d) : m_type(type), m_dest_module(module), m_data(d) {}
     iomgr_msg(int type, msg_module_id_t module, void* buf = nullptr, uint32_t size = 0u) :
             iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
-    iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< io_device_t >& iodev, int event) :
+    iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
             iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
     iomgr_msg(int type, msg_module_id_t module, const run_method_t& fn) : iomgr_msg(type, module, msg_data_t(fn)) {}
 
     virtual ~iomgr_msg() = default;
 };
 
+struct sync_iomgr_msg {
+    std::shared_ptr< _sync_sem_block > blk;
+    iomgr_msg* base_msg;
+
+    template < class... Args >
+    sync_iomgr_msg(Args&&... args) {
+        blk = std::make_shared< _sync_sem_block >();
+        base_msg = sisl::ObjectAllocator< iomgr_msg >::make_object(std::forward< Args >(args)...);
+        base_msg->m_msg_sem = blk;
+    }
+
+    void wait() {
+        std::unique_lock< std::mutex > lck(blk->m_mtx);
+        blk->m_cv.wait(lck, [this] { return (blk->m_pending == 0); });
+    }
+};
+
+#if 0
 struct sync_iomgr_msg : public iomgr_msg {
     friend class sisl::ObjectAllocator< sync_iomgr_msg >;
+    std::shared_ptr< _sync_sem_block > blk;
 
-    std::mutex m_mtx;
-    std::condition_variable m_cv;
-    std::atomic< int32_t > m_pending = 0;
+    struct _sync_sem_block {
+        std::mutex m_mtx;
+        std::condition_variable m_cv;
+        int32_t m_pending = 0;
+    };
 
     iomgr_msg* clone() override {
         auto new_msg = sisl::ObjectAllocator< sync_iomgr_msg >::make_object(m_type, m_dest_module, m_data);
         new_msg->m_is_sync_msg = m_is_sync_msg;
+        new_msg->blk = blk;
         return new_msg;
     }
 
@@ -93,25 +142,33 @@ struct sync_iomgr_msg : public iomgr_msg {
 
     template < class... Args >
     static sync_iomgr_msg* create(Args&&... args) {
-        return sisl::ObjectAllocator< sync_iomgr_msg >::make_object(std::forward< Args >(args)...);
+        auto msg = sisl::ObjectAllocator< sync_iomgr_msg >::make_object(std::forward< Args >(args)...);
+        msg->m_is_sync_msg = true;
+        msg->blk = std::make_shared< _sync_msg_block >();
+        return msg;
     }
 
     void free_yourself() override { sisl::ObjectAllocator< sync_iomgr_msg >::deallocate(this); }
 
     void pending() {
-        std::lock_guard< std::mutex > lck(m_mtx);
-        ++m_pending;
+        std::lock_guard< std::mutex > lck(blk->m_mtx);
+        ++blk->m_pending;
     }
 
     void done() {
-        std::lock_guard< std::mutex > lck(m_mtx);
-        --m_pending;
-        m_cv.notify_one();
+        std::lock_guard< std::mutex > lck(blk->m_mtx);
+        --blk->m_pending;
+        blk->m_cv.notify_one();
+    }
+
+    int32_t num_pending() {
+        std::lock_guard< std::mutex > lck(blk->m_mtx);
+        return blk->m_pending;
     }
 
     void wait() {
-        std::unique_lock< std::mutex > lck(m_mtx);
-        m_cv.wait(lck, [this] { return (m_pending == 0); });
+        std::unique_lock< std::mutex > lck(blk->m_mtx);
+        blk->m_cv.wait(lck, [this] { return (blk->m_pending == 0); });
     }
 
 protected:
@@ -124,6 +181,7 @@ protected:
 
     virtual ~sync_iomgr_msg() = default;
 };
+#endif
 } // namespace iomgr
 
 #if 0

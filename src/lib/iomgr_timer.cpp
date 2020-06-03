@@ -1,6 +1,6 @@
 #include "iomgr.hpp"
 #include "iomgr_timer.hpp"
-#include "io_thread.hpp"
+#include "reactor.hpp"
 extern "C" {
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
@@ -20,7 +20,7 @@ namespace iomgr {
     if (!m_is_thread_local) m_list_mutex.unlock();
 
 timer_epoll::timer_epoll(bool is_thread_local) : timer(is_thread_local) {
-    m_common_timer_io_dev = setup_timer_fd();
+    m_common_timer_io_dev = setup_timer_fd(false);
     if (!m_common_timer_io_dev) {
         throw std::system_error(errno, std::generic_category(),
                                 "Unable to create/add timer fd for non-recurring timer");
@@ -40,12 +40,12 @@ void timer_epoll::stop() {
     }
     // Now close the common timer
     if (m_common_timer_io_dev && (m_common_timer_io_dev->fd() != -1)) {
-        iomanager.remove_io_device(m_common_timer_io_dev);
+        if (m_is_thread_local) iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev);
         close(m_common_timer_io_dev->fd());
     }
     // Now iterate over recurring timer list and remove them
     for (auto& iodev : m_recurring_timer_iodevs) {
-        iomanager.remove_io_device(iodev);
+        if (m_is_thread_local) iomanager.generic_interface()->remove_io_device(iodev);
         close(iodev->fd());
     }
     m_stopped = true;
@@ -55,14 +55,14 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
     struct timespec now;
     struct itimerspec tspec;
     timer_handle_t thdl;
-    io_device_t* raw_iodev = nullptr;
+    IODevice* raw_iodev = nullptr;
 
     if (recurring) {
         tspec.it_interval.tv_sec = nanos_after / 1000000000;
         tspec.it_interval.tv_nsec = nanos_after % 1000000000;
 
         // For a recurring timer, create a new timer fd and ask epoll to listen on them
-        auto iodev = setup_timer_fd();
+        auto iodev = setup_timer_fd(true);
         if (!iodev) {
             throw std::system_error(errno, std::generic_category(), "Unable to add timer fd for recurring timer");
         }
@@ -107,9 +107,9 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 
 void timer_epoll::cancel(timer_handle_t thandle) {
     if (thandle == null_timer_handle) return;
-    std::visit(overloaded{[&](std::shared_ptr< io_device_t > iodev) {
+    std::visit(overloaded{[&](std::shared_ptr< IODevice > iodev) {
                               if (iodev->fd() != -1) {
-                                  iomanager.remove_io_device(iodev);
+                                  iomanager.generic_interface()->remove_io_device(iodev);
                                   close(iodev->fd());
                               }
                               PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
@@ -119,7 +119,7 @@ void timer_epoll::cancel(timer_handle_t thandle) {
                thandle);
 }
 
-void timer_epoll::on_timer_fd_notification(io_device_t* iodev) {
+void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
     // Read the timer fd and see the number of completions
     uint64_t exp_count = 0;
     if ((read(iodev->fd(), &exp_count, sizeof(uint64_t)) <= 0) || (exp_count == 0)) {
@@ -130,7 +130,7 @@ void timer_epoll::on_timer_fd_notification(io_device_t* iodev) {
     ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev);
 }
 
-void timer_epoll::on_timer_armed(io_device_t* iodev) {
+void timer_epoll::on_timer_armed(IODevice* iodev) {
     if (iodev == m_common_timer_io_dev.get()) {
         // This is a non-recurring timer, loop in all timers in heap and call which are expired
         LOCK_IF_GLOBAL();
@@ -152,12 +152,13 @@ void timer_epoll::on_timer_armed(io_device_t* iodev) {
     }
 }
 
-std::shared_ptr< io_device_t > timer_epoll::setup_timer_fd() {
+std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring) {
     // Create a timer fd
     auto fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
     if (fd == -1) { throw ::std::system_error(errno, std::generic_category(), "timer_fd creation failed"); }
 
-    LOGINFO("Creating timer fd {} and adding it into fd poll list", fd);
+    LOGINFO("Creating {} {} timer fd {} and adding it into fd poll list",
+            (is_recurring ? "recurring" : "non-recurring"), (m_is_thread_local ? "per-thread" : "global"), fd);
     auto iodev = iomanager.generic_interface()->make_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr,
                                                                m_is_thread_local, nullptr);
     if (iodev == nullptr) {
@@ -209,7 +210,7 @@ void timer_spdk::cancel(timer_handle_t thandle) {
                               PROTECTED_REGION(m_recurring_timer_infos.erase(tinfo));
                           },
                           [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
-                          [&](std::shared_ptr< io_device_t > iodev) { assert(0); }},
+                          [&](std::shared_ptr< IODevice > iodev) { assert(0); }},
                thandle);
 
     auto tinfo = std::get< timer_info* >(thandle);

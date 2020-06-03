@@ -8,44 +8,57 @@
 #include <functional>
 #include <variant>
 #include <memory>
-
-struct spdk_bdev_desc;
+#include <folly/Synchronized.h>
+#include "reactor.hpp"
 
 namespace iomgr {
 typedef std::function< void(int64_t res, uint8_t* cookie) > io_interface_comp_cb_t;
 typedef std::function< void(int nevents) > io_interface_end_of_batch_cb_t;
 
-struct io_device_t;
 class IOReactor;
 
-using ev_callback = std::function< void(io_device_t* iodev, void* cookie, int events) >;
-using backing_dev_t = std::variant< int, spdk_bdev_desc* >;
-using io_device_ptr = std::shared_ptr< io_device_t >;
+using io_interface_id_t = uint32_t;
 
-class IOReactor;
 class IOInterface {
 protected:
 public:
-    explicit IOInterface() {}
-    virtual ~IOInterface() = default;
+    explicit IOInterface();
+    virtual ~IOInterface();
 
-    virtual void on_io_thread_start(IOReactor* ctx) = 0;
-    virtual void on_io_thread_stopped(IOReactor* ctx) = 0;
+    virtual void add_io_device(const io_device_ptr& iodev);
+    virtual void remove_io_device(const io_device_ptr& iodev);
+    virtual void close_dev(const io_device_ptr& iodev);
 
-    virtual void on_add_iodev_to_reactor(IOReactor* ctx, const io_device_ptr& iodev) = 0;
-    virtual void on_remove_iodev_from_reactor(IOReactor* ctx, const io_device_ptr& iodev) = 0;
+    void on_io_thread_start(const io_thread_t& thr);
+    void on_io_thread_stopped(const io_thread_t& thr);
+
+protected:
+    virtual void init_iface_thread_ctx(const io_thread_t& thr) = 0;
+    virtual void clear_iface_thread_ctx(const io_thread_t& thr) = 0;
+    virtual void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+
+    void foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb);
+
+private:
+    void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+
+protected:
+    folly::Synchronized< std::unordered_map< backing_dev_t, io_device_ptr > > m_iodev_map;
+    sisl::sparse_vector< void* > m_thread_local_ctx;
 };
 
 class GenericIOInterface : public IOInterface {
 public:
-    virtual void on_io_thread_start(__attribute__((unused)) IOReactor* ctx) override;
-    virtual void on_io_thread_stopped(__attribute__((unused)) IOReactor* ctx) override;
-    virtual void on_add_iodev_to_reactor(IOReactor* ctx, const io_device_ptr& iodev) override {}
-    virtual void on_remove_iodev_from_reactor(IOReactor* ctx, const io_device_ptr& iodev) override {}
-
     io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                  bool is_per_thread_dev, const ev_callback& cb);
-    void remove_io_device(const io_device_ptr& iodev);
+
+private:
+    void init_iface_thread_ctx(const io_thread_t& thr) override {}
+    void clear_iface_thread_ctx(const io_thread_t& thr) override {}
+    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 };
 } // namespace iomgr
 #endif // IOMGR_INTERFACE_HPP

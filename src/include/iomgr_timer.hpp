@@ -37,10 +37,10 @@ struct compare_timer {
     bool operator()(const timer_info& ti1, const timer_info& ti2) const { return ti1.expiry_time > ti2.expiry_time; }
 };
 
-struct io_device_t;
+struct IODevice;
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< io_device_t >, timer_info* >;
-static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< io_device_t >(nullptr));
+using timer_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, timer_info* >;
+static const timer_handle_t null_timer_handle = timer_handle_t(std::shared_ptr< IODevice >(nullptr));
 
 /**
  * @brief IOManager Timer: Class that provides timer functionality in async manner.
@@ -103,15 +103,15 @@ public:
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
     void stop() override;
 
-    static void on_timer_fd_notification(io_device_t* iodev);
+    static void on_timer_fd_notification(IODevice* iodev);
 
 private:
-    std::shared_ptr< io_device_t > setup_timer_fd();
-    void on_timer_armed(io_device_t* iodev);
+    std::shared_ptr< IODevice > setup_timer_fd(bool is_recurring);
+    void on_timer_armed(IODevice* iodev);
 
 private:
-    std::shared_ptr< io_device_t > m_common_timer_io_dev;                // fd_info for the common timer fd
-    std::set< std::shared_ptr< io_device_t > > m_recurring_timer_iodevs; // fd infos of recurring timers
+    std::shared_ptr< IODevice > m_common_timer_io_dev;                // fd_info for the common timer fd
+    std::set< std::shared_ptr< IODevice > > m_recurring_timer_iodevs; // fd infos of recurring timers
 };
 
 class timer_spdk : public timer {
