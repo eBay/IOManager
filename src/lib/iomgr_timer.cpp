@@ -108,6 +108,8 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 void timer_epoll::cancel(timer_handle_t thandle) {
     if (thandle == null_timer_handle) return;
     std::visit(overloaded{[&](std::shared_ptr< IODevice > iodev) {
+                              LOGINFO("Removing recurring {} timer fd {} device ",
+                                      (m_is_thread_local ? "per-thread" : "global"), iodev->fd());
                               if (iodev->fd() != -1) {
                                   iomanager.generic_interface()->remove_io_device(iodev);
                                   close(iodev->fd());

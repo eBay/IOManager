@@ -356,16 +356,6 @@ std::shared_ptr< uint8_t > IOManager::iobuf_alloc_shared(size_t align, size_t si
 
 void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : free(buf); }
 
-#if 0
-void IOManager::foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb) {
-    m_iodev_map.withRLock([&](auto& iodevs) {
-        for (auto& iodev : iodevs) {
-            iodev_cb(iodev.second);
-        }
-    });
-}
-#endif
-
 void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) {
     m_iface_list.withRLock([&](auto& iface_list) {
         for (auto iface : iface_list) {
