@@ -65,7 +65,6 @@ void IOReactor::init(bool wait_for_iface_register) {
     }
 
     LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread, reactor_id= {}", m_reactor_num);
-    m_is_io_reactor = true;
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
     start_io_thread(iomanager.make_io_thread(this));

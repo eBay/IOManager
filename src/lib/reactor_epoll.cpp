@@ -92,6 +92,15 @@ void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
 
     m_thread_timer->stop();
     if (m_epollfd != -1) { close(m_epollfd); }
+
+    // Drain the message q and drop the message.
+    auto dropped = 0u;
+    iomgr_msg* msg;
+    while (m_msg_q.read(msg)) {
+        if (msg->has_sem_block()) { msg->m_msg_sem->done(); }
+        iomgr_msg::free(msg);
+    }
+    if (dropped) { LOGINFO("Exiting the reactor with {} messages yet to handle, dropping them", dropped); }
 }
 
 void IOReactorEPoll::listen() {
