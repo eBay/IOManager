@@ -38,14 +38,13 @@ protected:
     virtual void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
     virtual void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
 
-    void foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb);
-
 private:
     void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
     void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
 
 protected:
-    folly::Synchronized< std::unordered_map< backing_dev_t, io_device_ptr > > m_iodev_map;
+    std::shared_mutex m_mtx;
+    std::unordered_map< backing_dev_t, io_device_ptr > m_iodev_map;
     sisl::sparse_vector< void* > m_thread_local_ctx;
 };
 

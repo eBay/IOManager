@@ -18,16 +18,20 @@ void IOInterface::add_io_device(const io_device_ptr& iodev) {
     if (iodev->is_global()) {
         // Ensure the iomanager is running or wait until it is so.
         iomanager.ensure_running();
-        iomanager.run_on(
-            thread_regex::all_io,
-            [this, iodev](io_thread_addr_t taddr) {
-                LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
-                            iomanager.this_reactor()->reactor_idx(), taddr);
-                _add_to_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
-            },
-            true /* wait_for_completion */);
 
-        m_iodev_map.wlock()->insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
+        {
+            std::unique_lock lk(m_mtx);
+            iomanager.run_on(
+                thread_regex::all_io,
+                [this, iodev](io_thread_addr_t taddr) {
+                    LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
+                                iomanager.this_reactor()->reactor_idx(), taddr);
+                    _add_to_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
+                },
+                true /* wait_for_completion */);
+
+            m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
+        }
     } else {
         auto r = iomanager.this_reactor();
         if (r) {
@@ -55,6 +59,8 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
     }
 
     if (iodev->is_global()) {
+        std::unique_lock lk(m_mtx);
+
         // Send a sync message to add device to all io threads
         iomanager.run_on(
             thread_regex::all_io,
@@ -63,7 +69,7 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
             },
             true /* wait_for_completion */);
 
-        m_iodev_map.wlock()->erase(iodev->dev);
+        m_iodev_map.erase(iodev->dev);
     } else {
         auto r = iomanager.this_reactor();
         if (r) {
@@ -80,11 +86,18 @@ void IOInterface::on_io_thread_start(const io_thread_t& thr) {
     init_iface_thread_ctx(thr);
 
     // Add all devices part of this interface to this thread
-    foreach_iodevice([&](const io_device_ptr& iodev) { _add_to_thread(iodev, thr); });
+    std::shared_lock lk(m_mtx);
+    for (auto& iodev : m_iodev_map) {
+        _add_to_thread(iodev.second, thr);
+    }
 }
 
 void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
-    foreach_iodevice([&](const io_device_ptr& iodev) { _remove_from_thread(iodev, thr); });
+    std::shared_lock lk(m_mtx);
+    for (auto& iodev : m_iodev_map) {
+        _remove_from_thread(iodev.second, thr);
+    }
+
     clear_iface_thread_ctx(thr);
 }
 
@@ -101,14 +114,6 @@ void IOInterface::_remove_from_thread(const io_device_ptr& iodev, const io_threa
         clear_iodev_thread_ctx(iodev, thr);
         thr->reactor->remove_iodev_from_thread(iodev, thr);
     }
-}
-
-void IOInterface::foreach_iodevice(std::function< void(const io_device_ptr&) > iodev_cb) {
-    m_iodev_map.withRLock([&](auto& iodevs) {
-        for (auto& iodev : iodevs) {
-            iodev_cb(iodev.second);
-        }
-    });
 }
 
 /*************************** GenericIOInterface ******************************/
