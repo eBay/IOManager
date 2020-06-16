@@ -91,10 +91,9 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
     // Initialize any thing specific to specialized reactors
     if (!reactor_specific_init_thread(thr)) { return; }
 
-    m_is_io_reactor.store(true);
-
     // Notify all the interfaces about new thread, which in turn will add all relevant devices to current reactor.
     iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_start(thr); });
+    m_is_io_reactor.store(true);
 
     // Notify the caller registered to iomanager for it.
     iomanager.reactor_started(m_is_iomgr_created);
