@@ -10,4 +10,4 @@ set (IOMGR_SRC
       interfaces/spdk_nvmf_interface.cpp)
 
 add_library (iomgr ${IOMGR_SRC})
-target_link_libraries(iomgr ${CONAN_LIBS} dpdk)
+target_link_libraries(iomgr ${CONAN_LIBS})

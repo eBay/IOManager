@@ -7,6 +7,7 @@
 #include <folly/Exception.h>
 #include <fds/obj_allocator.hpp>
 #include <fds/utils.hpp>
+#include <spdk/module/bdev/aio/bdev_aio.h>
 
 namespace iomgr {
 
@@ -29,6 +30,24 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
     LOGINFOMOD(iomgr, "Device {} opened successfully", devname);
     return iodev;
 }
+
+#if 0
+io_device_ptr SpdkDriveInterface::create_bdev(const std::string& filename, [[maybe_unused]] int oflags) {
+    // First create a bdev out of the file and then add it to the iodevice
+    struct spdk_bdev_desc* desc = NULL;
+    auto rc = spdk_bdev_open_ext(devname.c_str(), true, NULL, NULL, &desc);
+    if (rc != 0) { folly::throwSystemError(fmt::format("Unable to open the device={} error={}", devname, rc)); }
+
+    auto iodev = std::make_shared< IODevice >();
+    iodev->dev = backing_dev_t(desc);
+    iodev->owner_thread = thread_regex::all_io;
+    iodev->pri = 9;
+    iodev->io_interface = this;
+
+    LOGINFOMOD(iomgr, "Device {} opened successfully", devname);
+    return iodev;
+}
+#endif
 
 void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);

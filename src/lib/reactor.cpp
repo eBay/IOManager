@@ -22,7 +22,7 @@ namespace iomgr {
 io_thread::io_thread(IOReactor* reactor) : thread_addr(reactor->reactor_idx()), reactor(reactor) {}
 
 IOReactor::~IOReactor() {
-    if (m_is_io_reactor.load()) { stop(); }
+    if (is_io_reactor()) { stop(); }
 }
 
 void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selector,
@@ -33,7 +33,7 @@ void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selecto
         return;
     }
 
-    if (!m_is_io_reactor) {
+    if (!is_io_reactor()) {
         m_is_iomgr_created = is_iomgr_created;
         m_iodev_selector = iodev_selector;
         m_this_thread_notifier = thread_state_notifier;
@@ -77,7 +77,6 @@ void IOReactor::stop() {
         stop_io_thread(thr);
     }
 
-    m_is_io_reactor.store(false);
     iomanager.reactor_stopped();
 }
 
@@ -92,8 +91,13 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
     if (!reactor_specific_init_thread(thr)) { return; }
 
     // Notify all the interfaces about new thread, which in turn will add all relevant devices to current reactor.
-    iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_start(thr); });
-    m_is_io_reactor.store(true);
+    {
+        auto iface_list = iomanager.iface_rlock();
+        for (auto& iface : *iface_list) {
+            iface->on_io_thread_start(thr);
+        }
+        m_io_thread_count.increment();
+    }
 
     // Notify the caller registered to iomanager for it.
     iomanager.reactor_started(m_is_iomgr_created);
@@ -106,7 +110,15 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
 void IOReactor::stop_io_thread(const io_thread_t& thr) {
     // LOGMSG_ASSERT_EQ(m_io_threads[thr->thread_addr].get(), thr.get(), "Expected io thread {} to present in the list",
     //                 *(thr.get()));
-    iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(thr); });
+    // iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(thr); });
+
+    {
+        auto iface_list = iomanager.iface_rlock();
+        for (auto& iface : *iface_list) {
+            iface->on_io_thread_stopped(thr);
+        }
+        m_io_thread_count.decrement();
+    }
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
     reactor_specific_exit_thread(thr);
@@ -180,7 +192,6 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
             REACTOR_LOG(INFO, base, ,
                         "This reactor is asked to be designated its status as io reactor. Will start running io loop");
             m_keep_running = true;
-            m_is_io_reactor = true;
             break;
 
         case iomgr_msg_type::RUN_METHOD: {

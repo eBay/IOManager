@@ -129,7 +129,7 @@ void IOReactorEPoll::listen() {
             on_msg_fd_notification();
 
             // It is possible for io thread status by the msg processor. Catch at the exit and return
-            if (!m_is_io_reactor) {
+            if (!is_io_reactor()) {
                 REACTOR_LOG(INFO, base, , "listen will exit because this is no longer an io reactor");
                 return;
             }
