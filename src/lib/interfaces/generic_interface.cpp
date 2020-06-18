@@ -20,7 +20,8 @@ void IOInterface::add_io_device(const io_device_ptr& iodev) {
         iomanager.ensure_running();
 
         {
-            std::unique_lock lk(m_mtx);
+            // std::unique_lock lk(m_mtx);
+            auto lock = iomanager.iface_wlock();
             iomanager.run_on(
                 thread_regex::all_io,
                 [this, iodev](io_thread_addr_t taddr) {
@@ -59,7 +60,8 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
     }
 
     if (iodev->is_global()) {
-        std::unique_lock lk(m_mtx);
+        // std::unique_lock lk(m_mtx);
+        auto lock = iomanager.iface_wlock();
 
         // Send a sync message to add device to all io threads
         iomanager.run_on(
@@ -82,18 +84,20 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
     iodev->added_to_listen = false;
 }
 
+/* This method is expected to be called with interface lock held always */
 void IOInterface::on_io_thread_start(const io_thread_t& thr) {
     init_iface_thread_ctx(thr);
 
     // Add all devices part of this interface to this thread
-    std::shared_lock lk(m_mtx);
+    // std::shared_lock lk(m_mtx);
     for (auto& iodev : m_iodev_map) {
         _add_to_thread(iodev.second, thr);
     }
 }
 
+/* This method is expected to be called with interface lock held always */
 void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
-    std::shared_lock lk(m_mtx);
+    // std::shared_lock lk(m_mtx);
     for (auto& iodev : m_iodev_map) {
         _remove_from_thread(iodev.second, thr);
     }

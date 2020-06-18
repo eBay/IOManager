@@ -43,7 +43,7 @@ private:
     void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
 
 protected:
-    std::shared_mutex m_mtx;
+    // std::shared_mutex m_mtx;
     std::unordered_map< backing_dev_t, io_device_ptr > m_iodev_map;
     sisl::sparse_vector< void* > m_thread_local_ctx;
 };

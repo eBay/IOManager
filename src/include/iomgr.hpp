@@ -201,6 +201,9 @@ private:
     void all_reactors(const std::function< void(IOReactor* reactor, bool is_last_thread) >& cb);
     void specific_reactor(int thread_num, const std::function< void(IOReactor* ctx) >& cb);
 
+    [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
+    [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
+
 private:
     size_t m_expected_ifaces = inbuilt_interface_count;           // Total number of interfaces expected
     std::atomic< iomgr_state > m_state = iomgr_state::stopped;    // Current state of IOManager

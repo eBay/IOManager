@@ -7,6 +7,7 @@
 #include <sds_logging/logging.h>
 #include <metrics/metrics.hpp>
 #include <fds/sparse_vector.hpp>
+#include <utility/atomic_counter.hpp>
 #include <chrono>
 
 SDS_LOGGING_DECL(iomgr);
@@ -139,7 +140,7 @@ public:
     virtual ~IOReactor();
     virtual void run(bool is_iomgr_created = false, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& thread_state_notifier = nullptr);
-    bool is_io_reactor() const { return m_is_io_reactor; };
+    bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg);
 
     virtual bool is_tight_loop_reactor() const = 0;
@@ -181,7 +182,7 @@ protected:
     reactor_idx_t m_reactor_num; // Index into global system wide thread list
 
 protected:
-    std::atomic< bool > m_is_io_reactor = false;
+    sisl::atomic_counter< int32_t > m_io_thread_count = 0;
     bool m_is_iomgr_created = false; // Is this thread created by iomanager itself
     bool m_keep_running = true;
 
