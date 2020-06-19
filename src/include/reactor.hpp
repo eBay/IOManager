@@ -111,8 +111,9 @@ struct IODevice {
     void* cookie = nullptr;
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface = nullptr;
-    bool added_to_listen = false; // If device is added to be listened by iomanager
     sisl::sparse_vector< void* > m_thread_local_ctx;
+    bool ready = false;
+    std::atomic< int32_t > thread_op_pending_count = 0; // Number of add/remove of iodev to thread pending
 
     IODevice();
     ~IODevice() = default;
@@ -126,6 +127,9 @@ struct IODevice {
 
     std::string dev_id();
     void clear();
+    /*bool is_initialized() const {
+        return (valid_for_nthreads.load(std::memory_order_acquire) == added_to_threads.load(std::memory_order_acquire));
+    }*/
 };
 using io_device_ptr = std::shared_ptr< IODevice >;
 using iodev_selector_t = std::function< bool(const io_device_ptr&) >;

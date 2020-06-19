@@ -25,8 +25,10 @@ public:
     explicit IOInterface();
     virtual ~IOInterface();
 
-    virtual void add_io_device(const io_device_ptr& iodev);
-    virtual void remove_io_device(const io_device_ptr& iodev);
+    virtual void add_io_device(const io_device_ptr& iodev, bool wait_to_add = true,
+                               const std::function< void(io_device_ptr) >& add_comp_cb = nullptr);
+    virtual void remove_io_device(const io_device_ptr& iodev, bool wait_to_remove = true,
+                                  const std::function< void(io_device_ptr) >& remove_comp_cb = nullptr);
     virtual void close_dev(const io_device_ptr& iodev);
 
     void on_io_thread_start(const io_thread_t& thr);

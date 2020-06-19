@@ -41,7 +41,7 @@ IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const expected_custom_ifaces, size_t const num_threads, bool is_spdk,
                       const thread_state_notifier_t& notifier) {
-    LOGINFO("Starting IOManager");
+    LOGINFO("Starting IOManager with {} threads", num_threads);
     m_is_spdk = is_spdk;
     m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(num_threads);
@@ -86,6 +86,9 @@ void IOManager::stop() {
     // IO threads, which hangs the iomanager stop
     m_yet_to_stop_nreactors.increment();
 
+    // Free up and unregister fds for global timer
+    m_global_timer.reset(nullptr);
+
     // Send all the threads to reliquish its io thread status
     multicast_msg(thread_regex::all_io,
                   iomgr_msg::create(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id));
@@ -103,9 +106,6 @@ void IOManager::stop() {
     for (auto& t : m_iomgr_threads) {
         t.join();
     }
-
-    // Free up and unregister fds for global timer
-    m_global_timer.reset(nullptr);
 
     m_iomgr_threads.clear();
     m_yet_to_start_nreactors.set(0);
@@ -184,8 +184,8 @@ static bool match_regex(thread_regex r, const io_thread_t& thr) {
     }
 }
 
-bool IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
-    bool sent = true;
+int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
+    int sent_to = 0;
     bool cloned = false;
     int64_t min_cnt = INTMAX_MAX;
     io_thread_addr_t min_thread = -1U;
@@ -202,23 +202,24 @@ bool IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                         auto new_msg = msg->clone();
                         reactor->deliver_msg(thr->thread_addr, new_msg);
                         cloned = true;
+                        ++sent_to;
                     }
                 }
                 if (is_last_thread && (min_thread != -1U)) {
-                    sent = send_msg(reactor->addr_to_thread(min_thread), msg);
+                    if (send_msg(reactor->addr_to_thread(min_thread), msg)) ++sent_to;
                 }
             }
         });
-    } while (!sent);
+    } while (sent_to == 0);
 
     if (cloned) { iomgr_msg::free(msg); }
-    return sent;
+    return sent_to;
 }
 
-bool IOManager::multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg) {
-    auto sent = multicast_msg(r, smsg.base_msg);
-    if (sent) smsg.wait();
-    return sent;
+int IOManager::multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg) {
+    auto sent_to = multicast_msg(r, smsg.base_msg);
+    if (sent_to != 0) smsg.wait();
+    return sent_to;
 }
 
 bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
@@ -245,23 +246,27 @@ bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, sync_iomgr_msg& 
     return sent;
 }
 
-void IOManager::run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion) {
+int IOManager::run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion) {
+    int sent_to = 0;
     if (wait_for_completion) {
         sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-        multicast_msg_and_wait(r, smsg);
+        sent_to = multicast_msg_and_wait(r, smsg);
         LOGDEBUGMOD(iomgr, "Run method sync msg completion done"); // TODO: Remove this line
     } else {
-        multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        sent_to = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
     }
+    return sent_to;
 }
 
-void IOManager::run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion) {
+int IOManager::run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion) {
+    bool sent = false;
     if (wait_for_completion) {
         sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-        send_msg_and_wait(thread, smsg);
+        sent = send_msg_and_wait(thread, smsg);
     } else {
-        send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
     }
+    return ((int)sent);
 }
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {

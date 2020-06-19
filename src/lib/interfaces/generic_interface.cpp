@@ -11,27 +11,41 @@ IOInterface::IOInterface() { m_thread_local_ctx.reserve(IOManager::max_io_thread
 IOInterface::~IOInterface() = default;
 
 void IOInterface::close_dev(const io_device_ptr& iodev) {
-    if (iodev->added_to_listen) { remove_io_device(iodev); }
+    if (iodev->ready) { remove_io_device(iodev); }
 }
 
-void IOInterface::add_io_device(const io_device_ptr& iodev) {
+void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
+                                const std::function< void(io_device_ptr) >& add_comp_cb) {
     if (iodev->is_global()) {
         // Ensure the iomanager is running or wait until it is so.
         iomanager.ensure_running();
 
+        int sent_count = 0;
         {
-            // std::unique_lock lk(m_mtx);
             auto lock = iomanager.iface_wlock();
-            iomanager.run_on(
+            sent_count = iomanager.run_on(
                 thread_regex::all_io,
-                [this, iodev](io_thread_addr_t taddr) {
+                [this, iodev, add_comp_cb](io_thread_addr_t taddr) {
                     LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
                                 iomanager.this_reactor()->reactor_idx(), taddr);
                     _add_to_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
-                },
-                true /* wait_for_completion */);
 
+                    // If this thread is the last one to finish adding to reactors, then mark it ready and call the cb
+                    if (iodev->thread_op_pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                        LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
+                        iodev->ready = true;
+                        if (add_comp_cb) add_comp_cb(iodev);
+                    }
+                },
+                wait_to_add);
             m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
+        }
+
+        LOGDEBUGMOD(iomgr, "IODev {} add message sent to {} threads", iodev->dev_id(), sent_count);
+        if (iodev->thread_op_pending_count.fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count) {
+            LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
+            iodev->ready = true;
+            if (add_comp_cb) add_comp_cb(iodev);
         }
     } else {
         auto r = iomanager.this_reactor();
@@ -39,16 +53,18 @@ void IOInterface::add_io_device(const io_device_ptr& iodev) {
             // Select one thread among reactor in possible round robin fashion and add it there.
             auto& thr = r->select_thread();
             _add_to_thread(iodev, thr);
+            iodev->ready = true;
         } else {
             LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
                       "an io thread");
         }
+        if (add_comp_cb) add_comp_cb(iodev);
     }
-    iodev->added_to_listen = true;
 }
 
-void IOInterface::remove_io_device(const io_device_ptr& iodev) {
-    if (!iodev->added_to_listen) {
+void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remove,
+                                   const std::function< void(io_device_ptr) >& remove_comp_cb) {
+    if (!iodev->ready) {
         LOGINFO("Device {} is not added to IOManager. Ignoring this request", iodev->dev_id());
         return;
     }
@@ -60,18 +76,32 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
     }
 
     if (iodev->is_global()) {
-        // std::unique_lock lk(m_mtx);
-        auto lock = iomanager.iface_wlock();
+        int sent_count = 0;
+        {
+            auto lock = iomanager.iface_wlock();
+            sent_count = iomanager.run_on(
+                thread_regex::all_io,
+                [this, iodev, remove_comp_cb](io_thread_addr_t taddr) {
+                    LOGDEBUGMOD(iomgr, "IODev {} is being removed from thread {}.{}", iodev->dev_id(),
+                                iomanager.this_reactor()->reactor_idx(), taddr);
+                    _remove_from_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
+                    if (iodev->thread_op_pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                        LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
+                        iodev->ready = false;
+                        if (remove_comp_cb) remove_comp_cb(iodev);
+                    }
+                },
+                wait_to_remove);
+            m_iodev_map.erase(iodev->dev);
+        }
 
-        // Send a sync message to add device to all io threads
-        iomanager.run_on(
-            thread_regex::all_io,
-            [this, iodev](io_thread_addr_t taddr) {
-                _remove_from_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
-            },
-            true /* wait_for_completion */);
+        LOGDEBUGMOD(iomgr, "IODev {} remove message sent to {} threads", iodev->dev_id(), sent_count);
+        if (iodev->thread_op_pending_count.fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count) {
+            LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
+            iodev->ready = false;
+            if (remove_comp_cb) remove_comp_cb(iodev);
+        }
 
-        m_iodev_map.erase(iodev->dev);
     } else {
         auto r = iomanager.this_reactor();
         if (r) {
@@ -80,8 +110,8 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev) {
             LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
                       "message to an io thread");
         }
+        if (remove_comp_cb) remove_comp_cb(iodev);
     }
-    iodev->added_to_listen = false;
 }
 
 /* This method is expected to be called with interface lock held always */
@@ -89,7 +119,6 @@ void IOInterface::on_io_thread_start(const io_thread_t& thr) {
     init_iface_thread_ctx(thr);
 
     // Add all devices part of this interface to this thread
-    // std::shared_lock lk(m_mtx);
     for (auto& iodev : m_iodev_map) {
         _add_to_thread(iodev.second, thr);
     }
@@ -97,7 +126,6 @@ void IOInterface::on_io_thread_start(const io_thread_t& thr) {
 
 /* This method is expected to be called with interface lock held always */
 void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
-    // std::shared_lock lk(m_mtx);
     for (auto& iodev : m_iodev_map) {
         _remove_from_thread(iodev.second, thr);
     }

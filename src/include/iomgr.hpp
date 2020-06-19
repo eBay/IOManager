@@ -88,8 +88,8 @@ public:
     void add_interface(std::shared_ptr< IOInterface > iface);
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
     void device_reschedule(const io_device_ptr& iodev, int event);
-    void run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion = false);
-    void run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion = false);
+    int run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion = false);
+    int run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion = false);
 
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
@@ -135,8 +135,8 @@ public:
     /******** Message related infra ********/
     bool send_msg(const io_thread_t& thread, iomgr_msg* msg);
     bool send_msg_and_wait(const io_thread_t& thread, sync_iomgr_msg& smsg);
-    bool multicast_msg(thread_regex r, iomgr_msg* msg);
-    bool multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg);
+    int multicast_msg(thread_regex r, iomgr_msg* msg);
+    int multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg);
 
     msg_module_id_t register_msg_module(const msg_handler_t& handler);
     msg_handler_t& get_msg_module(msg_module_id_t id);
