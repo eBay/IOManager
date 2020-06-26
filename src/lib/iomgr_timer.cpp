@@ -213,10 +213,6 @@ void timer_spdk::cancel(timer_handle_t thandle) {
                           [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
                           [&](std::shared_ptr< IODevice > iodev) { assert(0); }},
                thandle);
-
-    auto tinfo = std::get< timer_info* >(thandle);
-    spdk_poller_unregister(&tinfo->poller);
-    delete (tinfo);
 }
 
 void timer_spdk::stop() {

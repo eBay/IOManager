@@ -238,7 +238,7 @@ public:
     void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     void process_completions(IODevice* iodev, void* cookie, int event);
-    size_t get_size(IODevice* iodev, bool is_file) override;
+    size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
 
 private:

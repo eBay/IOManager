@@ -25,6 +25,7 @@ extern "C" {
 #include <functional>
 #include <fds/utils.hpp>
 #include <fds/id_reserver.hpp>
+#include <utility/enum.hpp>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -39,13 +40,7 @@ static constexpr int inbuilt_interface_count = 1;
 
 class DriveInterface;
 
-enum class iomgr_state : uint16_t {
-    stopped = 0,
-    waiting_for_interfaces = 1,
-    waiting_for_threads = 2,
-    running = 3,
-    stopping = 4,
-};
+ENUM(iomgr_state, uint16_t, stopped, interface_init, reactor_init, sys_init, running, stopping)
 
 template < class... Ts >
 struct overloaded : Ts... {
@@ -55,6 +50,7 @@ template < class... Ts >
 overloaded(Ts...)->overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
+using interface_adder_t = std::function< void(void) >;
 
 class IOManager {
 public:
@@ -75,8 +71,8 @@ public:
     ~IOManager();
 
     /********* Start/Stop Control Related Operations ********/
-    void start(size_t num_iface, size_t num_threads = 0, bool is_spdk = false,
-               const thread_state_notifier_t& notifier = nullptr);
+    void start(size_t num_threads, bool is_spdk = false, const thread_state_notifier_t& notifier = nullptr,
+               const interface_adder_t& iface_adder = nullptr);
     void stop();
     void run_io_loop(bool is_tloop_reactor, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& addln_notifier = nullptr) {
@@ -96,13 +92,19 @@ public:
     IOReactor* this_reactor() const;
     DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
+    bool am_i_io_reactor() const {
+        auto r = this_reactor();
+        return r && r->is_io_reactor();
+    }
+
+    bool am_i_tight_loop_reactor() const {
+        auto r = this_reactor();
+        return r && r->is_tight_loop_reactor();
+    }
 
     /********* State Machine Related Operations ********/
-    bool is_io_reactor() { return this_reactor()->is_io_reactor(); }
     bool is_ready() const { return (get_state() == iomgr_state::running); }
-    bool is_interface_registered() const {
-        return ((uint16_t)get_state() > (uint16_t)iomgr_state::waiting_for_interfaces);
-    }
+    // bool is_interface_registered() const { return ((uint16_t)get_state() > (uint16_t)iomgr_state::interface_init); }
     void wait_to_be_ready() {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
         m_cv.wait(lck, [this] { return (get_state() == iomgr_state::running); });
@@ -115,9 +117,16 @@ public:
         }
     }
 
-    void wait_for_interface_registration() {
+    /*void wait_for_interface_registration() {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
         m_cv.wait(lck, [this] { return is_interface_registered(); });
+    }*/
+
+    void wait_for_state(iomgr_state expected_state) {
+        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        if (get_state() != expected_state) {
+            m_cv.wait(lck, [&] { return (get_state() == expected_state); });
+        }
     }
 
     void ensure_running() {
@@ -143,8 +152,6 @@ public:
 
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size);
-    sisl::aligned_unique_ptr< uint8_t > iobuf_alloc_unique(size_t align, size_t size);
-    std::shared_ptr< uint8_t > iobuf_alloc_shared(size_t align, size_t size);
     void iobuf_free(uint8_t* buf);
 
     /******** Timer related Operations ********/
@@ -154,24 +161,27 @@ public:
     }
 
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
-                                         timer_callback_t&& timer_fn) {
-        return schedule_timer(nanos_after, recurring, cookie, true, std::move(timer_fn));
-    }
+                                         timer_callback_t&& timer_fn);
+    timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
+                                         timer_callback_t&& timer_fn);
 
-    timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie,
+    /*timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn) {
         return schedule_timer(nanos_after, recurring, cookie, false, std::move(timer_fn));
-    }
+    }*/
 
     void cancel_thread_timer(timer_handle_t thdl) { cancel_timer(thdl, true); }
     void cancel_global_timer(timer_handle_t thdl) { cancel_timer(thdl, false); }
+
+    /*timer_handle_t schedule_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
+                                  timer_callback_t&& timer_fn);
 
     timer_handle_t schedule_timer(uint64_t nanos_after, bool recurring, void* cookie, bool is_per_thread,
                                   timer_callback_t&& timer_fn) {
         return (is_per_thread
                     ? this_reactor()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn))
                     : m_global_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn)));
-    }
+    } */
 
     void cancel_timer(timer_handle_t thdl, bool is_per_thread) {
         return (is_per_thread ? this_reactor()->m_thread_timer->cancel(thdl) : m_global_timer->cancel(thdl));
@@ -205,7 +215,7 @@ private:
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
 
 private:
-    size_t m_expected_ifaces = inbuilt_interface_count;           // Total number of interfaces expected
+    // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
     std::atomic< iomgr_state > m_state = iomgr_state::stopped;    // Current state of IOManager
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors = 0; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
@@ -234,6 +244,11 @@ private:
     msg_module_id_t m_internal_msg_module_id;
     thread_state_notifier_t m_common_thread_state_notifier = nullptr;
     sisl::IDReserver m_thread_idx_reserver;
+};
+
+struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
+    uint8_t* aligned_alloc(size_t align, size_t sz) override;
+    void aligned_free(uint8_t* b) override;
 };
 
 #define iomanager iomgr::IOManager::instance()

@@ -18,7 +18,7 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
                                 const std::function< void(io_device_ptr) >& add_comp_cb) {
     if (iodev->is_global()) {
         // Ensure the iomanager is running or wait until it is so.
-        iomanager.ensure_running();
+        // iomanager.ensure_running();
 
         int sent_count = 0;
         {

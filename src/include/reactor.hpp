@@ -92,7 +92,16 @@ struct io_thread {
 };
 using io_thread_t = std::shared_ptr< io_thread >;
 
-enum class thread_regex { any_io, all_io, any_tloop, all_tloop, any_iloop, all_iloop };
+enum class thread_regex {
+    any_io,
+    all_io,
+    any_tloop,
+    all_tloop,
+    any_iloop,
+    all_iloop,
+    all_iomgr_created_io,
+    all_user_created_io,
+};
 using thread_specifier = std::variant< thread_regex, io_thread_t >;
 
 /****************** Device related *************************/
@@ -104,6 +113,7 @@ using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 
 struct IODevice {
     ev_callback cb = nullptr;
+    std::string devname;
     backing_dev_t dev;
     int ev = 0;
     thread_specifier owner_thread = thread_regex::all_io;
@@ -148,6 +158,7 @@ public:
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg);
 
     virtual bool is_tight_loop_reactor() const = 0;
+    virtual bool is_iomgr_created() const { return m_is_iomgr_created; }
     virtual const io_thread_t& iothread_self() const;
     virtual reactor_idx_t reactor_idx() const { return m_reactor_num; }
     virtual void listen() = 0;
@@ -162,13 +173,14 @@ public:
     const std::vector< io_thread_t >& io_threads() const { return m_io_threads; }
 
     virtual bool put_msg(iomgr_msg* msg) = 0;
-    virtual void init(bool wait_till_ready);
+    virtual void init();
     virtual void stop();
     virtual bool is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const;
     virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
     virtual void handle_msg(iomgr_msg* msg);
     virtual const char* loop_type() const = 0;
     const io_thread_t& select_thread();
+    void start_interface(IOInterface* iface);
 
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;

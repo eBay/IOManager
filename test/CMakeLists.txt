@@ -10,7 +10,7 @@ find_package (Threads REQUIRED)
 
 include_directories(BEFORE .. ../src/include)
 add_executable(test_iomgr test_iomgr.cpp)
-target_link_libraries(test_iomgr iomgr)
+target_link_libraries(test_iomgr ${CONAN_LIBS})
 
 # CTest is a testing tool that can be used to test your project.
 # enable_testing()
