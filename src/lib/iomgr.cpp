@@ -327,29 +327,6 @@ bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, sync_iomgr_msg& 
     return sent;
 }
 
-int IOManager::run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion) {
-    int sent_to = 0;
-    if (wait_for_completion) {
-        sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-        sent_to = multicast_msg_and_wait(r, smsg);
-        LOGDEBUGMOD(iomgr, "Run method sync msg completion done"); // TODO: Remove this line
-    } else {
-        sent_to = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-    }
-    return sent_to;
-}
-
-int IOManager::run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion) {
-    bool sent = false;
-    if (wait_for_completion) {
-        sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-        sent = send_msg_and_wait(thread, smsg);
-    } else {
-        sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-    }
-    return ((int)sent);
-}
-
 timer_handle_t IOManager::schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                                 timer_callback_t&& timer_fn) {
     return this_reactor()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
@@ -376,7 +353,7 @@ uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
 
 void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : std::free(buf); }
 
-void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) {
+void IOManager::foreach_interface(const auto& iface_cb) {
     m_iface_list.withRLock([&](auto& iface_list) {
         for (auto iface : iface_list) {
             iface_cb(iface.get());
@@ -385,12 +362,12 @@ void IOManager::foreach_interface(std::function< void(IOInterface*) > iface_cb) 
 }
 
 IOReactor* IOManager::this_reactor() const { return m_reactors.get()->get(); }
-void IOManager::all_reactors(const std::function< void(IOReactor* reactor, bool is_last_thread) >& cb) {
+void IOManager::all_reactors(const auto& cb) {
     m_reactors.access_all_threads(
-        [&](std::unique_ptr< IOReactor >* preactor, bool is_last_thread) { cb(preactor->get(), is_last_thread); });
+        [&cb](std::unique_ptr< IOReactor >* preactor, bool is_last_thread) { cb(preactor->get(), is_last_thread); });
 }
 
-void IOManager::specific_reactor(int thread_num, const std::function< void(IOReactor* reactor) >& cb) {
+void IOManager::specific_reactor(int thread_num, const auto& cb) {
     m_reactors.access_specific_thread(thread_num,
                                       [&cb](std::unique_ptr< IOReactor >* preactor) { cb(preactor->get()); });
 }

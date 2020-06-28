@@ -115,7 +115,7 @@ struct SpdkIocb {
     int iovcnt = 0;
     std::unique_ptr< iovec[] > addln_iovs; // In case we are wait queued, need to copy iovs here
     std::optional< int > result;
-    bool different_owner = false;
+    io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
 };

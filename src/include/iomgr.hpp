@@ -84,8 +84,29 @@ public:
     void add_interface(std::shared_ptr< IOInterface > iface);
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
     void device_reschedule(const io_device_ptr& iodev, int event);
-    int run_on(thread_regex r, const run_method_t& fn, bool wait_for_completion = false);
-    int run_on(const io_thread_t& thread, const run_method_t& fn, bool wait_for_completion = false);
+
+    int run_on(thread_regex r, const auto& fn, bool wait_for_completion = false) {
+        int sent_to = 0;
+        if (wait_for_completion) {
+            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent_to = multicast_msg_and_wait(r, smsg);
+            LOGDEBUGMOD(iomgr, "Run method sync msg completion done"); // TODO: Remove this line
+        } else {
+            sent_to = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        }
+        return sent_to;
+    }
+
+    int run_on(const io_thread_t& thread, const auto& fn, bool wait_for_completion = false) {
+        bool sent = false;
+        if (wait_for_completion) {
+            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent = send_msg_and_wait(thread, smsg);
+        } else {
+            sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        }
+        return ((int)sent);
+    }
 
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
@@ -188,7 +209,7 @@ public:
     }
 
 private:
-    void foreach_interface(std::function< void(IOInterface*) > iface_cb);
+    void foreach_interface(const auto& iface_cb);
 
     void _run_io_loop(bool is_iomgr_created, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
@@ -208,8 +229,8 @@ private:
         m_cv.notify_all();
     }
 
-    void all_reactors(const std::function< void(IOReactor* reactor, bool is_last_thread) >& cb);
-    void specific_reactor(int thread_num, const std::function< void(IOReactor* ctx) >& cb);
+    void all_reactors(const auto& cb);
+    void specific_reactor(int thread_num, const auto& cb);
 
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }

@@ -89,6 +89,7 @@ struct io_thread {
 
     spdk_thread* spdk_thread_impl() const { return std::get< spdk_thread* >(thread_impl); }
     io_thread(IOReactor* reactor);
+    io_thread() = default;
 };
 using io_thread_t = std::shared_ptr< io_thread >;
 

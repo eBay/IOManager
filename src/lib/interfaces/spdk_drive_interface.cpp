@@ -13,6 +13,8 @@ extern "C" {
 }
 namespace iomgr {
 
+static io_thread_t _non_io_thread = std::make_shared< io_thread >();
+
 SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
     // m_my_msg_modid = iomanager.register_msg_module(bind_this(handle_msg, 1));
     m_my_msg_modid = iomanager.register_msg_module([this](iomgr_msg* msg) { handle_msg(msg); });
@@ -116,8 +118,8 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
     auto& cb = iocb->comp_cb ? iocb->comp_cb : iocb->iface->get_completion_cb();
     cb(*iocb->result, (uint8_t*)iocb->user_cookie);
 
-    if (!iocb->different_owner) {
-        // If the iocb has been issued by different thread, let that thread complete the iocb
+    if (iocb->owner_thread == nullptr) {
+        // If the iocb has been issued by this thread, we need to complete io, else that different thread will do so
         complete_io(iocb);
     }
 }
@@ -259,6 +261,7 @@ ssize_t SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int io
 
 ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
     iocb->io_wait_entry.cb_fn = submit_io;
+    iocb->owner_thread = _non_io_thread;
     iocb->copy_iovs();
     iocb->comp_cb = [&](int64_t res, uint8_t* cookie) {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
@@ -281,12 +284,12 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
 
 void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
-    auto reply_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
+    iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
-    iocb->comp_cb = [this, iocb, reply_thread](int64_t res, uint8_t* cookie) {
+    iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
         iocb->result = res;
         auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
-        iomanager.send_msg(reply_thread, reply);
+        iomanager.send_msg(iocb->owner_thread, reply);
     };
 
     auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
@@ -297,7 +300,6 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     switch (msg->m_type) {
     case spdk_msg_type::QUEUE_IO: {
         auto iocb = (SpdkIocb*)msg->data_buf().bytes;
-        iocb->different_owner = true;
         submit_io((void*)iocb);
         break;
     }
