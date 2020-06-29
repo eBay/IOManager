@@ -13,6 +13,7 @@
 #include <fstream>
 #include <sys/epoll.h>
 #include <fmt/format.h>
+#include <filesystem>
 
 #ifdef __linux__
 #include <linux/fs.h>
@@ -57,6 +58,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags
     iodev->owner_thread = thread_regex::all_io;
     iodev->pri = 9;
     iodev->io_interface = this;
+    iodev->devname = devname;
 
     LOGINFO("Device {} opened with flags={} successfully, fd={}", devname, oflags, fd);
     return iodev;
@@ -397,11 +399,12 @@ ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uin
     return read_size;
 }
 
-size_t AioDriveInterface::get_size(IODevice* iodev, bool is_file) {
-    if (is_file) {
+size_t AioDriveInterface::get_size(IODevice* iodev) {
+    if (std::filesystem::is_regular_file(std::filesystem::status(iodev->devname))) {
         struct stat buf;
         if (fstat(iodev->fd(), &buf) >= 0) { return buf.st_size; }
     } else {
+        assert(std::filesystem::is_block_file(std::filesystem::status(iodev->devname)));
         size_t devsize;
         if (ioctl(iodev->fd(), BLKGETSIZE64, &devsize) >= 0) { return devsize; }
     }

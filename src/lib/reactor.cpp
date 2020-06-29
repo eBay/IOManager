@@ -41,7 +41,7 @@ void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selecto
         m_reactor_num = sisl::ThreadLocalContext::my_thread_num();
         REACTOR_LOG(INFO, base, , "IOReactor started and assigned reactor id {}", m_reactor_num);
 
-        init(true /* wait_for_iface_register */);
+        init();
         if (m_keep_running) { REACTOR_LOG(INFO, base, , "IOReactor is ready to go to listen loop"); }
     }
 
@@ -50,7 +50,8 @@ void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selecto
     }
 }
 
-void IOReactor::init(bool wait_for_iface_register) {
+void IOReactor::init() {
+#if 0
     if (!iomanager.is_interface_registered()) {
         if (!wait_for_iface_register) {
             REACTOR_LOG(INFO, base, , "iomgr interfaces are not registered yet and not requested to wait, ",
@@ -63,11 +64,18 @@ void IOReactor::init(bool wait_for_iface_register) {
         REACTOR_LOG(TRACE, iomgr, ,
                     "All interfaces are registered to IOManager, can proceed with this thread initialization");
     }
+#endif
 
     LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread, reactor_id= {}", m_reactor_num);
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
     start_io_thread(iomanager.make_io_thread(this));
+
+    // Notify the caller registered to iomanager for it.
+    iomanager.reactor_started(m_is_iomgr_created);
+
+    // For IOMgr created reactors, we want the notification to go only after all reactors are started and system init.
+    if (!m_is_iomgr_created) { iomanager.this_reactor()->notify_thread_state(true); }
 }
 
 void IOReactor::stop() {
@@ -76,8 +84,10 @@ void IOReactor::stop() {
     for (auto thr : m_io_threads) {
         stop_io_thread(thr);
     }
-
     iomanager.reactor_stopped();
+
+    // Notify the caller registered to iomanager for it
+    notify_thread_state(false /* started */);
 }
 
 void IOReactor::start_io_thread(const io_thread_t& thr) {
@@ -98,13 +108,6 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
         }
         m_io_thread_count.increment();
     }
-
-    // Notify the caller registered to iomanager for it.
-    iomanager.reactor_started(m_is_iomgr_created);
-
-    // NOTE: This should be the last one before return, because notification might call stop() and thus need
-    // to have clean exit in those cases.
-    notify_thread_state(true /* started */);
 }
 
 void IOReactor::stop_io_thread(const io_thread_t& thr) {
@@ -125,9 +128,6 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
 
     thr->m_metrics = nullptr;
     m_io_threads[thr->thread_addr] = nullptr;
-
-    // Notify the caller registered to iomanager for it
-    notify_thread_state(false /* started */);
 }
 
 int IOReactor::add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
@@ -140,6 +140,13 @@ int IOReactor::remove_iodev_from_thread(const io_device_ptr& iodev, const io_thr
     auto ret = _remove_iodev_from_thread(iodev, thr);
     if (ret == 0) { --m_n_iodevices; }
     return ret;
+}
+
+// This method assumes that interface lock is already held by the caller or message passer
+void IOReactor::start_interface(IOInterface* iface) {
+    for (auto& thr : m_io_threads) {
+        iface->on_io_thread_start(thr);
+    }
 }
 
 const io_thread_t& IOReactor::iothread_self() const { return m_io_threads[0]; };

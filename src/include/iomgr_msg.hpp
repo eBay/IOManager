@@ -98,7 +98,7 @@ protected:
             iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
     iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
             iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
-    iomgr_msg(int type, msg_module_id_t module, const run_method_t& fn) : iomgr_msg(type, module, msg_data_t(fn)) {}
+    iomgr_msg(int type, msg_module_id_t module, const auto& fn) : iomgr_msg(type, module, msg_data_t(fn)) {}
 
     virtual ~iomgr_msg() = default;
 };

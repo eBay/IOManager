@@ -24,6 +24,7 @@ private:
     bool put_msg(iomgr_msg* msg) override;
 
     bool is_tight_loop_reactor() const override { return false; };
+    bool is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const override;
 
 private:
     int m_epollfd = -1;                                        // Parent epoll context for this thread

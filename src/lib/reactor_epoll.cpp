@@ -205,4 +205,8 @@ void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
 
     --m_io_threads[0]->m_metrics->outstanding_ops;
 }
+
+bool IOReactorEPoll::is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const {
+    return (!iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev, thread));
+}
 } // namespace iomgr

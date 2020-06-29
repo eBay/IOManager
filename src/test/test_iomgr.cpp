@@ -1,20 +1,17 @@
 /*
  * Copyright 2018 by eBay Corporation
  */
-#if 0
 #include <aio_drive_interface.hpp>
 #include <spdk_drive_interface.hpp>
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#endif
 
 extern "C" {
 #include <spdk/env.h>
 #include <spdk/thread.h>
 }
 #include <stdexcept>
-#if 0
 using log_level = spdlog::level::level_enum;
 
 THREAD_BUFFER_INIT;
@@ -33,8 +30,10 @@ static constexpr size_t each_thread_size = total_dev_size / nthreads;
 // static constexpr size_t max_ios_per_thread = 10000000;
 static constexpr size_t max_ios_per_thread = 10000;
 
+#define g_aio_iface iomanager.default_drive_interface()
+
 // std::shared_ptr< AioDriveInterface > g_aio_iface;
-std::shared_ptr< SpdkDriveInterface > g_aio_iface;
+// std::shared_ptr< SpdkDriveInterface > g_aio_iface;
 io_device_ptr g_iodev = nullptr;
 
 std::atomic< size_t > next_available_range = 0;
@@ -117,11 +116,11 @@ static void do_verify() {
     std::array< size_t, io_size / sizeof(size_t) > rbuf;
     for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
         g_aio_iface->sync_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset);
-        for (auto i = 0; i < rbuf.size(); ++i) {
+        for (auto i = 0u; i < rbuf.size(); ++i) {
             assert(rbuf[i] == offset);
         }
     }
-    LOGINFO("Verification succesful for this thread");
+    LOGINFO("Verification successful for this thread");
     runner.job_done();
 }
 
@@ -169,48 +168,25 @@ static void on_io_thread_state_change(bool started) {
         LOGINFO("This thread is about to exit");
     }
 }
-#endif
-
-void tmp_setup_env() {
-    struct spdk_env_opts opts;
-    spdk_env_opts_init(&opts);
-    opts.name = "hs_code";
-    opts.shm_id = -1;
-    //    opts.mem_size = 512;
-
-    int rc = spdk_env_init(&opts);
-    if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
-
-    // spdk_unaffinitize_thread();
-
-    // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
-    // LOGINFO("Before thread lib init rte_errno = {}", rte_errno);
-    // rte_errno = 0;
-    rc = spdk_thread_lib_init(NULL, 0);
-    // LOGINFO("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
-    if (rc != 0) { throw std::runtime_error("SPDK Thread Lib Init failed"); }
-}
 
 int main(int argc, char* argv[]) {
-#if 0
     SDS_OPTIONS_LOAD(argc, argv, logging);
     sds_logging::SetLogger("example");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
-#endif
 
-    tmp_setup_env();
-
-#if 0
     // Start the IOManager
     // iomanager.start(1, nthreads, false, on_io_thread_state_change);
-    iomanager.start(1, nthreads, false, on_io_thread_state_change);
+    iomanager.start(nthreads, true, on_io_thread_state_change);
+    iomanager.default_drive_interface()->attach_completion_cb(on_io_completion);
 
+#if 0
     // Create and add AIO Drive Interface to the IOManager, Also open the device
     // NOTE: We do not need to add the fd to the device, since either Read or Write IO will always be triggered
     // by the application on AIO fd (unlike network or other fd, where we will be pinged asynchornously)
     // g_aio_iface = std::make_shared< AioDriveInterface >(on_io_completion);
     g_aio_iface = std::make_shared< SpdkDriveInterface >(on_io_completion);
     iomanager.add_interface(std::dynamic_pointer_cast< IOInterface >(g_aio_iface));
+#endif
 
     // Wait for IO to finish on all threads.
     runner.wait();
@@ -219,7 +195,6 @@ int main(int argc, char* argv[]) {
 
     // Stop the IOManage for clean exit
     iomanager.stop();
-#endif
 
     return 0;
 }
