@@ -174,6 +174,7 @@ public:
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size);
     void iobuf_free(uint8_t* buf);
+    uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
 
     /******** Timer related Operations ********/
     int64_t idle_timeout_interval_usec() const { return -1; };
@@ -270,6 +271,7 @@ private:
 struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz) override;
     void aligned_free(uint8_t* b) override;
+    uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
 };
 
 #define iomanager iomgr::IOManager::instance()
