@@ -345,14 +345,6 @@ timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recur
         */
 }
 
-uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
-    size = sisl::round_up(size, align);
-    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
-                     : (uint8_t*)std::aligned_alloc(align, size);
-}
-
-void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : std::free(buf); }
-
 void IOManager::foreach_interface(const auto& iface_cb) {
     m_iface_list.withRLock([&](auto& iface_list) {
         for (auto iface : iface_list) {
@@ -423,11 +415,27 @@ void IODevice::clear() {
     m_thread_local_ctx.clear();
 }
 
+uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
+    size = sisl::round_up(size, align);
+    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
+                     : (uint8_t*)std::aligned_alloc(align, size);
+}
+
+void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : std::free(buf); }
+
+uint8_t* IOManager::iobuf_realloc(uint8_t* buf, size_t align, size_t new_size) {
+    return m_is_spdk ? (uint8_t*)spdk_realloc((void*)buf, new_size, align) : sisl_aligned_realloc(buf, align, new_size);
+}
+
 /* SpkdAllocator Implementaion */
 uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
     return (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 }
 
 void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) { return spdk_free((void*)b); }
+
+uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
+    return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+}
 
 } // namespace iomgr
