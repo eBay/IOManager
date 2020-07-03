@@ -43,6 +43,11 @@ IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
+    if (get_state() == iomgr_state::running) {
+        LOGWARN("WARNING: IOManager is asked to start, but it is already in running state. Ignoring the start request");
+        return;
+    }
+
     LOGINFO("Starting IOManager with {} threads", num_threads);
     m_is_spdk = is_spdk;
     // m_expected_ifaces += expected_custom_ifaces;
