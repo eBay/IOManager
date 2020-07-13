@@ -25,7 +25,7 @@ IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
 
-void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selector,
+void IOReactor::run(int worker_slot_num, const iodev_selector_t& iodev_selector,
                     const thread_state_notifier_t& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
@@ -34,7 +34,7 @@ void IOReactor::run(bool is_iomgr_created, const iodev_selector_t& iodev_selecto
     }
 
     if (!is_io_reactor()) {
-        m_is_iomgr_created = is_iomgr_created;
+        m_worker_slot_num = worker_slot_num;
         m_iodev_selector = iodev_selector;
         m_this_thread_notifier = thread_state_notifier;
 
@@ -72,10 +72,10 @@ void IOReactor::init() {
     start_io_thread(iomanager.make_io_thread(this));
 
     // Notify the caller registered to iomanager for it.
-    iomanager.reactor_started(m_is_iomgr_created);
+    iomanager.reactor_started(shared_from_this());
 
     // For IOMgr created reactors, we want the notification to go only after all reactors are started and system init.
-    if (!m_is_iomgr_created) { iomanager.this_reactor()->notify_thread_state(true); }
+    if (!is_worker()) { iomanager.this_reactor()->notify_thread_state(true); }
 }
 
 void IOReactor::stop() {

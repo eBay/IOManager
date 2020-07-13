@@ -160,7 +160,7 @@ static void on_io_thread_state_change(bool started) {
         LOGINFO("New thread created, start workload on that thread");
         auto hdl1 = iomanager.schedule_thread_timer(1000000, false, (void*)_id.fetch_add(1), on_timeout);
         auto hdl2 = iomanager.schedule_thread_timer(1000001, false, (void*)_id.fetch_add(1), on_timeout);
-        iomanager.cancel_thread_timer(hdl2);
+        iomanager.cancel_timer(hdl2);
         auto hdl3 = iomanager.schedule_thread_timer(50000000, true, (void*)_id.fetch_add(1), on_timeout);
         init_workload();
         issue_preload();

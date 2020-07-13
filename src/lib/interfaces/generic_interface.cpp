@@ -16,15 +16,24 @@ void IOInterface::close_dev(const io_device_ptr& iodev) {
 
 void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
                                 const std::function< void(io_device_ptr) >& add_comp_cb) {
-    if (iodev->is_global()) {
-        // Ensure the iomanager is running or wait until it is so.
-        // iomanager.ensure_running();
-
+    if (iodev->is_my_thread_scope()) {
+        auto r = iomanager.this_reactor();
+        if (r) {
+            // Select one thread among reactor in possible round robin fashion and add it there.
+            auto& thr = r->select_thread();
+            _add_to_thread(iodev, thr);
+            iodev->ready = true;
+        } else {
+            LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
+                      "an io thread");
+        }
+        if (add_comp_cb) add_comp_cb(iodev);
+    } else {
         int sent_count = 0;
         {
             auto lock = iomanager.iface_wlock();
             sent_count = iomanager.run_on(
-                thread_regex::all_io,
+                iodev->global_scope(),
                 [this, iodev, add_comp_cb](io_thread_addr_t taddr) {
                     LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
                                 iomanager.this_reactor()->reactor_idx(), taddr);
@@ -47,18 +56,6 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
             iodev->ready = true;
             if (add_comp_cb) add_comp_cb(iodev);
         }
-    } else {
-        auto r = iomanager.this_reactor();
-        if (r) {
-            // Select one thread among reactor in possible round robin fashion and add it there.
-            auto& thr = r->select_thread();
-            _add_to_thread(iodev, thr);
-            iodev->ready = true;
-        } else {
-            LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
-                      "an io thread");
-        }
-        if (add_comp_cb) add_comp_cb(iodev);
     }
 }
 
@@ -75,12 +72,21 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remo
         return;
     }
 
-    if (iodev->is_global()) {
+    if (iodev->is_my_thread_scope()) {
+        auto r = iomanager.this_reactor();
+        if (r) {
+            _remove_from_thread(iodev, std::get< io_thread_t >(iodev->thread_scope));
+        } else {
+            LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
+                      "message to an io thread");
+        }
+        if (remove_comp_cb) remove_comp_cb(iodev);
+    } else {
         int sent_count = 0;
         {
             auto lock = iomanager.iface_wlock();
             sent_count = iomanager.run_on(
-                thread_regex::all_io,
+                iodev->global_scope(),
                 [this, iodev, remove_comp_cb](io_thread_addr_t taddr) {
                     LOGDEBUGMOD(iomgr, "IODev {} is being removed from thread {}.{}", iodev->dev_id(),
                                 iomanager.this_reactor()->reactor_idx(), taddr);
@@ -101,16 +107,6 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remo
             iodev->ready = false;
             if (remove_comp_cb) remove_comp_cb(iodev);
         }
-
-    } else {
-        auto r = iomanager.this_reactor();
-        if (r) {
-            _remove_from_thread(iodev, std::get< io_thread_t >(iodev->owner_thread));
-        } else {
-            LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
-                      "message to an io thread");
-        }
-        if (remove_comp_cb) remove_comp_cb(iodev);
     }
 }
 
@@ -137,7 +133,7 @@ void IOInterface::_add_to_thread(const io_device_ptr& iodev, const io_thread_t& 
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
         thr->reactor->add_iodev_to_thread(iodev, thr);
         init_iodev_thread_ctx(iodev, thr);
-        if (!iodev->is_global()) iodev->owner_thread = thr;
+        if (!iodev->is_global()) iodev->thread_scope = thr;
     }
 }
 
@@ -151,14 +147,15 @@ void IOInterface::_remove_from_thread(const io_device_ptr& iodev, const io_threa
 /*************************** GenericIOInterface ******************************/
 io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                                  bool is_per_thread_dev, const ev_callback& cb) {
+    return make_io_device(dev, events_interested, pri, cookie, iomanager.iothread_self(), std::move(cb));
+}
+
+io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+                                                 thread_specifier scope, const ev_callback& cb) {
     auto iodev = std::make_shared< IODevice >();
     iodev->dev = dev;
     iodev->cb = cb;
-    if (is_per_thread_dev) {
-        iodev->owner_thread = iomanager.iothread_self();
-    } else {
-        iodev->owner_thread = thread_regex::all_io;
-    }
+    iodev->thread_scope = scope;
     iodev->pri = pri;
     iodev->cookie = cookie;
     iodev->ev = events_interested;

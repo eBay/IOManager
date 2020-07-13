@@ -55,7 +55,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags
 
     auto iodev = std::make_shared< IODevice >();
     iodev->dev = backing_dev_t(fd);
-    iodev->owner_thread = thread_regex::all_io;
+    iodev->thread_scope = thread_regex::all_io;
     iodev->pri = 9;
     iodev->io_interface = this;
     iodev->devname = devname;

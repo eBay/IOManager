@@ -23,13 +23,15 @@ SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_com
 static void bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev* bdev, void* event_ctx) {}
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
-    if (iomanager.am_i_tight_loop_reactor()) {
+    if (iomanager.am_i_worker_reactor()) {
+        DEBUG_ASSERT(iomanager.am_i_tight_loop_reactor(), "Opening SPDK drive on non-spdk system");
         return _open_dev(devname);
     } else {
         // Issue the opendev on any one of the tight loop reactor
         io_device_ptr ret;
         iomanager.run_on(
-            thread_regex::any_tloop, [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
+            thread_regex::least_busy_worker,
+            [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
             true /* wait_for_completion */);
         return ret;
     }
@@ -56,7 +58,7 @@ io_device_ptr SpdkDriveInterface::_open_dev(const std::string& devname) {
 
     auto iodev = std::make_shared< IODevice >();
     iodev->dev = backing_dev_t(desc);
-    iodev->owner_thread = thread_regex::all_io;
+    iodev->thread_scope = thread_regex::all_worker;
     iodev->pri = 9;
     iodev->io_interface = this;
     iodev->devname = bdevname;
@@ -270,7 +272,7 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
     };
 
     auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
-    iomanager.multicast_msg(thread_regex::any_tloop, msg);
+    iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
 
     {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
@@ -293,7 +295,7 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
     };
 
     auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
-    iomanager.multicast_msg(thread_regex::any_tloop, msg);
+    iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
 }
 
 void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
