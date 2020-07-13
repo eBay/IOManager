@@ -51,6 +51,7 @@ overloaded(Ts...)->overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
+using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
 
 class IOManager {
 public:
@@ -76,7 +77,7 @@ public:
     void stop();
     void run_io_loop(bool is_tloop_reactor, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& addln_notifier = nullptr) {
-        _run_io_loop(false, is_tloop_reactor, iodev_selector, addln_notifier);
+        _run_io_loop(-1, is_tloop_reactor, iodev_selector, addln_notifier);
     }
     void stop_io_loop();
 
@@ -84,6 +85,15 @@ public:
     void add_interface(std::shared_ptr< IOInterface > iface);
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
     void device_reschedule(const io_device_ptr& iodev, int event);
+
+    /*template < class... Args >
+    int run_on(thread_specifier s, Args&&... args) {
+        if (std::holds_alternative< thread_regex >(s)) {
+            run_on(std::get< thread_regex >(s), std::forward< Args >(args)...);
+        } else {
+            run_on(std::get< io_thread_t >(s), std::forward< Args >(args)...);
+        }
+    }*/
 
     int run_on(thread_regex r, const auto& fn, bool wait_for_completion = false) {
         int sent_to = 0;
@@ -111,6 +121,7 @@ public:
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
     IOReactor* this_reactor() const;
+
     DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     bool am_i_io_reactor() const {
@@ -121,6 +132,11 @@ public:
     bool am_i_tight_loop_reactor() const {
         auto r = this_reactor();
         return r && r->is_tight_loop_reactor();
+    }
+
+    bool am_i_worker_reactor() const {
+        auto r = this_reactor();
+        return r && r->is_worker();
     }
 
     /********* State Machine Related Operations ********/
@@ -187,49 +203,26 @@ public:
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
                                          timer_callback_t&& timer_fn);
 
-    /*timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie,
-                                         timer_callback_t&& timer_fn) {
-        return schedule_timer(nanos_after, recurring, cookie, false, std::move(timer_fn));
-    }*/
-
-    void cancel_thread_timer(timer_handle_t thdl) { cancel_timer(thdl, true); }
-    void cancel_global_timer(timer_handle_t thdl) { cancel_timer(thdl, false); }
-
-    /*timer_handle_t schedule_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                  timer_callback_t&& timer_fn);
-
-    timer_handle_t schedule_timer(uint64_t nanos_after, bool recurring, void* cookie, bool is_per_thread,
-                                  timer_callback_t&& timer_fn) {
-        return (is_per_thread
-                    ? this_reactor()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn))
-                    : m_global_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn)));
-    } */
-
-    void cancel_timer(timer_handle_t thdl, bool is_per_thread) {
-        return (is_per_thread ? this_reactor()->m_thread_timer->cancel(thdl) : m_global_timer->cancel(thdl));
-    }
+    void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
 
 private:
     void foreach_interface(const auto& iface_cb);
 
-    void _run_io_loop(bool is_iomgr_created, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
+    void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
 
-    void reactor_started(bool is_iomgr_created); // Notification that iomanager thread is ready to serve
-    void reactor_stopped();                      // Notification that IO thread is reliquished
+    void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
+    void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
     void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
     iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
     void set_state_and_notify(iomgr_state state) {
         set_state(state);
-        // Setup the global timer if we are moving to running state
-        if (state == iomgr_state::running) {
-            m_global_timer = std::make_unique< timer_epoll >(false /* is_per_thread */);
-        }
         m_cv.notify_all();
     }
 
+    void _pick_reactors(thread_regex r, const auto& cb);
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
 
@@ -250,15 +243,17 @@ private:
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
-    sisl::ActiveOnlyThreadBuffer< std::unique_ptr< IOReactor > > m_reactors;
+    sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 
     std::mutex m_cv_mtx;
     std::condition_variable m_cv;
     std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
-    std::vector< std::thread > m_iomgr_threads;
+    sisl::sparse_vector< reactor_info_t > m_worker_reactors;
+
     bool m_is_spdk = false;
-    std::unique_ptr< timer > m_global_timer;
+    std::unique_ptr< timer_epoll > m_global_user_timer;
+    std::unique_ptr< timer > m_global_worker_timer;
 
     std::mutex m_msg_hdlrs_mtx;
     std::array< msg_handler_t, max_msg_modules > m_msg_handlers;

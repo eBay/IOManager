@@ -25,9 +25,7 @@ bool IOReactorSPDK::reactor_specific_init_thread(const io_thread_t& thr) {
     spdk_set_thread(sthread);
     thr->thread_impl = sthread;
 
-    m_thread_timer = std::make_unique< timer_spdk >(true /* is_per_thread */);
-
-    // TODO: Add per thread timer object.
+    m_thread_timer = std::make_unique< timer_spdk >(iothread_self());
     return true;
 }
 

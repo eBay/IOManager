@@ -68,7 +68,7 @@ bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
     if (add_iodev_to_thread(m_msg_iodev, thr) == -1) { goto error; }
 
     // Create a per thread timer
-    m_thread_timer = std::make_unique< timer_epoll >(true /* is_per_thread */);
+    m_thread_timer = std::make_unique< timer_epoll >(iothread_self());
     return true;
 
 error:

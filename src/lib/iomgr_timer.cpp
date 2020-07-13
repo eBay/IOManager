@@ -1,6 +1,8 @@
 #include "iomgr.hpp"
 #include "iomgr_timer.hpp"
 #include "reactor.hpp"
+#include <unordered_set>
+
 extern "C" {
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
@@ -9,17 +11,17 @@ extern "C" {
 namespace iomgr {
 
 #define PROTECTED_REGION(instructions)                                                                                 \
-    if (!m_is_thread_local) m_list_mutex.lock();                                                                       \
+    if (!is_thread_local()) m_list_mutex.lock();                                                                       \
     instructions;                                                                                                      \
-    if (!m_is_thread_local) m_list_mutex.unlock();
+    if (!is_thread_local()) m_list_mutex.unlock();
 
 #define LOCK_IF_GLOBAL()                                                                                               \
-    if (!m_is_thread_local) m_list_mutex.lock();
+    if (!is_thread_local()) m_list_mutex.lock();
 
 #define UNLOCK_IF_GLOBAL()                                                                                             \
-    if (!m_is_thread_local) m_list_mutex.unlock();
+    if (!is_thread_local()) m_list_mutex.unlock();
 
-timer_epoll::timer_epoll(bool is_thread_local) : timer(is_thread_local) {
+timer_epoll::timer_epoll(const thread_specifier& scope) : timer(scope) {
     m_common_timer_io_dev = setup_timer_fd(false);
     if (!m_common_timer_io_dev) {
         throw std::system_error(errno, std::generic_category(),
@@ -71,7 +73,7 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
         iodev->tinfo = std::make_unique< timer_info >(nanos_after, cookie, std::move(timer_fn), this);
 
         PROTECTED_REGION(m_recurring_timer_iodevs.insert(iodev)); // Add to list of recurring timer fds
-        thdl = timer_handle_t(iodev);
+        thdl = timer_handle_t(this, iodev);
     } else {
         tspec.it_interval.tv_sec = 0;
         tspec.it_interval.tv_nsec = 0;
@@ -83,7 +85,7 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 
         // Create a timer_info and add it to the heap.
         PROTECTED_REGION(auto heap_hdl = m_timer_list.emplace(nanos_after, cookie, std::move(timer_fn), this));
-        thdl = timer_handle_t(heap_hdl);
+        thdl = timer_handle_t(this, heap_hdl);
     }
 
     if (clock_gettime(CLOCK_MONOTONIC, &now) == -1) {
@@ -106,18 +108,21 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 
 void timer_epoll::cancel(timer_handle_t thandle) {
     if (thandle == null_timer_handle) return;
-    std::visit(overloaded{[&](std::shared_ptr< IODevice > iodev) {
-                              LOGINFO("Removing recurring {} timer fd {} device ",
-                                      (m_is_thread_local ? "per-thread" : "global"), iodev->fd());
-                              if (iodev->fd() != -1) {
-                                  iomanager.generic_interface()->remove_io_device(
-                                      iodev, false, [](io_device_ptr iodev) { close(iodev->fd()); });
-                              }
-                              PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
-                          },
-                          [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
-                          [&](timer_info* tinfo) { assert(0); }},
-               thandle);
+    std::visit(overloaded{
+                   [&](std::shared_ptr< IODevice > iodev) {
+                       LOGINFO("Removing recurring {} timer fd {} device ",
+                               (is_thread_local() ? "per-thread" : "global"), iodev->fd());
+                       if (iodev->fd() != -1) {
+                           iomanager.generic_interface()->remove_io_device(
+                               iodev, false, [](io_device_ptr iodev) { close(iodev->fd()); });
+                       }
+                       PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
+                   },
+                   [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
+                   [&](spdk_timer_info* stinfo) { assert(0); },
+                   [&](spdk_thread_timer_info* stt_info) { assert(0); },
+               },
+               thandle.second);
 }
 
 void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
@@ -159,9 +164,9 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring) {
     if (fd == -1) { throw ::std::system_error(errno, std::generic_category(), "timer_fd creation failed"); }
 
     LOGINFO("Creating {} {} timer fd {} and adding it into fd poll list",
-            (is_recurring ? "recurring" : "non-recurring"), (m_is_thread_local ? "per-thread" : "global"), fd);
-    auto iodev = iomanager.generic_interface()->make_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr,
-                                                               m_is_thread_local, nullptr);
+            (is_recurring ? "recurring" : "non-recurring"), (is_thread_local() ? "per-thread" : "global"), fd);
+    auto iodev =
+        iomanager.generic_interface()->make_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr, m_scope, nullptr);
     if (iodev == nullptr) {
         close(fd);
         return nullptr;
@@ -170,62 +175,127 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring) {
 }
 
 /************************ Timer Spdk *****************************/
-timer_spdk::timer_spdk(bool is_per_thread) : timer(is_per_thread) {
-    m_base_poller = spdk_poller_register(
-        [](void* context) -> int {
-            timer_spdk* this_timer = (timer_spdk*)context;
-            this_timer->check_and_call_expired_timers();
-            return 0;
-        },
-        (void*)this, non_recurring_check_freq_usec);
-}
-
-timer_spdk::~timer_spdk() {}
+timer_spdk::timer_spdk(const thread_specifier& scope) : timer(scope) {}
+timer_spdk::~timer_spdk() = default;
 
 timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) {
     timer_handle_t thdl;
-    if (recurring) {
-        auto tinfo = new timer_info(nanos_after, cookie, std::move(timer_fn), this);
-        tinfo->poller = spdk_poller_register(
-            [](void* context) -> int {
-                timer_info* tinfo = (timer_info*)context;
-                tinfo->cb(tinfo->context);
-                return 0;
-            },
-            (void*)tinfo, nanos_after * 1000);
-        PROTECTED_REGION(m_recurring_timer_infos.insert(tinfo)); // Add to list of recurring timer fds
-        thdl = timer_handle_t(tinfo);
+
+    // Multi-thread timer only for global recurring timers, rest are single threaded timers
+    auto stinfo =
+        new spdk_timer_info(nanos_after, cookie, std::move(timer_fn), this, (recurring && !is_thread_local()));
+
+    if (recurring && !is_thread_local()) {
+        // In case of global timer, create multi-threaded version for recurring and let the timer callback choose to
+        // run only one. For non-recurring, pick a random io thread and from that point onwards its single threaded
+        iomanager.run_on(
+            thread_regex::all_worker,
+            [&](io_thread_addr_t taddr) { stinfo->add_thread_timer_info(register_spdk_thread_timer(stinfo)); }, true);
+        thdl = timer_handle_t(this, stinfo);
+        PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
     } else {
-        // Create a timer_info and add it to the heap.
-        PROTECTED_REGION(auto heap_hdl =
-                             m_timer_list.emplace(nanos_after, cookie, std::move(timer_fn), this, m_base_poller));
-        thdl = timer_handle_t(heap_hdl);
+        spdk_thread_timer_info* stt_info = nullptr;
+        if (is_thread_local()) {
+            stt_info = register_spdk_thread_timer(stinfo);
+        } else {
+            iomanager.run_on(
+                thread_regex::random_worker,
+                [&](io_thread_addr_t taddr) { stt_info = register_spdk_thread_timer(stinfo); }, true);
+        }
+        thdl = timer_handle_t(this, stt_info);
+        PROTECTED_REGION(m_active_thread_timer_infos.insert(stt_info));
     }
+
     return thdl;
 }
 
-void timer_spdk::cancel(timer_handle_t thandle) {
-    std::visit(overloaded{[&](timer_info* tinfo) {
-                              spdk_poller_unregister(&tinfo->poller);
-                              delete (tinfo);
-                              PROTECTED_REGION(m_recurring_timer_infos.erase(tinfo));
+void timer_spdk::cancel(timer_handle_t thdl) {
+    std::visit(overloaded{[&](spdk_timer_info* stinfo) {
+                              cancel_global_timer(stinfo);
+                              PROTECTED_REGION(m_active_global_timer_infos.erase(stinfo));
                           },
-                          [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
+                          [&](spdk_thread_timer_info* stt_info) {
+                              cancel_thread_timer(stt_info);
+                              PROTECTED_REGION(m_active_thread_timer_infos.erase(stt_info));
+                          },
+                          [&](timer_heap_t::handle_type heap_hdl) { assert(0); },
                           [&](std::shared_ptr< IODevice > iodev) { assert(0); }},
-               thandle);
+               thdl.second);
 }
 
 void timer_spdk::stop() {
-    for (auto it = m_recurring_timer_infos.begin(); it != m_recurring_timer_infos.end();) {
-        auto tinfo = *it;
-        spdk_poller_unregister(&tinfo->poller);
-        delete (tinfo);
-        it = m_recurring_timer_infos.erase(it);
+    for (auto it = m_active_global_timer_infos.begin(); it != m_active_global_timer_infos.end();) {
+        cancel_global_timer(*it);
+        it = m_active_global_timer_infos.erase(it);
     }
 
-    spdk_poller_unregister(&m_base_poller);
+    for (auto it = m_active_thread_timer_infos.begin(); it != m_active_thread_timer_infos.end();) {
+        cancel_thread_timer(*it);
+        it = m_active_thread_timer_infos.erase(it);
+    }
 }
 
+void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* stt_info) {
+    if (is_thread_local()) {
+        unregister_spdk_thread_timer(stt_info);
+    } else {
+        iomanager.run_on(
+            stt_info->owner_thread, [&](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, true);
+    }
+    delete stt_info;
+}
+
+void timer_spdk::cancel_global_timer(spdk_timer_info* stinfo) {
+    iomanager.run_on(
+        thread_regex::all_worker,
+        [&](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stinfo->get_thread_timer_info()); }, true);
+    delete stinfo;
+}
+
+spdk_thread_timer_info* timer_spdk::register_spdk_thread_timer(spdk_timer_info* stinfo) {
+    auto stt_info = new spdk_thread_timer_info(stinfo);
+    stt_info->poller = spdk_poller_register(
+        [](void* context) -> int {
+            auto stt_info = (spdk_thread_timer_info*)context;
+            stt_info->call_timer_cb_once();
+            return 0;
+        },
+        (void*)stinfo, stinfo->timeout_nanos * 1000);
+
+    return stt_info;
+}
+
+void timer_spdk::unregister_spdk_thread_timer(spdk_thread_timer_info* stinfo) {
+    spdk_poller_unregister(&stinfo->poller);
+}
+
+void spdk_timer_info::add_thread_timer_info(spdk_thread_timer_info* stt_info) {
+    std::unique_lock l(timer_list_mtx);
+    thread_timer_list[iomanager.this_reactor()->reactor_idx()] = stt_info;
+}
+
+spdk_thread_timer_info* spdk_timer_info::get_thread_timer_info() {
+    std::unique_lock l(timer_list_mtx);
+    return thread_timer_list[iomanager.this_reactor()->reactor_idx()];
+}
+
+spdk_thread_timer_info::spdk_thread_timer_info(spdk_timer_info* sti) {
+    tinfo = sti;
+    owner_thread = iomanager.iothread_self();
+}
+
+bool spdk_thread_timer_info::call_timer_cb_once() {
+    bool ret = false;
+    if (!tinfo->is_multi_threaded ||
+        tinfo->cur_term_num.compare_exchange_strong(term_num, term_num + 1, std::memory_order_acq_rel)) {
+        tinfo->cb(tinfo->context);
+        ret = true;
+    }
+    ++term_num;
+    return ret;
+}
+
+#if 0
 void timer_spdk::check_and_call_expired_timers() {
     LOCK_IF_GLOBAL();
     while (!m_timer_list.empty()) {
@@ -242,5 +312,6 @@ void timer_spdk::check_and_call_expired_timers() {
     }
     UNLOCK_IF_GLOBAL();
 }
+#endif
 
 } // namespace iomgr

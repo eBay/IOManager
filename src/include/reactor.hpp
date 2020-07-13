@@ -8,6 +8,7 @@
 #include <metrics/metrics.hpp>
 #include <fds/sparse_vector.hpp>
 #include <utility/atomic_counter.hpp>
+#include <utility/enum.hpp>
 #include <chrono>
 
 SDS_LOGGING_DECL(iomgr);
@@ -93,16 +94,29 @@ struct io_thread {
 };
 using io_thread_t = std::shared_ptr< io_thread >;
 
+#if 0
 enum class thread_regex {
-    any_io,
-    all_io,
-    any_tloop,
-    all_tloop,
-    any_iloop,
-    all_iloop,
-    all_iomgr_created_io,
-    all_user_created_io,
+    least_busy_io,         // Represents least busy io (could be iloop or tloop thread)
+    all_io,                // Represents all io threads
+    least_busy_tloop,      // Represents one tight loop thread which least busy at present
+    all_tloop,             // Represents all tight loop threads
+    least_busy_iloop,      // Represents one interrupt/epoll loop thread which least busy at present
+    all_iloop,             // Represents all interrupt loop threads
+    all_iomgr_created_io,  // Represents all IO threads created by iomgr (could be iloop or tloop)
+    all_user_created_io,   // Represents all user created threads (could be iloop or tloop)
+    rand_iomgr_created_io, // Represents any one random IO thread created by iomgr
 };
+#endif
+
+ENUM(thread_regex, uint8_t,
+     all_io,            // Represents all io threads
+     least_busy_io,     // Represents least busy io thread (including worker + user)
+     all_worker,        // Represents all worker io threads (either tloop or iloop)
+     least_busy_worker, // Represents least busy worker io thread
+     random_worker,     // Represents a random worker io thread
+     all_user,          // Represents all user created io threads
+     least_busy_user    // Represents least busy user io thread
+);
 using thread_specifier = std::variant< thread_regex, io_thread_t >;
 
 /****************** Device related *************************/
@@ -117,7 +131,7 @@ struct IODevice {
     std::string devname;
     backing_dev_t dev;
     int ev = 0;
-    thread_specifier owner_thread = thread_regex::all_io;
+    thread_specifier thread_scope = thread_regex::all_io;
     int pri = 1;
     void* cookie = nullptr;
     std::unique_ptr< timer_info > tinfo;
@@ -132,9 +146,15 @@ struct IODevice {
     int fd() { return std::get< int >(dev); }
     spdk_bdev_desc* bdev_desc();
     spdk_bdev* bdev();
-    bool is_spdk_dev() const { return std::holds_alternative< spdk_bdev_desc* >(dev); }
-    bool is_global() const;
+    bool is_spdk_dev() const {
+        return (std::holds_alternative< spdk_bdev_desc* >(dev) || std::holds_alternative< spdk_nvmf_qpair* >(dev));
+    }
     spdk_nvmf_qpair* nvmf_qp() const;
+
+    bool is_global() const;
+    bool is_my_thread_scope() const;
+    const io_thread_t& per_thread_scope() const { return std::get< io_thread_t >(thread_scope); }
+    thread_regex global_scope() { return std::get< thread_regex >(thread_scope); }
 
     std::string dev_id();
     void clear();
@@ -148,18 +168,22 @@ using iodev_selector_t = std::function< bool(const io_device_ptr&) >;
 /****************** Reactor related ************************/
 struct iomgr_msg;
 struct timer;
-class IOReactor {
+class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
 
 public:
     virtual ~IOReactor();
-    virtual void run(bool is_iomgr_created = false, const iodev_selector_t& iodev_selector = nullptr,
+    virtual void run(int iomgr_slot_num, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg);
 
     virtual bool is_tight_loop_reactor() const = 0;
-    virtual bool is_iomgr_created() const { return m_is_iomgr_created; }
+    virtual bool is_worker() const { return (m_worker_slot_num != -1); }
+    virtual int iomgr_slot_num() const {
+        assert(is_worker());
+        return m_worker_slot_num;
+    }
     virtual const io_thread_t& iothread_self() const;
     virtual reactor_idx_t reactor_idx() const { return m_reactor_num; }
     virtual void listen() = 0;
@@ -200,7 +224,7 @@ protected:
 
 protected:
     sisl::atomic_counter< int32_t > m_io_thread_count = 0;
-    bool m_is_iomgr_created = false; // Is this thread created by iomanager itself
+    int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
 
     std::unique_ptr< timer > m_thread_timer;

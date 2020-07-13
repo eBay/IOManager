@@ -53,6 +53,8 @@ protected:
 class GenericIOInterface : public IOInterface {
 public:
     io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+                                 thread_specifier scope, const ev_callback& cb);
+    io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                  bool is_per_thread_dev, const ev_callback& cb);
 
 private:
