@@ -26,14 +26,15 @@ public:
     virtual ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
     virtual ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
     virtual void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                             bool part_of_batch = false) = 0;
+                            bool part_of_batch = false) = 0;
     virtual void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                              uint8_t* cookie, bool part_of_batch = false) = 0;
+                            uint8_t* cookie, bool part_of_batch = false) = 0;
     virtual void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                             bool part_of_batch = false) = 0;
     virtual void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                             uint8_t* cookie, bool part_of_batch = false) = 0;
-    virtual void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie, bool part_of_batch = false);
+                            uint8_t* cookie, bool part_of_batch = false) = 0;
+    virtual void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
+                            bool part_of_batch = false) = 0;
     virtual size_t get_size(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
 };
