@@ -12,7 +12,8 @@ extern "C" {
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>
-#include "spdk/bdev.h"
+#include <spdk/bdev.h>
+#include <spdk/env_dpdk.h>
 #include <rte_errno.h>
 }
 
@@ -93,7 +94,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
 
-    if (is_spdk) {
+    if (is_spdk && !m_is_spdk_inited_externally) {
         LOGINFO("Initializing bdev subsystem");
         iomanager.run_on(
             thread_regex::least_busy_worker,
@@ -118,24 +119,27 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 }
 
 void IOManager::start_spdk() {
-    struct spdk_env_opts opts;
-    spdk_env_opts_init(&opts);
-    opts.name = "hs_code";
-    opts.shm_id = -1;
-    //    opts.mem_size = 512;
+    // Initialize if spdk has still not been initialized
+    m_is_spdk_inited_externally = !spdk_env_dpdk_external_init();
+    if (!m_is_spdk_inited_externally) {
+        struct spdk_env_opts opts;
+        spdk_env_opts_init(&opts);
+        opts.name = "hs_code";
+        opts.shm_id = -1;
+        //    opts.mem_size = 512;
 
-    int rc = spdk_env_init(&opts);
-    if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
+        int rc = spdk_env_init(&opts);
+        if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
 
-    spdk_unaffinitize_thread();
+        spdk_unaffinitize_thread();
 
-    // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
-    rc = spdk_thread_lib_init(NULL, 0);
-    if (rc != 0) {
-        LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
-        throw std::runtime_error("SPDK Thread Lib Init failed");
+        // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
+        rc = spdk_thread_lib_init(NULL, 0);
+        if (rc != 0) {
+            LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
+            throw std::runtime_error("SPDK Thread Lib Init failed");
+        }
     }
-
     // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned allocations
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
 }

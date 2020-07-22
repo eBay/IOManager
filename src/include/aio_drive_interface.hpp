@@ -213,6 +213,8 @@ public:
                            HistogramBucketsType(ExponentialOfTwoBuckets));
         register_me_to_farm();
     }
+
+    ~AioDriveInterfaceMetrics() { deregister_me_from_farm(); }
 };
 
 class AioDriveInterface : public DriveInterface {
