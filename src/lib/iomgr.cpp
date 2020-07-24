@@ -2,12 +2,19 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
-#include "iomgr_impl.hpp"
+#include "iomgr.hpp"
 
 extern "C" {
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/types.h>
+
+#include <spdk/log.h>
+#include <spdk/env.h>
+#include <spdk/thread.h>
+#include <spdk/bdev.h>
+#include <spdk/env_dpdk.h>
+#include <rte_errno.h>
 }
 
 #include <sds_logging/logging.h>
@@ -19,452 +26,424 @@ extern "C" {
 #include <thread>
 #include <vector>
 
-#include "io_thread.hpp"
+#include "include/aio_drive_interface.hpp"
+#include "include/spdk_drive_interface.hpp"
+#include "include/iomgr.hpp"
+#include "include/reactor_epoll.hpp"
+#include "include/reactor_spdk.hpp"
+#include <utility/thread_factory.hpp>
+#include <fds/obj_allocator.hpp>
+#include <experimental/random>
 
 namespace iomgr {
 
-thread_local int ioMgrImpl::epollfd = 0;
-thread_local int ioMgrImpl::epollfd_pri[iomgr::MAX_PRI] = {};
-
-struct fd_info {
-    enum { READ = 0, WRITE };
-
-    ev_callback cb;
-    int fd;
-    std::atomic< int > is_running[2];
-    int ev;
-    bool is_global;
-    int pri;
-    std::vector< int > ev_fd;
-    std::vector< int > event;
-    void* cookie;
-};
-
-ioMgrImpl::ioMgrImpl(size_t const num_ep, size_t const num_threads) :
-        threads(num_threads), num_ep(num_ep), running(false) {
-    ready = num_ep == 0;
-    global_fd.reserve(num_ep * 10);
-    LOGDEBUG("Starting ready: {}", ready);
+IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
+    m_iface_list.wlock()->reserve(inbuilt_interface_count + 5);
 }
 
-ioMgrImpl::~ioMgrImpl() {
-    // free the memory of fd_info
-    for (auto i = 0u; i < ep_list.size(); ++i) {
-        delete ep_list[i];
-    }
-    for (auto& x : fd_info_map) {
-        delete x.second;
-    }
-}
+IOManager::~IOManager() = default;
 
-//
-// Stop iomgr procedure
-// 1. set thread running to false;
-// 2. trigger the event to wake up iothread and call shutdown_local of each ep
-// 3. join all the i/o threads;
-//
-void ioMgrImpl::stop() {
-    stop_running();
-    uint64_t temp = 1;
-
-    /* take one global fd and schedule the event on all threads */
-    for (auto& x : global_fd[0]->ev_fd) {
-        //
-        // Currently one event will wake up all the i/o threads.
-        // When change back to EPOLLEXCLUSIVE, we need to send multiple times to
-        // wake up all the threads to stop them from running;
-        //
-        while (0 > write(x, &temp, sizeof(uint64_t)) && errno == EAGAIN)
-            ;
-    }
-
-    void* res;
-    for (auto& x : threads) {
-        int s = pthread_join(x.tid, &res);
-        if (s != 0) {
-            // handle error here;
-            LOGERROR("{}, error joining with thread {}; returned value: {}", __FUNCTION__, x.id, (char*)res);
-            return;
-        }
-        LOGDEBUG("{}, successfully joined with thread: {}", __FUNCTION__, x.id);
-    }
-
-    for (auto& x : global_fd) {
-        if (close(x->fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x->fd);
-            return;
-        }
-        LOGDEBUG("close epoll fd: {}", x->fd);
-    }
-
-    for (auto& x : threads) {
-        if (!x.inited) {
-            continue;
-        }
-        if (close(x.ev_fd)) {
-            LOGERROR("Failed to close epoll fd: {}", x.ev_fd);
-            return;
-        }
-        LOGDEBUG("close epoll fd: {}", x.ev_fd);
-    }
-
-    for (auto i = 0u; i < ep_list.size(); ++i) {
-        ep_list[i]->stop();
-    }
-}
-
-//
-// Stop the running threads;
-//
-void ioMgrImpl::stop_running() { running.store(false, std::memory_order_relaxed); }
-
-void ioMgrImpl::start() {
-    running.store(true, std::memory_order_relaxed);
-    for (auto i = 0u; threads.size() > i; ++i) {
-        auto& t_info = threads[i];
-        auto iomgr_copy = new std::shared_ptr< ioMgrImpl >(shared_from_this());
-        int rc = pthread_create(&(t_info.tid), nullptr, iothread, iomgr_copy);
-        assert(!rc);
-        if (rc) {
-            LOGCRITICAL("Failed to create thread: {}", rc);
-            continue;
-        }
-        LOGTRACEMOD(iomgr, "Created thread...", i);
-        t_info.id = i;
-        t_info.inited = false;
-    }
-}
-
-void ioMgrImpl::local_init() {
-    {
-        std::unique_lock< std::mutex > lck(cv_mtx);
-        cv.wait(lck, [this] { return ready; });
-    }
-    if (!is_running())
+void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
+                      const interface_adder_t& iface_adder) {
+    if (get_state() == iomgr_state::running) {
+        LOGWARN("WARNING: IOManager is asked to start, but it is already in running state. Ignoring the start request");
         return;
-    LOGTRACEMOD(iomgr, "Initializing locals.");
-
-    struct epoll_event ev;
-    pthread_t t = pthread_self();
-    thread_info* info = get_tid_info(t);
-
-    epollfd = epoll_create1(0);
-    LOGTRACEMOD(iomgr, "EPoll created: {}", epollfd);
-
-    if (epollfd < 1) {
-        assert(0);
-        LOGERROR("epoll_ctl failed: {}", strerror(errno));
     }
 
-    for (auto i = 0ul; i < MAX_PRI; ++i) {
-        epollfd_pri[i] = epoll_create1(0);
-        ev.events = EPOLLET | EPOLLIN | EPOLLOUT;
-        ev.data.fd = epollfd_pri[i];
-        if (epoll_ctl(epollfd, EPOLL_CTL_ADD, epollfd_pri[i], &ev) == -1) {
-            assert(0);
-            LOGERROR("epoll_ctl failed: {}", strerror(errno));
-        }
-    }
+    LOGINFO("Starting IOManager with {} threads", num_threads);
+    m_is_spdk = is_spdk;
+    // m_expected_ifaces += expected_custom_ifaces;
+    m_yet_to_start_nreactors.set(num_threads);
+    m_worker_reactors.reserve(num_threads * 2); // Have preallocate for iomgr slots
 
-    // add event fd to each thread
-    info->ev_fd = epollfd;
-    info->epollfd_pri = epollfd_pri;
-    info->inited = true;
+    // One common module and other internal handler
+    m_common_thread_state_notifier = notifier;
+    m_internal_msg_module_id = register_msg_module([this](iomgr_msg* msg) { this_reactor()->handle_msg(msg); });
 
-    for (auto i = 0u; i < global_fd.size(); ++i) {
-        /* We cannot use EPOLLEXCLUSIVE flag here. otherwise
-         * some events can be missed.
-         */
-        ev.events = EPOLLET | global_fd[i]->ev;
-        ev.data.ptr = global_fd[i];
-        if (epoll_ctl(epollfd_pri[global_fd[i]->pri], EPOLL_CTL_ADD, global_fd[i]->fd, &ev) == -1) {
-            assert(0);
-            LOGERROR("epoll_ctl failed: {}", strerror(errno));
-        }
+    // Start the SPDK
+    if (is_spdk) { start_spdk(); }
 
-        add_local_fd(
-            global_fd[i]->ev_fd[info->id],
-            [this](int fd, void* cookie, uint32_t events) { process_evfd(fd, cookie, events); }, EPOLLIN, 1,
-            global_fd[i]);
+    // Create all in-built interfaces here
+    set_state(iomgr_state::interface_init);
+    m_default_general_iface = std::make_shared< GenericIOInterface >();
+    add_interface(m_default_general_iface);
 
-        LOGDEBUGMOD(iomgr, "registered global fds");
-    }
-
-    assert(num_ep == ep_list.size());
-    /* initialize all the thread local variables in end point */
-    for (auto i = 0u; i < num_ep; ++i) {
-        ep_list[i]->init_local();
-    }
-}
-
-bool ioMgrImpl::is_running() const { return running.load(std::memory_order_relaxed); }
-
-void ioMgrImpl::add_ep(class EndPoint* ep) {
-    ep_list.push_back(ep);
-    if (ep_list.size() == num_ep) {
-        /* allow threads to run */
-        std::lock_guard< std::mutex > lck(cv_mtx);
-        ready = true;
-    }
-    cv.notify_all();
-    LOGTRACEMOD(iomgr, "Added Endpoint.");
-}
-
-void ioMgrImpl::add_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    auto info = new struct fd_info;
-    {
-        std::unique_lock< mutex_t > lck(map_mtx);
-        fd_info_map.insert(std::pair< int, fd_info* >(fd, info));
-        info->cb = cb;
-        info->is_running[fd_info::READ] = 0;
-        info->is_running[fd_info::WRITE] = 0;
-        info->fd = fd;
-        info->ev = iomgr_ev;
-        info->is_global = true;
-        info->pri = pri;
-        info->cookie = cookie;
-        info->ev_fd.resize(threads.size());
-        info->event.resize(threads.size());
-
-        for (auto i = 0u; i < threads.size(); ++i) {
-            info->ev_fd[i] = eventfd(0, EFD_NONBLOCK);
-            info->event[i] = 0;
-        }
-    }
-
-    global_fd.push_back(info);
-
-    struct epoll_event ev;
-    /* add it to all the threads */
-    for (auto i = 0u; threads.size() > i; ++i) {
-        auto& t_info = threads[i];
-        ev.events = EPOLLET | info->ev;
-        ev.data.ptr = info;
-        if (!t_info.inited) {
-            continue;
-        }
-        if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD, fd, &ev) == -1) {
-            assert(0);
-        }
-        add_fd_to_thread(
-            t_info, info->ev_fd[i], [this](int fd, void* cookie, uint32_t events) { process_evfd(fd, cookie, events); },
-            EPOLLIN, 1, info);
-    }
-}
-
-void ioMgrImpl::remove_fd(int fd) {
-    fd_info* info = nullptr;
-    {
-        std::shared_lock< mutex_t > lck(map_mtx);
-        if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-            info = it->second;
-        } else {
-            LOGWARNMOD(iomgr, "Could not find registration for FD: {}", fd);
-            return;
-        }
-    }
-    assert(info);
-    /* remove it from all threads */
-    for (auto i = 0u; threads.size() > i; ++i) {
-        auto& t_info = threads[i];
-        remove_fd_from_thread(t_info, info->ev_fd[i]);
-        if (epoll_ctl(t_info.epollfd_pri[info->pri], EPOLL_CTL_DEL, fd, nullptr) == -1) {
-            assert(0);
-        }
-    }
-    {
-        std::lock_guard< mutex_t > lck(map_mtx);
-        for (auto i = 0u; i < threads.size(); ++i) {
-            close(info->ev_fd[i]);
-        }
-        delete info;
-        fd_info_map.erase(fd);
-    }
-}
-
-void ioMgrImpl::add_local_fd(int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    /* get local id */
-    pthread_t t = pthread_self();
-    thread_info* info = get_tid_info(t);
-
-    add_fd_to_thread(*info, fd, cb, iomgr_ev, pri, cookie);
-}
-
-void ioMgrImpl::remove_local_fd(int fd) {
-    pthread_t t = pthread_self();
-    thread_info* info = get_tid_info(t);
-    remove_fd_from_thread(*info, fd);
-}
-
-void ioMgrImpl::add_fd_to_thread(thread_info& t_info, int fd, ev_callback cb, int iomgr_ev, int pri, void* cookie) {
-    struct fd_info* info = nullptr;
-    {
-        std::lock_guard< mutex_t > lck(map_mtx);
-
-        auto it = fd_info_map.end();
-        bool happened{false};
-        std::tie(it, happened) = fd_info_map.emplace(std::make_pair(fd, nullptr));
-        if (it != fd_info_map.end() && !happened) {
-            info = it->second;
-        } else {
-            info = new struct fd_info;
-            it->second = info;
-        }
-
-        info->cb = cb;
-        info->is_running[fd_info::READ] = 0;
-        info->is_running[fd_info::WRITE] = 0;
-        info->fd = fd;
-        info->ev = iomgr_ev;
-        info->is_global = false;
-        info->pri = pri;
-        info->cookie = cookie;
-    }
-
-    epoll_event ev;
-    ev.events = EPOLLET | iomgr_ev;
-    ev.data.ptr = info;
-    if (epoll_ctl(t_info.epollfd_pri[pri], EPOLL_CTL_ADD, fd, &ev) == -1) {
-        assert(0);
-    }
-    LOGDEBUGMOD(iomgr, "Added FD: {}", fd);
-}
-
-void ioMgrImpl::remove_fd_from_thread(thread_info& t_info, int fd) {
-    struct fd_info* info = nullptr;
-    {
-        std::shared_lock< mutex_t > lck(map_mtx);
-        if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-            info = it->second;
-        } else {
-            LOGWARNMOD(iomgr, "Could not find registration for FD: {}", fd);
-            return;
-        }
-    }
-    assert(info);
-    if (epoll_ctl(t_info.epollfd_pri[info->pri], EPOLL_CTL_DEL, fd, nullptr) == -1) {
-        assert(0);
-    }
-    {
-        std::lock_guard< mutex_t > lck(map_mtx);
-        delete info;
-        fd_info_map.erase(fd);
-    }
-    LOGDEBUGMOD(iomgr, "Removed FD: {}", fd);
-}
-
-void ioMgrImpl::callback(void* data, uint32_t event) {
-    struct fd_info* info = (struct fd_info*)data;
-    info->cb(info->fd, info->cookie, event);
-}
-
-bool ioMgrImpl::can_process(void* data, uint32_t ev) {
-    struct fd_info* info = (struct fd_info*)data;
-    int expected = 0;
-    int desired = 1;
-    bool ret = false;
-    if (ev & EPOLLIN) {
-        ret = info->is_running[fd_info::READ].compare_exchange_strong(expected, desired, std::memory_order_acquire,
-                                                                      std::memory_order_acquire);
-    } else if (ev & EPOLLOUT) {
-        ret = info->is_running[fd_info::WRITE].compare_exchange_strong(expected, desired, std::memory_order_acquire,
-                                                                       std::memory_order_acquire);
-    } else if (ev & EPOLLERR || ev & EPOLLHUP) {
-        LOGCRITICAL("Received EPOLLERR or EPOLLHUP without other event: {}!", ev);
+    // If caller wants to add the interface by themselves, allow to do so, else add drive interface by ourselves
+    if (iface_adder) {
+        iface_adder();
     } else {
-        LOGCRITICAL("Unknown event: {}", ev);
-        assert(0);
+        add_drive_interface(
+            is_spdk ? std::dynamic_pointer_cast< iomgr::DriveInterface >(std::make_shared< SpdkDriveInterface >())
+                    : std::dynamic_pointer_cast< iomgr::DriveInterface >(std::make_shared< AioDriveInterface >()),
+            true);
     }
+
+    // Start all reactor threads
+    set_state(iomgr_state::reactor_init);
+    for (auto i = 0u; i < num_threads; i++) {
+        m_worker_reactors.push_back(reactor_info_t(
+            sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr),
+            nullptr));
+        LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
+        // t.detach();
+    }
+    wait_for_state(iomgr_state::sys_init);
+
+    // Start the global timer
+    m_global_user_timer = std::make_unique< timer_epoll >(thread_regex::all_user);
+    m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
+                                    : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
+
+    if (is_spdk && !m_is_spdk_inited_externally) {
+        LOGINFO("Initializing bdev subsystem");
+        iomanager.run_on(
+            thread_regex::least_busy_worker,
+            [this](io_thread_addr_t taddr) {
+                spdk_bdev_initialize(
+                    [](void* cb_arg, int rc) {
+                        IOManager* pthis = (IOManager*)cb_arg;
+                        pthis->set_state_and_notify(iomgr_state::running);
+                    },
+                    (void*)this);
+            },
+            false /* wait_for_completion */);
+        wait_for_state(iomgr_state::running);
+    } else {
+        set_state(iomgr_state::running);
+    }
+
+    // Notify all the reactors that they are ready to make callback about thread started
+    iomanager.run_on(
+        thread_regex::all_io, [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); },
+        false /* wait_for_completion */);
+}
+
+void IOManager::start_spdk() {
+    // Initialize if spdk has still not been initialized
+    m_is_spdk_inited_externally = !spdk_env_dpdk_external_init();
+    if (!m_is_spdk_inited_externally) {
+        struct spdk_env_opts opts;
+        spdk_env_opts_init(&opts);
+        opts.name = "hs_code";
+        opts.shm_id = -1;
+        //    opts.mem_size = 512;
+
+        int rc = spdk_env_init(&opts);
+        if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
+
+        spdk_unaffinitize_thread();
+
+        // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
+        rc = spdk_thread_lib_init(NULL, 0);
+        if (rc != 0) {
+            LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
+            throw std::runtime_error("SPDK Thread Lib Init failed");
+        }
+    }
+    // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned allocations
+    sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
+}
+
+void IOManager::stop() {
+    LOGINFO("Stopping IOManager");
+    set_state(iomgr_state::stopping);
+
+    // Increment stopping threads by 1 and then decrement after sending message to prevent case where there are no
+    // IO threads, which hangs the iomanager stop
+    m_yet_to_stop_nreactors.increment();
+
+    // Free up and unregister fds for global timer
+    m_global_user_timer.reset(nullptr);
+    m_global_worker_timer.reset(nullptr);
+
+    // Send all the threads to reliquish its io thread status
+    multicast_msg(thread_regex::all_io,
+                  iomgr_msg::create(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id));
+
+    // Now decrement and check if all io threads have already reliquished the io thread status.
+    if (m_yet_to_stop_nreactors.decrement_testz()) {
+        set_state(iomgr_state::stopped);
+    } else {
+        // Few threads are still in process of coming out io loop, wait for them.
+        wait_for_state(iomgr_state::stopped);
+    }
+
+    LOGINFO("All IO threads have stopped and hence IOManager is moved to stopped state, joining any iomanager threads");
+    // Join all the iomanager threads
+    for (auto& t : m_worker_reactors) {
+        t.first.join();
+    }
+
+    m_worker_reactors.clear();
+    m_yet_to_start_nreactors.set(0);
+    // m_expected_ifaces = inbuilt_interface_count;
+    m_drive_ifaces.wlock()->clear();
+    m_iface_list.wlock()->clear();
+    assert(get_state() == iomgr_state::stopped);
+
+    LOGINFO("IOManager Stopped and all IO threads are relinquished");
+}
+
+void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface) {
+    add_interface(std::dynamic_pointer_cast< IOInterface >(iface));
+    m_drive_ifaces.wlock()->push_back(iface);
+    if (default_iface) m_default_drive_iface = iface;
+}
+
+void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
+    auto iface_list = m_iface_list.wlock();
+
+    // Setup the reactor io threads to do any registration for interface specific registration
+    iomanager.run_on(
+        thread_regex::all_io,
+        [this, iface](io_thread_addr_t taddr) {
+            iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
+        },
+        true /* wait_for_completion */);
+
+    iface_list->push_back(iface);
+}
+
+void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
+                             const thread_state_notifier_t& addln_notifier) {
+    if (is_tloop_reactor) {
+        *(m_reactors.get()) = std::make_shared< IOReactorSPDK >();
+    } else {
+        *(m_reactors.get()) = std::make_shared< IOReactorEPoll >();
+    }
+    this_reactor()->run(iomgr_slot_num, iodev_selector, addln_notifier);
+}
+
+void IOManager::stop_io_loop() { this_reactor()->stop(); }
+
+void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
+    m_yet_to_stop_nreactors.increment();
+    if (reactor->is_worker()) {
+        m_worker_reactors[reactor->m_worker_slot_num].second = reactor;
+
+        // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
+        if (m_yet_to_start_nreactors.decrement_testz()) {
+            LOGINFO("All IOMgr reactors started, moving iomanager to sys_init state");
+            set_state_and_notify(iomgr_state::sys_init);
+        }
+    }
+}
+
+void IOManager::reactor_stopped() {
+    if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
+}
+
+void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
+    multicast_msg(thread_regex::least_busy_worker,
+                  iomgr_msg::create(iomgr_msg_type::RESCHEDULE, m_internal_msg_module_id, iodev, event));
+}
+
+static bool match_regex(thread_regex r, const io_thread_t& thr) {
+    if ((r == thread_regex::all_io) || (r == thread_regex::least_busy_io)) { return true; }
+    if (thr->reactor->is_worker()) {
+        return ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker) ||
+                (r == thread_regex::random_worker));
+    } else {
+        return ((r == thread_regex::all_user) || (r == thread_regex::least_busy_user));
+    }
+}
+
+int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
+    int sent_to = 0;
+    bool cloned = false;
+    int64_t min_cnt = INTMAX_MAX;
+    io_thread_addr_t min_thread = -1U;
+    IOReactor* min_reactor = nullptr;
+
+    if (r == thread_regex::random_worker) {
+        // Send to any random iomgr created io thread
+        auto& reactor = m_worker_reactors[std::experimental::randint(0, (int)m_worker_reactors.size() - 1)].second;
+        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_idx, msg);
+    } else {
+        _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
+            if (reactor && reactor->is_io_reactor()) {
+                for (auto& thr : reactor->io_threads()) {
+                    if (match_regex(r, thr)) {
+                        if ((r == thread_regex::least_busy_worker) || (r == thread_regex::least_busy_user)) {
+                            if (thr->m_metrics->outstanding_ops < min_cnt) {
+                                min_thread = thr->thread_addr;
+                                min_cnt = thr->m_metrics->outstanding_ops;
+                                min_reactor = reactor;
+                            }
+                        } else {
+                            auto new_msg = msg->clone();
+                            reactor->deliver_msg(thr->thread_addr, new_msg);
+                            cloned = true;
+                            ++sent_to;
+                        }
+                    }
+                }
+            }
+
+            if (is_last_thread && min_reactor) {
+                if (send_msg(min_reactor->addr_to_thread(min_thread), msg)) ++sent_to;
+            }
+        });
+    }
+
+    if (cloned || !sent_to) { iomgr_msg::free(msg); }
+    return sent_to;
+}
+
+void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
+    if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
+        for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
+            cb(m_worker_reactors[i].second.get(), (i == (m_worker_reactors.size() - 1)));
+        }
+    } else {
+        all_reactors(cb);
+    }
+}
+
+int IOManager::multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg) {
+    auto sent_to = multicast_msg(r, smsg.base_msg);
+    if (sent_to != 0) smsg.wait();
+    return sent_to;
+}
+
+bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
+    bool ret = false;
+    msg->m_dest_thread = to_thread->thread_addr;
+
+    if (std::holds_alternative< spdk_thread* >(to_thread->thread_impl)) {
+        // Shortcut to deliver the message without taking reactor list lock.
+        IOReactorSPDK::deliver_msg_direct(std::get< spdk_thread* >(to_thread->thread_impl), msg);
+        ret = true;
+    } else {
+        specific_reactor(std::get< reactor_idx_t >(to_thread->thread_impl), [&](IOReactor* reactor) {
+            if (reactor && reactor->is_io_reactor() && reactor->deliver_msg(to_thread->thread_addr, msg)) {
+                ret = true;
+            }
+        });
+    }
+
+    if (!ret) { iomgr_msg::free(msg); }
     return ret;
 }
 
-void ioMgrImpl::fd_reschedule(int fd, uint32_t event) {
-    std::map< int, fd_info* >::iterator it;
-    fd_info* info{nullptr};
-    {
-        std::shared_lock< mutex_t > lck(map_mtx);
-        if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-            assert(it->first == fd);
-            info = it->second;
-        }
-    }
-    if (!info)
-        return;
-
-    uint64_t min_cnt = UINTMAX_MAX;
-    int min_id = 0;
-
-    for (auto i = 0u; threads.size() > i; ++i) {
-        if (threads[i].count < min_cnt) {
-            min_id = i;
-            min_cnt = threads[i].count;
-        }
-    }
-    info->event[min_id] |= event;
-    uint64_t temp = 1;
-    while (0 > write(info->ev_fd[min_id], &temp, sizeof(uint64_t)) && errno == EAGAIN)
-        ;
+bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, sync_iomgr_msg& smsg) {
+    auto sent = send_msg(to_thread, smsg.base_msg);
+    if (sent) smsg.wait();
+    return sent;
 }
 
-void ioMgrImpl::process_evfd(int fd, void* data, uint32_t event) {
-    struct fd_info* info = (struct fd_info*)data;
-    uint64_t temp;
-    pthread_t t = pthread_self();
-    thread_info* tinfo = get_tid_info(t);
-
-    if (info->event[tinfo->id] & EPOLLIN && can_process(info, event)) {
-        info->cb(info->fd, info->cookie, EPOLLIN);
-    }
-
-    if (info->event[tinfo->id] & EPOLLOUT && can_process(info, event)) {
-        info->cb(info->fd, info->cookie, EPOLLOUT);
-    }
-    info->event[tinfo->id] = 0;
-    process_done(fd, event);
-    while (0 > read(fd, &temp, sizeof(uint64_t)) && errno == EAGAIN)
-        ;
+timer_handle_t IOManager::schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
+                                                timer_callback_t&& timer_fn) {
+    return this_reactor()->m_thread_timer->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
 }
 
-void ioMgrImpl::process_done(int fd, int ev) {
-    std::map< int, fd_info* >::iterator it;
-    fd_info* info{nullptr};
-    {
-        std::shared_lock< mutex_t > lck(map_mtx);
-        if (auto it = fd_info_map.find(fd); fd_info_map.end() != it) {
-            assert(it->first == fd);
-            info = it->second;
-        }
+timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
+                                                timer_callback_t&& timer_fn) {
+    timer* t = nullptr;
+    if (r == thread_regex::all_worker) {
+        t = m_global_worker_timer.get();
+    } else if (r == thread_regex::all_user) {
+        t = m_global_user_timer.get();
+    } else {
+        LOGMSG_ASSERT(0, "Setting timer with invalid regex {}", enum_name(r));
+        return null_timer_handle;
     }
-    if (info) {
-        if (ev & EPOLLIN) {
-            info->is_running[fd_info::READ].fetch_sub(1, std::memory_order_release);
-        } else if (ev & EPOLLOUT) {
-            info->is_running[fd_info::WRITE].fetch_sub(1, std::memory_order_release);
-        } else {
-            assert(0);
+
+    return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
+}
+
+void IOManager::foreach_interface(const auto& iface_cb) {
+    m_iface_list.withRLock([&](auto& iface_list) {
+        for (auto iface : iface_list) {
+            iface_cb(iface.get());
         }
+    });
+}
+
+IOReactor* IOManager::this_reactor() const { return m_reactors.get()->get(); }
+void IOManager::all_reactors(const auto& cb) {
+    m_reactors.access_all_threads(
+        [&cb](std::shared_ptr< IOReactor >* preactor, bool is_last_thread) { cb(preactor->get(), is_last_thread); });
+}
+
+void IOManager::specific_reactor(int thread_num, const auto& cb) {
+    m_reactors.access_specific_thread(thread_num,
+                                      [&cb](std::shared_ptr< IOReactor >* preactor) { cb(preactor->get()); });
+}
+
+msg_module_id_t IOManager::register_msg_module(const msg_handler_t& handler) {
+    std::unique_lock lk(m_msg_hdlrs_mtx);
+    DEBUG_ASSERT_LT(m_msg_handlers_count, m_msg_handlers.size(), "More than expected msg modules registered");
+    m_msg_handlers[m_msg_handlers_count++] = handler;
+    return m_msg_handlers_count - 1;
+}
+
+io_thread_t IOManager::make_io_thread(IOReactor* reactor) {
+    io_thread_t t = std::make_shared< io_thread >(reactor);
+    t->thread_idx = m_thread_idx_reserver.reserve();
+    if (t->thread_idx >= max_io_threads) {
+        throw std::system_error(errno, std::generic_category(), "Running IO Threads exceeds limit");
+    }
+    return t;
+}
+
+// It is ok not to take a lock to get msg modules, since we don't support unregister a module. Taking a lock
+// here defeats the purpose of per thread messages here.
+msg_handler_t& IOManager::get_msg_module(msg_module_id_t id) { return m_msg_handlers[id]; }
+
+const io_thread_t& IOManager::iothread_self() const { return this_reactor()->iothread_self(); };
+
+/****** IODevice related ********/
+IODevice::IODevice() { m_thread_local_ctx.reserve(IOManager::max_io_threads); }
+
+std::string IODevice::dev_id() {
+    if (std::holds_alternative< int >(dev)) {
+        return std::to_string(fd());
+    } else if (std::holds_alternative< spdk_bdev_desc* >(dev)) {
+        return spdk_bdev_get_name(bdev());
+    } else {
+        return "";
     }
 }
 
-struct thread_info* ioMgrImpl::get_tid_info(pthread_t& tid) {
-    for (auto& t_info : threads) {
-        if (t_info.tid == tid) {
-            return &t_info;
-        }
-    }
-    assert(0);
-    return nullptr;
+spdk_bdev_desc* IODevice::bdev_desc() { return std::get< spdk_bdev_desc* >(dev); }
+spdk_bdev* IODevice::bdev() { return spdk_bdev_desc_get_bdev(bdev_desc()); }
+spdk_nvmf_qpair* IODevice::nvmf_qp() const { return std::get< spdk_nvmf_qpair* >(dev); }
+
+bool IODevice::is_global() const { return (!std::holds_alternative< io_thread_t >(thread_scope)); }
+bool IODevice::is_my_thread_scope() const {
+    return (!is_global() && (per_thread_scope() == iomanager.iothread_self()));
 }
 
-void ioMgrImpl::print_perf_cntrs() {
-    for (auto i = 0u; threads.size() > i; ++i) {
-        LOGINFO("\n\tthread {} counters.\n\tnumber of times {} it run\n\ttotal time "
-                "spent {}ms",
-                i, threads[i].count, (threads[i].time_spent_ns / (1000 * 1000)));
-    }
-    for (auto const& ep : ep_list) {
-        ep->print_perf();
-    }
+void IODevice::clear() {
+    dev = -1;
+    io_interface = nullptr;
+    tinfo = nullptr;
+    cookie = nullptr;
+    m_thread_local_ctx.clear();
+}
+
+uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
+    size = sisl::round_up(size, align);
+    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
+                     : (uint8_t*)std::aligned_alloc(align, size);
+}
+
+void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : std::free(buf); }
+
+uint8_t* IOManager::iobuf_realloc(uint8_t* buf, size_t align, size_t new_size) {
+    return m_is_spdk ? (uint8_t*)spdk_realloc((void*)buf, new_size, align) : sisl_aligned_realloc(buf, align, new_size);
+}
+
+/* SpkdAllocator Implementaion */
+uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
+    return (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+}
+
+void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) { return spdk_free((void*)b); }
+
+uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
+    return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
 }
 
 } // namespace iomgr

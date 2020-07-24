@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "2.3.1"
+    version = "3.6.1"
     revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
@@ -25,16 +25,20 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
+            "sds_logging/[~=7.1]@sds/master",
+            "sisl/[~=2.0]@sisl/develop",
+            "boost/1.73.0",
             "folly/2020.05.04.00",
             "libevent/2.1.11",
-            "sds_logging/[~=7.1]@sds/master",
+            "spdk/20.04.1",
+            "openssl/1.1.1g"
             )
     build_requires = (
                 "gtest/1.10.0",
                 )
 
     generators = "cmake"
-    exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
+    exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
 
     def configure(self):
         if self.settings.compiler != "gcc" or self.options.sanitize:
@@ -64,10 +68,10 @@ class IOMgrConan(ConanFile):
         self.copy("*.so", dst="lib", keep_path=False)
         self.copy("*.dll", dst="lib", keep_path=False)
         self.copy("*.dylib", dst="lib", keep_path=False)
-        self.copy("*.lib", dst="lib", keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
+        self.cpp_info.cxxflags.append("-fconcepts")
         if self.options.sanitize:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")
@@ -75,4 +79,3 @@ class IOMgrConan(ConanFile):
             self.cpp_info.exelinkflags.append("-fsanitize=undefined")
         elif self.options.coverage == 'True':
             self.cpp_info.libs.append('gcov')
-
