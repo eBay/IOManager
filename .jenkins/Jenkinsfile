@@ -5,18 +5,29 @@ pipeline {
         ORG = 'sds'
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
         CONAN_USER = 'sds'
-        MASTER_BRANCH = 'develop'
+        MASTER_BRANCH = 'master'
+        DEVELOP_BRANCH = 'develop/v*'
         STABLE_BRANCH = 'testing/v*'
     }
 
     stages {
+        stage('Adjust Tag for Master/PR') {
+            when { not { anyOf {
+                branch "${DEVELOP_BRANCH}"
+                branch "${STABLE_BRANCH}"
+            } } }
+            steps {
+                sh(script: "sed -Ei 's,version = .*([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1+b${env.BUILD_NUMBER}\",' conanfile.py")
+            }
+        }
+
         stage('Get Version') {
             steps {
                 script {
                     PROJECT = sh(script: "grep -m 1 'name =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
                     TAG = sh(script: "grep -m 1 'version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
                     CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
-                    slackSend color: '#0063D1', channel: '#conan-pkgs', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* is building."
+                    slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* is building."
                 }
             }
         }
@@ -46,6 +57,16 @@ pipeline {
                 } }
 
                 stages {
+                    stage('Adjust Tag for Master/PR') {
+                        when { not { anyOf {
+                            branch "${DEVELOP_BRANCH}"
+                            branch "${STABLE_BRANCH}"
+                        } } }
+                        steps {
+                            sh(script: "sed -Ei 's,version = .*([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1+b${env.BUILD_NUMBER}\",' conanfile.py")
+                        }
+                    }
+
                     stage("Build") {
                         when {
                             expression { "${COVERAGE}" == 'False' }
@@ -55,9 +76,10 @@ pipeline {
                         }
                     }
                     stage("Deploy") {
-                        when {
+                        when { allOf {
                             expression { "${COVERAGE}" == 'False' }
-                        }
+                            expression { not { branch "PR_*" } }
+                        } }
                         steps {
                             sh "conan user -r ebay-local -p ${ARTIFACTORY_PASS} _service_sds"
                             sh "conan upload ${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL} -c --all -r ebay-local"
@@ -82,7 +104,7 @@ pipeline {
                             }
                             stage("Code Coverage") {
                                 steps {
-                                    slackSend channel: '#conan-pkgs', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
+                                    slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
                                     sh "echo \"sonar.branch.name=${BRANCH_NAME}\" >> sonar-project.properties"
                                     sh "conan install -pr ${BUILD_TYPE} --build missing -o ${PROJECT}:coverage=True ."
                                     sh "build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build ."
@@ -108,10 +130,10 @@ pipeline {
 
     post {
         failure {
-            slackSend color: '#E43237', channel: '#conan-pkgs', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* has had a failure : ${BUILD_URL}"
+            slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* has had a failure : ${BUILD_URL}"
         }
         success {
-            slackSend color: '#85B717', channel: '#conan-pkgs', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* has been uploaded to conan repo."
+            slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}@${CONAN_USER}/${CONAN_CHANNEL}* has been uploaded to conan repo."
         }
     }
 }
