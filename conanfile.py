@@ -27,7 +27,7 @@ class IOMgrConan(ConanFile):
     requires = (
             "folly/2020.05.04.00",
             "libevent/2.1.11",
-            "sds_logging/[~=7]@sds/PR_31",
+            "sds_logging/[~=7.1]@sds/PR_31",
             )
     build_requires = (
                 "gtest/1.10.0",
