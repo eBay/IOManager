@@ -1,5 +1,7 @@
-# IOMgr
+# IOManager
 An asynchronous event handler for the SDS data-path.
+
+![IOManager Design](IOManager.jpg)
 
 ## Brief
 To build (assuming a recent version of conan package manager is installed)
