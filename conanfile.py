@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "3.6.0"
+    version = "3.6.1"
     revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
@@ -25,14 +25,17 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
-            "sds_logging/7.0.2@sds/develop",
-            "sisl/[>=1.1.0]@sisl/develop",
+            "sds_logging/[~=7.1]@sds/master",
+            "sisl/[~=2.0]@sisl/master",
             "boost/1.73.0",
             "folly/2020.05.04.00",
             "libevent/2.1.11",
             "spdk/20.04.1",
             "openssl/1.1.1g"
             )
+    build_requires = (
+                "gtest/1.10.0",
+                )
 
     generators = "cmake"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"

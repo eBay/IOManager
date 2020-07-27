@@ -252,6 +252,7 @@ private:
     sisl::sparse_vector< reactor_info_t > m_worker_reactors;
 
     bool m_is_spdk = false;
+    bool m_is_spdk_inited_externally = false;
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
 
