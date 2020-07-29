@@ -173,9 +173,9 @@ void IOManager::stop() {
     try {
         // Join all the iomanager threads
         for (auto& t : m_worker_reactors) {
-            t.first.join();
+            if (t.first.joinable()) t.first.join();
         }
-    } catch (std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception during thread join"); }
+    } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during thread join", e.what()); }
 
     try {
         m_worker_reactors.clear();
@@ -183,7 +183,7 @@ void IOManager::stop() {
         // m_expected_ifaces = inbuilt_interface_count;
         m_drive_ifaces.wlock()->clear();
         m_iface_list.wlock()->clear();
-    } catch (std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception during clear listst"); }
+    } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");

@@ -190,7 +190,9 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
         // run only one. For non-recurring, pick a random io thread and from that point onwards its single threaded
         iomanager.run_on(
             thread_regex::all_worker,
-            [&](io_thread_addr_t taddr) { stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo)); },
+            [&stinfo, this](io_thread_addr_t taddr) {
+                stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo));
+            },
             true);
         thdl = timer_handle_t(this, stinfo);
         PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
@@ -201,7 +203,10 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
         } else {
             iomanager.run_on(
                 thread_regex::random_worker,
-                [&](io_thread_addr_t taddr) { stt_info = create_register_spdk_thread_timer(stinfo); }, true);
+                [&stt_info, &stinfo, this](io_thread_addr_t taddr) {
+                    stt_info = create_register_spdk_thread_timer(stinfo);
+                },
+                true);
         }
         thdl = timer_handle_t(this, stt_info);
         PROTECTED_REGION(m_active_thread_timer_infos.insert(stt_info));
@@ -236,24 +241,26 @@ void timer_spdk::stop() {
     }
 }
 
-void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* stt_info) {
+void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* stt_info) const {
     if (is_thread_local()) {
         unregister_spdk_thread_timer(stt_info);
     } else {
         iomanager.run_on(
-            stt_info->owner_thread, [&](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, true);
+            stt_info->owner_thread,
+            [this, &stt_info](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, true);
     }
     delete stt_info;
 }
 
-void timer_spdk::cancel_global_timer(spdk_timer_info* stinfo) {
+void timer_spdk::cancel_global_timer(spdk_timer_info* stinfo) const {
     iomanager.run_on(
         thread_regex::all_worker,
-        [&](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stinfo->get_thread_timer_info()); }, true);
+        [&stinfo, this](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stinfo->get_thread_timer_info()); },
+        true);
     delete stinfo;
 }
 
-spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer_info* stinfo) {
+spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer_info* stinfo) const {
     auto stt_info = new spdk_thread_timer_info(stinfo);
     stt_info->poller = spdk_poller_register(
         [](void* context) -> int {
@@ -266,7 +273,7 @@ spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer
     return stt_info;
 }
 
-void timer_spdk::unregister_spdk_thread_timer(spdk_thread_timer_info* stinfo) {
+void timer_spdk::unregister_spdk_thread_timer(spdk_thread_timer_info* stinfo) const {
     spdk_poller_unregister(&stinfo->poller);
 }
 
