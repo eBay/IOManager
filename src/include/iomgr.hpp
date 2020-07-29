@@ -107,6 +107,10 @@ public:
         return sent_to;
     }
 
+    // Direct run_on method for spdk without any msg creation
+    using spdk_msg_signature_t = void(void*);
+    int run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* context);
+
     int run_on(const io_thread_t& thread, const auto& fn, bool wait_for_completion = false) {
         bool sent = false;
         if (wait_for_completion) {

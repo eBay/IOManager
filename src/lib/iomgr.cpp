@@ -169,16 +169,21 @@ void IOManager::stop() {
     }
 
     LOGINFO("All IO threads have stopped and hence IOManager is moved to stopped state, joining any iomanager threads");
-    // Join all the iomanager threads
-    for (auto& t : m_worker_reactors) {
-        t.first.join();
-    }
 
-    m_worker_reactors.clear();
-    m_yet_to_start_nreactors.set(0);
-    // m_expected_ifaces = inbuilt_interface_count;
-    m_drive_ifaces.wlock()->clear();
-    m_iface_list.wlock()->clear();
+    try {
+        // Join all the iomanager threads
+        for (auto& t : m_worker_reactors) {
+            t.first.join();
+        }
+    } catch (std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception during thread join"); }
+
+    try {
+        m_worker_reactors.clear();
+        m_yet_to_start_nreactors.set(0);
+        // m_expected_ifaces = inbuilt_interface_count;
+        m_drive_ifaces.wlock()->clear();
+        m_iface_list.wlock()->clear();
+    } catch (std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception during clear listst"); }
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
@@ -246,6 +251,12 @@ static bool match_regex(thread_regex r, const io_thread_t& thr) {
     } else {
         return ((r == thread_regex::all_user) || (r == thread_regex::least_busy_user));
     }
+}
+
+int IOManager::run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* context) {
+    assert(thread->reactor->is_tight_loop_reactor());
+    spdk_thread_send_msg(thread->spdk_thread_impl(), fn, context);
+    return 1;
 }
 
 int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
@@ -440,7 +451,7 @@ uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
     return (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 }
 
-void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) { return spdk_free((void*)b); }
+void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) { spdk_free((void*)b); }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
