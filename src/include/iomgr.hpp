@@ -47,7 +47,7 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...)->overloaded< Ts... >;
+overloaded(Ts...) -> overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;

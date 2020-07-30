@@ -29,9 +29,10 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
     } else {
         // Issue the opendev on any one of the tight loop reactor
         io_device_ptr ret;
-        iomanager.run_on(thread_regex::least_busy_worker,
-                         [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
-                         true /* wait_for_completion */);
+        iomanager.run_on(
+            thread_regex::least_busy_worker,
+            [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
+            true /* wait_for_completion */);
         return ret;
     }
 }

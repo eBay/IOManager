@@ -82,12 +82,7 @@ ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
 struct SpdkIocb {
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
-            iodev(iodev),
-            iface(iface),
-            op_type(op_type),
-            size(size),
-            offset(offset),
-            user_cookie(cookie) {
+            iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
