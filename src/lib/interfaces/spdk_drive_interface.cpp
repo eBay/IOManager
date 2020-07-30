@@ -149,7 +149,7 @@ static void submit_io(void* b) {
         rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
                              process_completions, (void*)iocb);
     } else {
-        LOGERROR("Invalid operation type {}", iocb->op_type);
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
         return;
     }
 

@@ -97,7 +97,7 @@ struct SpdkIocb {
     }
 
     std::string to_string() const {
-        auto str = fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", op_type.enum_name(), size, offset,
+        auto str = fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", enum_name(op_type), size, offset,
                                iovcnt, (void*)user_data);
         for (auto i = 0; i < iovcnt; ++i) {
             str += fmt::format("iov[{}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
