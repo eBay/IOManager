@@ -170,10 +170,10 @@ public:
     void stop() override;
 
 private:
-    spdk_thread_timer_info* register_spdk_thread_timer(spdk_timer_info* stinfo);
-    void unregister_spdk_thread_timer(spdk_thread_timer_info* stinfo);
-    void cancel_thread_timer(spdk_thread_timer_info* stt_info);
-    void cancel_global_timer(spdk_timer_info* stinfo);
+    spdk_thread_timer_info* create_register_spdk_thread_timer(spdk_timer_info* const stinfo) const;
+    void unregister_spdk_thread_timer(spdk_thread_timer_info* const stinfo) const;
+    void cancel_thread_timer(spdk_thread_timer_info* const stt_info) const;
+    void cancel_global_timer(spdk_timer_info* const stinfo) const;
 
 private:
     std::unordered_set< spdk_timer_info* > m_active_global_timer_infos;

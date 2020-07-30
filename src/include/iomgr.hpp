@@ -52,6 +52,7 @@ overloaded(Ts...)->overloaded< Ts... >;
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
 using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
+typedef void (*spdk_msg_signature_t)(void*);
 
 class IOManager {
 public:
@@ -106,6 +107,9 @@ public:
         }
         return sent_to;
     }
+
+    // Direct run_on method for spdk without any msg creation
+    int run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* context);
 
     int run_on(const io_thread_t& thread, const auto& fn, bool wait_for_completion = false) {
         bool sent = false;
