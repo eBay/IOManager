@@ -103,10 +103,10 @@ struct SpdkIocb {
     }
 
     std::string to_string() const {
-        auto str =
-            fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", op_type, size, offset, iovcnt, user_data);
+        auto str = fmt::format("is_read={}, size={}, offset={}, iovcnt={} data={}", is_read, size, offset, iovcnt,
+                               (void*)user_data);
         for (auto i = 0; i < iovcnt; ++i) {
-            str += fmt::format("iov[{}}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
+            str += fmt::format("iov[{}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
         }
         return str;
     }
