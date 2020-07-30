@@ -96,26 +96,25 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     if (is_spdk && !m_is_spdk_inited_externally) {
         LOGINFO("Initializing bdev subsystem");
-        iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this](io_thread_addr_t taddr) {
-                spdk_bdev_initialize(
-                    [](void* cb_arg, int rc) {
-                        IOManager* pthis = (IOManager*)cb_arg;
-                        pthis->set_state_and_notify(iomgr_state::running);
-                    },
-                    (void*)this);
-            },
-            false /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker,
+                         [this](io_thread_addr_t taddr) {
+                             spdk_bdev_initialize(
+                                 [](void* cb_arg, int rc) {
+                                     IOManager* pthis = (IOManager*)cb_arg;
+                                     pthis->set_state_and_notify(iomgr_state::running);
+                                 },
+                                 (void*)this);
+                         },
+                         false /* wait_for_completion */);
         wait_for_state(iomgr_state::running);
     } else {
         set_state(iomgr_state::running);
     }
 
     // Notify all the reactors that they are ready to make callback about thread started
-    iomanager.run_on(
-        thread_regex::all_io, [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); },
-        false /* wait_for_completion */);
+    iomanager.run_on(thread_regex::all_io,
+                     [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); },
+                     false /* wait_for_completion */);
 }
 
 void IOManager::start_spdk() {
@@ -199,12 +198,11 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
     auto iface_list = m_iface_list.wlock();
 
     // Setup the reactor io threads to do any registration for interface specific registration
-    iomanager.run_on(
-        thread_regex::all_io,
-        [this, iface](io_thread_addr_t taddr) {
-            iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
-        },
-        true /* wait_for_completion */);
+    iomanager.run_on(thread_regex::all_io,
+                     [this, iface](io_thread_addr_t taddr) {
+                         iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
+                     },
+                     true /* wait_for_completion */);
 
     iface_list->push_back(iface);
 }

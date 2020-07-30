@@ -6,6 +6,7 @@
 #include <optional>
 #include <spdk/bdev.h>
 #include "iomgr_msg.hpp"
+#include <utility/enum.hpp>
 
 struct spdk_io_channel;
 
@@ -49,7 +50,8 @@ public:
                     bool part_of_batch = false) override;
     void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
-    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie, bool part_of_batch = false) override;
+    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
+                     bool part_of_batch = false) override;
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
     io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
@@ -75,14 +77,11 @@ private:
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
 };
 
-enum SpdkDriveOpType {
-    WRITE = 0,
-    READ,
-    UNMAP
-};
+ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
 
 struct SpdkIocb {
-    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset, void* cookie) :
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
+             void* cookie) :
             iodev(iodev),
             iface(iface),
             op_type(op_type),
@@ -103,8 +102,8 @@ struct SpdkIocb {
     }
 
     std::string to_string() const {
-        auto str = fmt::format("is_read={}, size={}, offset={}, iovcnt={} data={}", is_read, size, offset, iovcnt,
-                               (void*)user_data);
+        auto str = fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", op_type.enum_name(), size, offset,
+                               iovcnt, (void*)user_data);
         for (auto i = 0; i < iovcnt; ++i) {
             str += fmt::format("iov[{}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
         }

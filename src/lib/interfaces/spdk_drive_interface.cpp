@@ -29,10 +29,9 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
     } else {
         // Issue the opendev on any one of the tight loop reactor
         io_device_ptr ret;
-        iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
-            true /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker,
+                         [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
+                         true /* wait_for_completion */);
         return ret;
     }
 }
@@ -146,8 +145,8 @@ static void submit_io(void* b) {
                                   iocb->offset, iocb->size, process_completions, (void*)iocb);
         }
     } else if (iocb->op_type == SpdkDriveOpType::UNMAP) {
-        rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset,
-                                 iocb->size, process_completions, (void*)iocb);
+        rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
+                             process_completions, (void*)iocb);
     } else {
         LOGERROR("Invalid operation type {}", iocb->op_type);
         return;
@@ -226,7 +225,7 @@ void SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovc
 }
 
 void SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                                    bool part_of_batch) {
+                                     bool part_of_batch) {
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::UNMAP, size, offset, cookie);
     iocb->io_wait_entry.cb_fn = submit_io;

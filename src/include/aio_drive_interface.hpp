@@ -232,15 +232,15 @@ public:
     ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
     void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
+                     bool part_of_batch = false) override;
     void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
+                      bool part_of_batch = false) override;
     void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                     bool part_of_batch = false) override;
     void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
+                     bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
+                     bool part_of_batch = false) override;
     void process_completions(IODevice* iodev, void* cookie, int event);
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
