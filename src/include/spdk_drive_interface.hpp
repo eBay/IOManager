@@ -6,6 +6,7 @@
 #include <optional>
 #include <spdk/bdev.h>
 #include "iomgr_msg.hpp"
+#include <utility/enum.hpp>
 
 struct spdk_io_channel;
 
@@ -49,6 +50,8 @@ public:
                     bool part_of_batch = false) override;
     void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
+                     bool part_of_batch = false) override;
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
     io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
@@ -74,14 +77,12 @@ private:
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
 };
 
+ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
+
 struct SpdkIocb {
-    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, bool is_read, uint32_t size, uint64_t offset, void* cookie) :
-            iodev(iodev),
-            iface(iface),
-            is_read(is_read),
-            size(size),
-            offset(offset),
-            user_cookie(cookie) {
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
+             void* cookie) :
+            iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
@@ -96,8 +97,8 @@ struct SpdkIocb {
     }
 
     std::string to_string() const {
-        auto str = fmt::format("is_read={}, size={}, offset={}, iovcnt={} data={}", is_read, size, offset, iovcnt,
-                               (void*)user_data);
+        auto str = fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", enum_name(op_type), size, offset,
+                               iovcnt, (void*)user_data);
         for (auto i = 0; i < iovcnt; ++i) {
             str += fmt::format("iov[{}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
         }
@@ -106,7 +107,7 @@ struct SpdkIocb {
 
     IODevice* iodev;
     SpdkDriveInterface* iface;
-    bool is_read;
+    SpdkDriveOpType op_type;
     uint32_t size;
     uint64_t offset;
     void* user_cookie = nullptr;

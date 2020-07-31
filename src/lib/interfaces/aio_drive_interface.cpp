@@ -280,6 +280,9 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
     HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
+void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
+                                    bool part_of_batch) {}
+
 void AioDriveInterface::submit_batch() {
     auto ibatch = _aio_ctx->move_cur_batch();
     LOGTRACEMOD(iomgr, "submit pending batch n_iocbs={}", ibatch.n_iocbs);
