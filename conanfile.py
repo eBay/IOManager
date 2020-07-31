@@ -27,8 +27,11 @@ class IOMgrConan(ConanFile):
     requires = (
             "folly/2020.05.04.00",
             "libevent/2.1.11",
-            "sds_logging/7.0.2@sds/testing",
+            "sds_logging/7.0.3",
             )
+    build_requires = (
+                "gtest/1.10.0",
+                )
 
     generators = "cmake"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*"
