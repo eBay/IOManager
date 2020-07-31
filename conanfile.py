@@ -30,7 +30,7 @@ class IOMgrConan(ConanFile):
             "boost/1.73.0",
             "folly/2020.05.04.00",
             "libevent/2.1.11",
-            "spdk/20.04.1",
+            "spdk/20.07.x",
             "openssl/1.1.1g"
             )
     build_requires = (
