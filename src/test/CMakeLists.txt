@@ -14,4 +14,4 @@ add_executable(test_iomgr ${TEST_IOMGR_FILES})
 target_link_libraries(test_iomgr ${CONAN_LIBS} iomgr sisl)
 
 # CTest is a testing tool that can be used to test your project.
-# add_test(NAME TestIOMgr COMMAND test_iomgr)
+add_test(NAME TestIOMgr COMMAND test_iomgr)

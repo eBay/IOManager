@@ -53,7 +53,6 @@ void timer_epoll::stop() {
 }
 
 timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) {
-    struct timespec now;
     struct itimerspec tspec;
     timer_handle_t thdl;
     IODevice* raw_iodev = nullptr;
@@ -88,17 +87,10 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
         thdl = timer_handle_t(this, heap_hdl);
     }
 
-    if (clock_gettime(CLOCK_MONOTONIC, &now) == -1) {
-        LOGDFATAL("Unable to get the current time, errno={}", errno);
-        throw std::system_error(errno, std::generic_category(), "Unable to get cur time");
-    }
-    tspec.it_value.tv_sec = now.tv_sec + nanos_after / 1000000000;
-    tspec.it_value.tv_nsec = now.tv_nsec + nanos_after % 1000000000;
+    tspec.it_value.tv_sec = nanos_after / 1000000000;
+    tspec.it_value.tv_nsec = nanos_after % 1000000000;
 
-    //    LOGTRACEMOD(iomgr, "Setting per thread timer with timeout: [sec={} nsec={}] cur_time: [sec={}, nsec={}]",
-    //        tspec.it_value.tv_sec, tpsec.)
-
-    if (!raw_iodev || (timerfd_settime(raw_iodev->fd(), TFD_TIMER_ABSTIME, &tspec, NULL) == -1)) {
+    if (!raw_iodev || (timerfd_settime(raw_iodev->fd(), 0, &tspec, NULL) == -1)) {
         LOGDFATAL("Unable to set a timer using timer fd = {}, errno={}", raw_iodev->fd(), errno);
         throw std::system_error(errno, std::generic_category(), "timer fd set time failed");
     }
