@@ -46,7 +46,7 @@ AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags) {
     /* it doesn't need to keep track of any fds */
-    auto fd = open(devname.c_str(), oflags);
+    auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
         folly::throwSystemError(
             fmt::format("Unable to open the device={} errno={} strerror={}", devname, errno, strerror(errno)));
