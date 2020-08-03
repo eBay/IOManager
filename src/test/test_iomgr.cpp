@@ -176,7 +176,7 @@ int main(int argc, char* argv[]) {
 
     // Start the IOManager
     // iomanager.start(1, nthreads, false, on_io_thread_state_change);
-    iomanager.start(nthreads, true, on_io_thread_state_change);
+    iomanager.start(nthreads, false, on_io_thread_state_change);
     iomanager.default_drive_interface()->attach_completion_cb(on_io_completion);
 
 #if 0

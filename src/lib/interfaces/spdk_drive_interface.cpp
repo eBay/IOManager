@@ -9,7 +9,11 @@ extern "C" {
 #include <spdk/env.h>
 #include <spdk/thread.h>
 #include <spdk/string.h>
+#ifdef SPDK_DRIVE_USE_URING
+#include <spdk/module/bdev/uring/bdev_uring.h>
+#else
 #include <spdk/module/bdev/aio/bdev_aio.h>
+#endif
 }
 namespace iomgr {
 
@@ -46,10 +50,17 @@ io_device_ptr SpdkDriveInterface::_open_dev(const std::string& devname) {
         LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted", devname);
         bdevname += std::string("_bdev");
 
+#ifdef SPDK_DRIVE_USE_URING
+        auto ret_bdev = create_uring_bdev(bdevname.c_str(), devname.c_str(), 512u);
+        if (ret_bdev == nullptr) {
+            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdevname));
+        }
+#else
         int ret = create_aio_bdev(bdevname.c_str(), devname.c_str(), 512u);
         if (ret != 0) {
             folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error={}", bdevname, ret));
         }
+#endif
     }
 
     struct spdk_bdev_desc* desc = NULL;
