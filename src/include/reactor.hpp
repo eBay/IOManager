@@ -176,7 +176,7 @@ public:
     virtual void run(int iomgr_slot_num, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
-    bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg);
+    bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
 
     virtual bool is_tight_loop_reactor() const = 0;
     virtual bool is_worker() const { return (m_worker_slot_num != -1); }

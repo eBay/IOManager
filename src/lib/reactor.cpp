@@ -151,13 +151,13 @@ void IOReactor::start_interface(IOInterface* iface) {
 
 const io_thread_t& IOReactor::iothread_self() const { return m_io_threads[0]; };
 
-bool IOReactor::deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg) {
+bool IOReactor::deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor) {
     msg->m_dest_thread = taddr;
     if (msg->has_sem_block()) { msg->m_msg_sem->pending(); }
 
     // If the sender and receiver are same thread, take a shortcut to directly handle the message. Of course, this
     // will cause out-of-order delivery of messages. However, there is no good way to prevent deadlock
-    if (iomanager.this_reactor() == this) {
+    if (sender_reactor == this) {
         handle_msg(msg);
         return true;
     } else {

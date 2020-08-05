@@ -111,6 +111,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     } else {
         set_state(iomgr_state::running);
     }
+    LOGINFO("IOManager is ready and move to running state");
 
     // Notify all the reactors that they are ready to make callback about thread started
     iomanager.run_on(
@@ -265,11 +266,12 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     int64_t min_cnt = INTMAX_MAX;
     io_thread_addr_t min_thread = -1U;
     IOReactor* min_reactor = nullptr;
+    IOReactor* sender_reactor = iomanager.this_reactor();
 
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
         auto& reactor = m_worker_reactors[std::experimental::randint(0, (int)m_worker_reactors.size() - 1)].second;
-        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_idx, msg);
+        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_idx, msg, sender_reactor);
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
             if (reactor && reactor->is_io_reactor()) {
@@ -283,7 +285,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                             }
                         } else {
                             auto new_msg = msg->clone();
-                            reactor->deliver_msg(thr->thread_addr, new_msg);
+                            reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor);
                             cloned = true;
                             ++sent_to;
                         }
@@ -292,7 +294,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
             }
 
             if (is_last_thread && min_reactor) {
-                if (send_msg(min_reactor->addr_to_thread(min_thread), msg)) ++sent_to;
+                if (min_reactor->deliver_msg(min_thread, msg, sender_reactor)) ++sent_to;
             }
         });
     }
@@ -326,11 +328,14 @@ bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
         IOReactorSPDK::deliver_msg_direct(std::get< spdk_thread* >(to_thread->thread_impl), msg);
         ret = true;
     } else {
-        specific_reactor(std::get< reactor_idx_t >(to_thread->thread_impl), [&](IOReactor* reactor) {
-            if (reactor && reactor->is_io_reactor() && reactor->deliver_msg(to_thread->thread_addr, msg)) {
-                ret = true;
-            }
-        });
+        IOReactor* sender_reactor = iomanager.this_reactor();
+        specific_reactor(std::get< reactor_idx_t >(to_thread->thread_impl),
+                         [&ret, &to_thread, msg, sender_reactor](IOReactor* reactor) {
+                             if (reactor && reactor->is_io_reactor() &&
+                                 reactor->deliver_msg(to_thread->thread_addr, msg, sender_reactor)) {
+                                 ret = true;
+                             }
+                         });
     }
 
     if (!ret) { iomgr_msg::free(msg); }
