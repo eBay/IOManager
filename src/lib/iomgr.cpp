@@ -94,7 +94,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
 
-    if (is_spdk && !m_is_spdk_inited_externally) {
+    if (is_spdk) {
         LOGINFO("Initializing bdev subsystem");
         iomanager.run_on(
             thread_regex::least_busy_worker,
