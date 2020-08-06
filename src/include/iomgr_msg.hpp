@@ -119,69 +119,6 @@ struct sync_iomgr_msg {
         blk->m_cv.wait(lck, [this] { return (blk->m_pending == 0); });
     }
 };
-
-#if 0
-struct sync_iomgr_msg : public iomgr_msg {
-    friend class sisl::ObjectAllocator< sync_iomgr_msg >;
-    std::shared_ptr< _sync_sem_block > blk;
-
-    struct _sync_sem_block {
-        std::mutex m_mtx;
-        std::condition_variable m_cv;
-        int32_t m_pending = 0;
-    };
-
-    iomgr_msg* clone() override {
-        auto new_msg = sisl::ObjectAllocator< sync_iomgr_msg >::make_object(m_type, m_dest_module, m_data);
-        new_msg->m_is_sync_msg = m_is_sync_msg;
-        new_msg->blk = blk;
-        return new_msg;
-    }
-
-    static sync_iomgr_msg* cast(iomgr_msg* msg) { return static_cast< sync_iomgr_msg* >(msg); }
-
-    template < class... Args >
-    static sync_iomgr_msg* create(Args&&... args) {
-        auto msg = sisl::ObjectAllocator< sync_iomgr_msg >::make_object(std::forward< Args >(args)...);
-        msg->m_is_sync_msg = true;
-        msg->blk = std::make_shared< _sync_msg_block >();
-        return msg;
-    }
-
-    void free_yourself() override { sisl::ObjectAllocator< sync_iomgr_msg >::deallocate(this); }
-
-    void pending() {
-        std::lock_guard< std::mutex > lck(blk->m_mtx);
-        ++blk->m_pending;
-    }
-
-    void done() {
-        std::lock_guard< std::mutex > lck(blk->m_mtx);
-        --blk->m_pending;
-        blk->m_cv.notify_one();
-    }
-
-    int32_t num_pending() {
-        std::lock_guard< std::mutex > lck(blk->m_mtx);
-        return blk->m_pending;
-    }
-
-    void wait() {
-        std::unique_lock< std::mutex > lck(blk->m_mtx);
-        blk->m_cv.wait(lck, [this] { return (blk->m_pending == 0); });
-    }
-
-protected:
-    sync_iomgr_msg(const sync_iomgr_msg& msg) = default;
-
-    template < class... Args >
-    sync_iomgr_msg(Args&&... args) : iomgr_msg(std::forward< Args >(args)...) {
-        m_is_sync_msg = true;
-    }
-
-    virtual ~sync_iomgr_msg() = default;
-};
-#endif
 } // namespace iomgr
 
 #if 0
