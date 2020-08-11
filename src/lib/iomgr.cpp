@@ -18,6 +18,7 @@ extern "C" {
 }
 
 #include <sds_logging/logging.h>
+#include <sds_options/options.h>
 
 #include <cerrno>
 #include <chrono>
@@ -34,6 +35,10 @@ extern "C" {
 #include <utility/thread_factory.hpp>
 #include <fds/obj_allocator.hpp>
 #include <experimental/random>
+
+SDS_OPTION_GROUP(iomgr,
+                 (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
+                  ::cxxopts::value< std::string >()->default_value("pa"), "mode"))
 
 namespace iomgr {
 
@@ -94,7 +99,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
 
-    if (is_spdk && !m_is_spdk_inited_externally) {
+    if (is_spdk) {
         LOGINFO("Initializing bdev subsystem");
         iomanager.run_on(
             thread_regex::least_busy_worker,
@@ -127,6 +132,16 @@ void IOManager::start_spdk() {
         spdk_env_opts_init(&opts);
         opts.name = "hs_code";
         opts.shm_id = -1;
+
+        // Set VA mode if given
+        auto va_mode = std::string("pa");
+        try {
+            va_mode = SDS_OPTIONS["iova-mode"].as<std::string>();
+            LOGDEBUG("Using IOVA = {} mode", va_mode);
+        } catch (std::exception& e) {
+            LOGDEBUG("Using default IOVA = {} mode", va_mode);
+        }
+        opts.iova_mode = va_mode.c_str();
         //    opts.mem_size = 512;
 
         int rc = spdk_env_init(&opts);

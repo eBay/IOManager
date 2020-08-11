@@ -17,7 +17,7 @@ using log_level = spdlog::level::level_enum;
 THREAD_BUFFER_INIT;
 
 SDS_LOGGING_INIT(iomgr)
-SDS_OPTIONS_ENABLE(logging)
+SDS_OPTIONS_ENABLE(logging, iomgr)
 
 using namespace iomgr;
 
@@ -170,7 +170,7 @@ static void on_io_thread_state_change(bool started) {
 }
 
 int main(int argc, char* argv[]) {
-    SDS_OPTIONS_LOAD(argc, argv, logging);
+    SDS_OPTIONS_LOAD(argc, argv, logging, iomgr);
     sds_logging::SetLogger("example");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
