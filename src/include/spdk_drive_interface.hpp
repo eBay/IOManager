@@ -81,6 +81,7 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
+    std::mutex m_batch_mtx;
     std::vector<SpdkIocb*> m_batch_io;
 };
 

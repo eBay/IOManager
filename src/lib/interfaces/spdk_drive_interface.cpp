@@ -321,12 +321,15 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
         iomanager.send_msg(iocb->owner_thread, reply);
     };
 
-    m_batch_io.push_back(iocb);
-    if (m_batch_io.size() == SPDK_BATCH_IO_NUM) {
-        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(m_batch_io[0]),
-                                     sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
-        iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-        m_batch_io.clear();
+    {
+        std::unique_lock< std::mutex > lk(m_batch_mtx);
+        m_batch_io.push_back(iocb);
+        if (m_batch_io.size() == SPDK_BATCH_IO_NUM) {
+            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(m_batch_io[0]),
+                                         sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
+            iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+            m_batch_io.clear();
+        }
     }
 }
 
