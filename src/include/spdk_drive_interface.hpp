@@ -18,9 +18,15 @@ struct SpdkDriveDeviceContext {
 struct spdk_msg_type {
     static constexpr int QUEUE_IO = 100;
     static constexpr int ASYNC_IO_DONE = 101;
+    static constexpr int QUEUE_BATCH_IO = 102;
 };
 
 struct SpdkIocb;
+
+static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
+
+static_assert(SPDK_BATCH_IO_NUM == 2);
+
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;
 
@@ -75,6 +81,7 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
+    std::vector<SpdkIocb*> m_batch_io;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)

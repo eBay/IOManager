@@ -33,10 +33,9 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
     } else {
         // Issue the opendev on any one of the tight loop reactor
         io_device_ptr ret;
-        iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
-            true /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker,
+                         [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
+                         true /* wait_for_completion */);
         return ret;
     }
 }
@@ -322,8 +321,13 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
         iomanager.send_msg(iocb->owner_thread, reply);
     };
 
-    auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
-    iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+    m_batch_io.push_back(iocb);
+    if (m_batch_io.size() == SPDK_BATCH_IO_NUM) {
+        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(m_batch_io[0]),
+                                     sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
+        iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+        m_batch_io.clear();
+    }
 }
 
 void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
@@ -331,6 +335,14 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     case spdk_msg_type::QUEUE_IO: {
         auto iocb = (SpdkIocb*)msg->data_buf().bytes;
         submit_io((void*)iocb);
+        break;
+    }
+
+    case spdk_msg_type::QUEUE_BATCH_IO: {
+        auto iocb = (SpdkIocb**)msg->data_buf().bytes;
+        for (size_t i = 0; i < SPDK_BATCH_IO_NUM; ++i) {
+            submit_io((void*)iocb[i]);
+        }
         break;
     }
 
