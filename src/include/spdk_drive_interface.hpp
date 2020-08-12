@@ -19,6 +19,7 @@ struct spdk_msg_type {
     static constexpr int QUEUE_IO = 100;
     static constexpr int ASYNC_IO_DONE = 101;
     static constexpr int QUEUE_BATCH_IO = 102;
+    static constexpr int ASYNC_BATCH_IO_DONE = 103;
 };
 
 struct SpdkIocb;
@@ -70,8 +71,8 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    bool try_submit_io(SpdkIocb* iocb);
-    void do_async_in_tloop_thread(SpdkIocb* iocb);
+    bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
+    void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
 
@@ -81,8 +82,7 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
-    std::mutex m_batch_mtx;
-    std::vector<SpdkIocb*> m_batch_io;
+    static thread_local std::vector< SpdkIocb* > _batch_io;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
@@ -90,7 +90,12 @@ ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
 struct SpdkIocb {
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
-            iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
+            iodev(iodev),
+            iface(iface),
+            op_type(op_type),
+            size(size),
+            offset(offset),
+            user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
