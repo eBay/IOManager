@@ -19,8 +19,6 @@ namespace iomgr {
 
 static io_thread_t _non_io_thread = std::make_shared< io_thread >();
 
-thread_local std::vector< SpdkIocb* > SpdkDriveInterface::_batch_io;
-
 SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
     // m_my_msg_modid = iomanager.register_msg_module(bind_this(handle_msg, 1));
     m_my_msg_modid = iomanager.register_msg_module([this](iomgr_msg* msg) { handle_msg(msg); });
@@ -318,14 +316,20 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb, part_of_batch](int64_t res, uint8_t* cookie) {
-        static thread_local uint32_t num_batch_io_cmplt = 0;
-        if (part_of_batch && ++num_batch_io_cmplt == SPDK_BATCH_IO_NUM) {
-            num_batch_io_cmplt = 0;
-            iocb->result = res;
-            auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
-                                           (uint8_t*)&(_batch_io[0]), sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
-            iomanager.send_msg(iocb->owner_thread, reply);
+        static thread_local std::vector< SpdkIocb* > comp_iocbs;
+        if (part_of_batch) {
+            comp_iocbs.emplace_back(iocb);
+            if (comp_iocbs.size() == SPDK_BATCH_IO_NUM) {
+                // send batch io done msg to spdk thread;
+                iocb->result = res;
+                auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
+                                               (uint8_t*)&(comp_iocbs[0]), sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
+                iomanager.send_msg(iocb->owner_thread, reply);
+                comp_iocbs.clear();
+            }
+            // not reaching threashold yet, keep waiting other batch io comp_cb;
         } else {
+            // not batch io, go ahead to send msg;
             iocb->result = res;
             auto reply =
                 iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
@@ -333,14 +337,15 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
         }
     };
 
-    if (part_of_batch && _batch_io.size() < SPDK_BATCH_IO_NUM) {
-        _batch_io.push_back(iocb);
-        if (_batch_io.size() == SPDK_BATCH_IO_NUM) {
-            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(_batch_io[0]),
+    static thread_local std::vector< SpdkIocb* > batch_io;
+    if (part_of_batch && batch_io.size() < SPDK_BATCH_IO_NUM) {
+        batch_io.emplace_back(iocb);
+        if (batch_io.size() == SPDK_BATCH_IO_NUM) {
+            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(batch_io[0]),
                                          sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
             iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-            _batch_io.clear();
         }
+        batch_io.clear();
     } else {
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
