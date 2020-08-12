@@ -90,6 +90,11 @@ void IOReactor::stop() {
     notify_thread_state(false /* started */);
 }
 
+bool IOReactor::can_add_iface(const std::shared_ptr< IOInterface >& iface, const io_thread_t& thr) {
+    if (iface->scope() == thread_regex::all_io) { return true; }
+    return is_worker() ? (iface->scope() == thread_regex::all_worker) : (iface->scope() == thread_regex::all_user);
+}
+
 void IOReactor::start_io_thread(const io_thread_t& thr) {
     m_io_threads.emplace_back(thr);
     thr->thread_addr = m_io_threads.size() - 1;
@@ -104,7 +109,7 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
     {
         auto iface_list = iomanager.iface_rlock();
         for (auto& iface : *iface_list) {
-            iface->on_io_thread_start(thr);
+            if (can_add_iface(iface, thr)) { iface->on_io_thread_start(thr); }
         }
         m_io_thread_count.increment();
     }

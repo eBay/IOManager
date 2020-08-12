@@ -47,7 +47,7 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...) -> overloaded< Ts... >;
+overloaded(Ts...)->overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
@@ -83,8 +83,9 @@ public:
     void stop_io_loop();
 
     /********* Interface/Device Related Operations ********/
-    void add_interface(std::shared_ptr< IOInterface > iface);
-    void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default);
+    void add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope = thread_regex::all_io);
+    void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default,
+                             thread_regex iface_scope = thread_regex::all_io);
     void device_reschedule(const io_device_ptr& iodev, int event);
 
     /*template < class... Args >
