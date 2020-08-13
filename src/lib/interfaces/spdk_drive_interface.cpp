@@ -151,7 +151,7 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
         create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
     }
 
-    if (!create_ctx->bdev_name.empty()) {
+    if (!create_ctx->bdev_name.empty() && !create_ctx->err) {
         // Issue the opendev on any one of the tight loop reactor
         iomanager.run_on(
             thread_regex::least_busy_worker,
