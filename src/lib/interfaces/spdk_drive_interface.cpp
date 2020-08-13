@@ -142,12 +142,12 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
 
     // First create the bdev
     auto create_ctx = std::make_shared< creat_ctx >();
+    create_ctx->address = devname;
     {
-        auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
-        create_ctx->address = devname;
         iomanager.run_on(
             thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
-            true /* wait_for_completion */);
+            false /* wait_for_completion */);
+        auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
         create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
     }
 
