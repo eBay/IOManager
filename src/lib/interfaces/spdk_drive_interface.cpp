@@ -43,20 +43,21 @@ static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
         auto lg = std::lock_guard< std::mutex >(ctx->lock);
         LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted",
                 ctx->address);
-        ctx->bdev_name = ctx->address + std::string("_bdev");
+        auto const bdev_name = ctx->address + std::string("_bdev");
 
 #ifdef SPDK_DRIVE_USE_URING
-        auto ret_bdev = create_uring_bdev(ctx->bdev_name.c_str(), ctx->address.c_str(), 512u);
+        auto ret_bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
         if (ret_bdev == nullptr) {
-            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", ctx->bdev_name));
+            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
         }
 #else
-        int ret = create_aio_bdev(ctx->bdev_name.c_str(), ctx->address.c_str(), 512u);
+        int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
         if (ret != 0) {
             folly::throwSystemError(
-                fmt::format("Unable to open the device={} to create bdev error={}", ctx->bdev_name, ret));
+                fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
         }
 #endif
+        ctx->bdev_name =  bdev_name;
         ctx->done = true;
     }
     ctx->cv.notify_all();
