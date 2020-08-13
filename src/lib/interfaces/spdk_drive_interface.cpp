@@ -136,10 +136,7 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
     io_device_ptr ret{nullptr};
-    if (iomanager.am_i_worker_reactor()) {
-        RELEASE_ASSERT(iomanager.am_i_tight_loop_reactor(), "Opening SPDK drive on non-spdk system");
-        return ret;
-    }
+    RELEASE_ASSERT(!iomanager.am_i_worker_reactor(), "We cannot open the device from a worker reactor thread unless its a bdev");
 
     // First create the bdev
     auto create_ctx = std::make_shared< creat_ctx >();
