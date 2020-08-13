@@ -90,7 +90,7 @@ void IOReactor::stop() {
     notify_thread_state(false /* started */);
 }
 
-bool IOReactor::can_add_iface(const std::shared_ptr< IOInterface >& iface) {
+bool IOReactor::can_add_iface(const std::shared_ptr< IOInterface >& iface) const {
     if (iface->scope() == thread_regex::all_io) { return true; }
     return is_worker() ? (iface->scope() == thread_regex::all_worker) : (iface->scope() == thread_regex::all_user);
 }
