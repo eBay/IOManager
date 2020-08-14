@@ -218,6 +218,7 @@ protected:
 
 private:
     const io_thread_t& msg_thread(iomgr_msg* msg);
+    bool can_add_iface(const std::shared_ptr< IOInterface >& iface) const;
 
 protected:
     reactor_idx_t m_reactor_num; // Index into global system wide thread list

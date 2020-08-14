@@ -205,18 +205,20 @@ void IOManager::stop() {
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 }
 
-void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface) {
-    add_interface(std::dynamic_pointer_cast< IOInterface >(iface));
+void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
+                                    thread_regex iface_scope) {
+    add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
     m_drive_ifaces.wlock()->push_back(iface);
     if (default_iface) m_default_drive_iface = iface;
 }
 
-void IOManager::add_interface(std::shared_ptr< IOInterface > iface) {
+void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope) {
     auto iface_list = m_iface_list.wlock();
 
     // Setup the reactor io threads to do any registration for interface specific registration
+    iface->set_scope(iface_scope);
     iomanager.run_on(
-        thread_regex::all_io,
+        iface_scope,
         [this, iface](io_thread_addr_t taddr) {
             iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
         },

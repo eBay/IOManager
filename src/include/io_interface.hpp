@@ -34,6 +34,9 @@ public:
     void on_io_thread_start(const io_thread_t& thr);
     void on_io_thread_stopped(const io_thread_t& thr);
 
+    thread_regex scope() const { return m_thread_scope; }
+    void set_scope(thread_regex t) { m_thread_scope = t; }
+
 protected:
     virtual void init_iface_thread_ctx(const io_thread_t& thr) = 0;
     virtual void clear_iface_thread_ctx(const io_thread_t& thr) = 0;
@@ -48,6 +51,7 @@ protected:
     // std::shared_mutex m_mtx;
     std::unordered_map< backing_dev_t, io_device_ptr > m_iodev_map;
     sisl::sparse_vector< void* > m_thread_local_ctx;
+    thread_regex m_thread_scope = thread_regex::all_io;
 };
 
 class GenericIOInterface : public IOInterface {
