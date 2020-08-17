@@ -14,6 +14,7 @@ extern "C" {
 #else
 #include <spdk/module/bdev/aio/bdev_aio.h>
 #endif
+#include <spdk/module/bdev/nvme/bdev_nvme.h>
 }
 namespace iomgr {
 
@@ -26,55 +27,151 @@ SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_com
 
 static void bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev* bdev, void* event_ctx) {}
 
-io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
-    if (iomanager.am_i_worker_reactor()) {
-        DEBUG_ASSERT(iomanager.am_i_tight_loop_reactor(), "Opening SPDK drive on non-spdk system");
-        return _open_dev(devname);
-    } else {
-        // Issue the opendev on any one of the tight loop reactor
-        io_device_ptr ret;
-        iomanager.run_on(thread_regex::least_busy_worker,
-                         [this, &ret, devname](io_thread_addr_t taddr) { ret = _open_dev(devname); },
-                         true /* wait_for_completion */);
-        return ret;
-    }
-}
+struct creat_ctx {
+    std::string address;
+    std::error_condition err;
+    const char* names[128];
+    std::mutex lock;
+    std::condition_variable cv;
+    bool done{false};
+    std::string bdev_name;
+};
 
-io_device_ptr SpdkDriveInterface::_open_dev(const std::string& devname) {
-    std::string bdevname = devname;
-
-    // Check if the device is a file, if so create a bdev out of the file and open that bdev. This is meant only for
-    // a testing and docker environment
-    if (std::filesystem::is_regular_file(std::filesystem::status(devname))) {
-        LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted", devname);
-        bdevname += std::string("_bdev");
+static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
+    {
+        auto lg = std::lock_guard< std::mutex >(ctx->lock);
+        LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted",
+                ctx->address);
+        auto const bdev_name = ctx->address + std::string("_bdev");
 
 #ifdef SPDK_DRIVE_USE_URING
-        auto ret_bdev = create_uring_bdev(bdevname.c_str(), devname.c_str(), 512u);
+        auto ret_bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
         if (ret_bdev == nullptr) {
-            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdevname));
+            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
         }
 #else
-        int ret = create_aio_bdev(bdevname.c_str(), devname.c_str(), 512u);
+        int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
         if (ret != 0) {
-            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error={}", bdevname, ret));
+            folly::throwSystemError(
+                fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
         }
 #endif
+        ctx->bdev_name =  bdev_name;
+        ctx->done = true;
+    }
+    ctx->cv.notify_all();
+}
+
+static void create_bdev_done(void* cb_ctx, size_t bdev_cnt, int rc) {
+    auto context = static_cast< creat_ctx* >(cb_ctx);
+    {
+        auto lg = std::lock_guard< std::mutex >(context->lock);
+        LOGDEBUGMOD(iomgr, "Volume setup for {} received: [rc={}, cnt={}]", context->address, rc, bdev_cnt);
+        if (0 < bdev_cnt) {
+            context->bdev_name = std::string(context->names[--bdev_cnt]);
+            LOGDEBUGMOD(iomgr, "Created BDev: [{}]", context->bdev_name);
+        }
+        context->done = true;
+    }
+    context->cv.notify_all();
+}
+
+static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
+    auto address_c = ctx->address.c_str();
+    spdk_nvme_transport_id trid;
+    memset(&trid, 0, sizeof(trid));
+    trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
+
+    do {
+        auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
+        if (rc < 0) {
+            LOGERROR("Failed to parse given str: {}", address_c);
+            continue;
+        }
+
+        if (trid.trtype == SPDK_NVME_TRANSPORT_PCIE) {
+            struct spdk_pci_addr pci_addr;
+            if (spdk_pci_addr_parse(&pci_addr, trid.traddr) < 0) {
+                LOGERROR("Invalid traddr={}", address_c);
+                continue;
+            }
+            spdk_pci_addr_fmt(trid.traddr, sizeof(trid.traddr), &pci_addr);
+        } else {
+            if (trid.subnqn[0] == '\0') { snprintf(trid.subnqn, sizeof(trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN); }
+        }
+
+        /* Enumerate all of the controllers */
+        spdk_nvme_host_id hostid{};
+        uint32_t count{128};
+        if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
+                                  (void*)ctx.get());
+            0 != rc) {
+            LOGERROR("Failed createing NVMe BDEV from {}", trid.traddr);
+        }
+        // Good exit path, wait for create_bdev_done!
+        return;
+    } while (false);
+    // Failed!
+    {
+        auto lg = std::lock_guard< std::mutex >(ctx->lock);
+        ctx->err = std::make_error_condition(std::errc::io_error);
+        ctx->done = true;
+    }
+    ctx->cv.notify_all();
+}
+
+static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
+    // Check if the device is a file, if so create a bdev out of the file and open that bdev. This is meant only for
+    // a testing and docker environment
+    try {
+        if (std::filesystem::is_regular_file(std::filesystem::status(ctx->address))) {
+            create_fs_bdev(ctx);
+            return;
+        }
+    } catch (std::exception& e) {}
+    // Assume this is a PCIe address for now, we don't support anything else ATM
+    create_nvme_bdev(ctx);
+}
+
+io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
+    io_device_ptr ret{nullptr};
+    RELEASE_ASSERT(!iomanager.am_i_worker_reactor(), "We cannot open the device from a worker reactor thread unless its a bdev");
+
+    // First create the bdev
+    auto create_ctx = std::make_shared< creat_ctx >();
+    create_ctx->address = devname;
+    {
+        iomanager.run_on(
+            thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
+            false /* wait_for_completion */);
+        auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
+        create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
     }
 
+    if (!create_ctx->bdev_name.empty() && !create_ctx->err) {
+        // Issue the opendev on any one of the tight loop reactor
+        iomanager.run_on(
+            thread_regex::least_busy_worker,
+            [this, &ret, bdev_name = create_ctx->bdev_name](io_thread_addr_t taddr) { ret = _open_dev(bdev_name); },
+            true /* wait_for_completion */);
+    }
+    return ret;
+}
+
+io_device_ptr SpdkDriveInterface::_open_dev(const std::string& bdev_name) {
     struct spdk_bdev_desc* desc = NULL;
-    auto rc = spdk_bdev_open_ext(bdevname.c_str(), true, bdev_event_cb, NULL, &desc);
-    if (rc != 0) { folly::throwSystemError(fmt::format("Unable to open the device={} error={}", bdevname, rc)); }
+    auto rc = spdk_bdev_open_ext(bdev_name.c_str(), true, bdev_event_cb, NULL, &desc);
+    if (rc != 0) { folly::throwSystemError(fmt::format("Unable to open the device={} error={}", bdev_name, rc)); }
 
     auto iodev = std::make_shared< IODevice >();
     iodev->dev = backing_dev_t(desc);
     iodev->thread_scope = thread_regex::all_worker;
     iodev->pri = 9;
     iodev->io_interface = this;
-    iodev->devname = bdevname;
+    iodev->devname = bdev_name;
 
     add_io_device(iodev, true /* wait_to_add */);
-    LOGINFOMOD(iomgr, "Device {} opened successfully", bdevname);
+    LOGINFOMOD(iomgr, "Device {} opened successfully", bdev_name);
     return iodev;
 }
 
