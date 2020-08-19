@@ -415,62 +415,55 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
 }
 
 void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
-    static thread_local std::vector< SpdkIocb* >* s_batch_io = nullptr;
+    static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
-        // track iocb completion count in different batch;
-        //   key: batch vec address,
-        // value: number of iocb completed in this batch;
-        static thread_local std::unordered_map< void*, uint32_t > s_comp_map;
-
-        if (iocb->part_of_batch) {
-            auto it = s_comp_map.find((void*)(iocb->batch_vec_ptr));
-            if (it == s_comp_map.end()) {
-                s_comp_map.insert({(void*)(iocb->batch_vec_ptr), 1});
-            } else {
-                it->second++;
-            }
-
-            // re-use the batch vector to send/create async_ batch_ io_done msg;
-            if (s_comp_map[(void*)(iocb->batch_vec_ptr)] == iocb->batch_vec_ptr->size()) {
-                // this batch has completed all its iocbs, go ahead to send batch io done msg;
-                s_comp_map.erase((void*)(iocb->batch_vec_ptr));
-
-                iocb->result = res;
-                auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
-                                               (uint8_t*)iocb->batch_vec_ptr, sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
-                iomanager.send_msg(iocb->owner_thread, reply);
-
-                // batch vec memory will be freed by spdk thread after all iocb have been processed
-            }
-        } else {
+        if (!iocb->part_of_batch) {
             iocb->result = res;
             auto reply =
                 iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
             iomanager.send_msg(iocb->owner_thread, reply);
+        } else {
+            ++(iocb->batch_info_ptr->num_io_comp);
+
+            assert(iocb->batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM);
+            // batch io completion count should never exceed nuber of batch io;
+            assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
+
+            // re-use the batch info ptr which contains all the batch iocbs to send/create async_batch_io_done msg;
+            if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
+                iocb->result = res;
+                auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
+                                               (uint8_t*)iocb->batch_info_ptr, sizeof(SpdkBatchIocb*));
+                iomanager.send_msg(iocb->owner_thread, reply);
+            }
+
+            // if there is any batched io doesn't get all the iocb completion, we will see memory leak in the end
+            // reported becuase batch io will not freed by spdk thread due to missing async io done msg;
         }
     };
 
     if (!iocb->part_of_batch) {
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-        return;
-    }
+    } else {
+        if (s_batch_info_ptr == nullptr) { s_batch_info_ptr = new SpdkBatchIocb(); }
 
-    if (s_batch_io == nullptr) { s_batch_io = sisl::VectorPool< SpdkIocb* >::alloc(); }
+        iocb->batch_info_ptr = s_batch_info_ptr;
+        s_batch_info_ptr->batch_io->push_back(iocb);
 
-    iocb->batch_vec_ptr = s_batch_io;
-    s_batch_io->push_back(iocb);
+        // send this batch
+        if (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM) {
+            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
+                                         sizeof(SpdkBatchIocb*));
+            iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
 
-    if (s_batch_io->size() == SPDK_BATCH_IO_NUM) {
-        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_io,
-                                     sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
-        iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-        // memory will be freed by completion routine;
-        s_batch_io = nullptr;
+            // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
+            s_batch_info_ptr = nullptr;
+        }
     }
 }
 
@@ -483,8 +476,8 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     }
 
     case spdk_msg_type::QUEUE_BATCH_IO: {
-        auto batch_io = (std::vector< SpdkIocb* >*)msg->data_buf().bytes;
-        for (auto& iocb : *batch_io) {
+        auto batch_info = (SpdkBatchIocb*)msg->data_buf().bytes;
+        for (auto& iocb : *(batch_info->batch_io)) {
             submit_io((void*)iocb);
         }
         break;
@@ -498,14 +491,14 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     }
 
     case spdk_msg_type::ASYNC_BATCH_IO_DONE: {
-        auto batch_io = (std::vector< SpdkIocb* >*)(msg->data_buf().bytes);
-        for (auto& iocb : *batch_io) {
+        auto batch_info = (SpdkBatchIocb*)(msg->data_buf().bytes);
+        for (auto& iocb : *(batch_info->batch_io)) {
             if (m_comp_cb) { m_comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie); }
             complete_io(iocb);
         }
 
         // now return memory to vector pool
-        sisl::VectorPool< SpdkIocb* >::free(batch_io);
+        delete batch_info;
         break;
     }
     }

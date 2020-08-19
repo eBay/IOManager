@@ -87,6 +87,22 @@ private:
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
 
+struct SpdkBatchIocb {
+    SpdkBatchIocb() {
+        batch_io = sisl::VectorPool< SpdkIocb* >::alloc();
+        num_io_comp = 0;
+    }
+
+    ~SpdkBatchIocb() {
+        batch_io->clear();
+        sisl::VectorPool< SpdkIocb* >::free(batch_io);
+        batch_io = nullptr;
+    }
+
+    uint32_t num_io_comp = 0;
+    std::vector< SpdkIocb* >* batch_io = nullptr;
+};
+
 struct SpdkIocb {
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
@@ -133,6 +149,6 @@ struct SpdkIocb {
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
     bool part_of_batch = false;
-    std::vector< SpdkIocb* >* batch_vec_ptr = nullptr;
+    SpdkBatchIocb* batch_info_ptr = nullptr;
 };
 } // namespace iomgr
