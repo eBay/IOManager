@@ -3,6 +3,7 @@
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
 #include <fds/utils.hpp>
+#include <fds/vector_pool.hpp>
 #include <optional>
 #include <spdk/bdev.h>
 #include "iomgr_msg.hpp"
@@ -26,7 +27,7 @@ struct SpdkIocb;
 
 static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
 
-static_assert(SPDK_BATCH_IO_NUM == 2);
+static_assert(SPDK_BATCH_IO_NUM > 1);
 
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;
@@ -71,8 +72,8 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
-    void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
+    bool try_submit_io(SpdkIocb* iocb);
+    void do_async_in_tloop_thread(SpdkIocb* iocb);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
 
@@ -82,7 +83,6 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
-    static thread_local std::vector< SpdkIocb* > _batch_io;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
@@ -132,5 +132,7 @@ struct SpdkIocb {
     io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
+    bool part_of_batch = false;
+    std::vector< SpdkIocb* >* batch_vec_ptr = nullptr;
 };
 } // namespace iomgr

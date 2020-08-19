@@ -56,7 +56,7 @@ static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
                 fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
         }
 #endif
-        ctx->bdev_name =  bdev_name;
+        ctx->bdev_name = bdev_name;
         ctx->done = true;
     }
     ctx->cv.notify_all();
@@ -135,15 +135,16 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
     io_device_ptr ret{nullptr};
-    RELEASE_ASSERT(!iomanager.am_i_worker_reactor(), "We cannot open the device from a worker reactor thread unless its a bdev");
+    RELEASE_ASSERT(!iomanager.am_i_worker_reactor(),
+                   "We cannot open the device from a worker reactor thread unless its a bdev");
 
     // First create the bdev
     auto create_ctx = std::make_shared< creat_ctx >();
     create_ctx->address = devname;
     {
-        iomanager.run_on(
-            thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
-            false /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker,
+                         [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
+                         false /* wait_for_completion */);
         auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
         create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
     }
@@ -269,12 +270,12 @@ static void submit_io(void* b) {
     }
 }
 
-inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
+inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb) {
     bool ret = true;
     if (iomanager.am_i_tight_loop_reactor()) {
         submit_io(iocb);
     } else if (iomanager.am_i_io_reactor()) {
-        do_async_in_tloop_thread(iocb, part_of_batch);
+        do_async_in_tloop_thread(iocb);
     } else {
         ret = false;
     }
@@ -287,7 +288,8 @@ void SpdkDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    if (!try_submit_io(iocb, part_of_batch)) {
+    iocb->part_of_batch = part_of_batch;
+    if (!try_submit_io(iocb)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -299,7 +301,8 @@ void SpdkDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, 
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    if (!try_submit_io(iocb, part_of_batch)) {
+    iocb->part_of_batch = part_of_batch;
+    if (!try_submit_io(iocb)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -313,7 +316,8 @@ void SpdkDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iov
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    if (!try_submit_io(iocb, part_of_batch)) {
+    iocb->part_of_batch = part_of_batch;
+    if (!try_submit_io(iocb)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -326,7 +330,8 @@ void SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovc
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    if (!try_submit_io(std::move(iocb), part_of_batch)) {
+    iocb->part_of_batch = part_of_batch;
+    if (!try_submit_io(std::move(iocb))) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -337,7 +342,8 @@ void SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t of
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::UNMAP, size, offset, cookie);
     iocb->io_wait_entry.cb_fn = submit_io;
-    if (!try_submit_io(iocb, part_of_batch)) {
+    iocb->part_of_batch = part_of_batch;
+    if (!try_submit_io(iocb)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -408,25 +414,42 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
     return ret;
 }
 
-void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
+void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
+    static thread_local std::vector< SpdkIocb* >* s_batch_io = nullptr;
+
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
-    iocb->comp_cb = [this, iocb, part_of_batch](int64_t res, uint8_t* cookie) {
-        static thread_local std::vector< SpdkIocb* > comp_iocbs;
-        if (part_of_batch) {
-            comp_iocbs.emplace_back(iocb);
-            if (comp_iocbs.size() == SPDK_BATCH_IO_NUM) {
-                // send batch io done msg to spdk thread;
+    iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
+        static thread_local std::vector< SpdkIocb* >* s_comp_batch_io = nullptr;
+        static thread_local std::unordered_map< void*, uint32_t > s_comp_map;
+
+        if (s_comp_batch_io == nullptr) { s_comp_batch_io = sisl::VectorPool< SpdkIocb* >::alloc(); }
+
+        if (iocb->part_of_batch) {
+            auto it = s_comp_map.find((void*)(iocb->batch_vec_ptr));
+            if (it == s_comp_map.end()) {
+                s_comp_map.insert({(void*)(iocb->batch_vec_ptr), 1});
+            } else {
+                s_comp_map[(void*)(iocb->batch_vec_ptr)] += 1;
+            }
+
+            if (s_comp_map[(void*)(iocb->batch_vec_ptr)] == iocb->batch_vec_ptr->size()) {
+                s_comp_map.erase((void*)(iocb->batch_vec_ptr));
+                sisl::VectorPool< SpdkIocb* >::free(iocb->batch_vec_ptr);
+            }
+
+            s_comp_batch_io->push_back(iocb);
+            iocb->batch_vec_ptr = s_comp_batch_io;
+            if (s_comp_batch_io->size() == SPDK_BATCH_IO_NUM) {
+                // reuse s_batch_io and send batch io done msg to spdk thread;
                 iocb->result = res;
                 auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
-                                               (uint8_t*)&(comp_iocbs[0]), sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
+                                               (uint8_t*)iocb->batch_vec_ptr, sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
                 iomanager.send_msg(iocb->owner_thread, reply);
-                comp_iocbs.clear();
+                s_comp_batch_io = nullptr;
             }
-            // not reaching threashold yet, keep waiting other batch io comp_cb;
         } else {
-            // not batch io, go ahead to send msg;
             iocb->result = res;
             auto reply =
                 iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
@@ -434,20 +457,25 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
         }
     };
 
-    static thread_local std::vector< SpdkIocb* > batch_io;
-    if (part_of_batch && batch_io.size() < SPDK_BATCH_IO_NUM) {
-        batch_io.emplace_back(iocb);
-        if (batch_io.size() == SPDK_BATCH_IO_NUM) {
-            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)&(batch_io[0]),
-                                         sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
-            iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-        }
-        batch_io.clear();
-    } else {
+    if (!iocb->part_of_batch) {
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+        return;
     }
-} // namespace iomgr
+
+    if (s_batch_io == nullptr) { s_batch_io = sisl::VectorPool< SpdkIocb* >::alloc(); }
+
+    iocb->batch_vec_ptr = s_batch_io;
+    s_batch_io->push_back(iocb);
+
+    if (s_batch_io->size() == SPDK_BATCH_IO_NUM) {
+        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_io,
+                                     sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
+        iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+        // memory will be freed by completion routine;
+        s_batch_io = nullptr;
+    }
+}
 
 void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     switch (msg->m_type) {
@@ -458,9 +486,9 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     }
 
     case spdk_msg_type::QUEUE_BATCH_IO: {
-        auto iocb = (SpdkIocb**)msg->data_buf().bytes;
-        for (size_t i = 0; i < SPDK_BATCH_IO_NUM; ++i) {
-            submit_io((void*)iocb[i]);
+        auto batch_io = (std::vector< SpdkIocb* >*)msg->data_buf().bytes;
+        for (auto& iocb : *batch_io) {
+            submit_io((void*)iocb);
         }
         break;
     }
@@ -473,11 +501,14 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     }
 
     case spdk_msg_type::ASYNC_BATCH_IO_DONE: {
-        auto iocb = (SpdkIocb**)msg->data_buf().bytes;
-        for (size_t i = 0; i < SPDK_BATCH_IO_NUM; ++i) {
-            if (m_comp_cb) m_comp_cb(*iocb[i]->result, (uint8_t*)iocb[i]->user_cookie);
-            complete_io(iocb[i]);
+        auto batch_io = (std::vector< SpdkIocb* >*)(msg->data_buf().bytes);
+        for (auto& iocb : *batch_io) {
+            if (m_comp_cb) { m_comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie); }
+            complete_io(iocb);
         }
+
+        // now return memory to vector pool
+        sisl::VectorPool< SpdkIocb* >::free(batch_io);
         break;
     }
     }
