@@ -431,7 +431,7 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
             if (it == s_comp_map.end()) {
                 s_comp_map.insert({(void*)(iocb->batch_vec_ptr), 1});
             } else {
-                s_comp_map[(void*)(iocb->batch_vec_ptr)] += 1;
+                it->second++;
             }
 
             if (s_comp_map[(void*)(iocb->batch_vec_ptr)] == iocb->batch_vec_ptr->size()) {
