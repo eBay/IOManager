@@ -421,10 +421,10 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
-        static thread_local std::vector< SpdkIocb* >* s_comp_batch_io = nullptr;
+        // track iocb completion count in different batch;
+        //   key: batch vec address,
+        // value: number of iocb completed in this batch;
         static thread_local std::unordered_map< void*, uint32_t > s_comp_map;
-
-        if (s_comp_batch_io == nullptr) { s_comp_batch_io = sisl::VectorPool< SpdkIocb* >::alloc(); }
 
         if (iocb->part_of_batch) {
             auto it = s_comp_map.find((void*)(iocb->batch_vec_ptr));
@@ -434,20 +434,17 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
                 it->second++;
             }
 
+            // re-use the batch vector to send/create async_ batch_ io_done msg;
             if (s_comp_map[(void*)(iocb->batch_vec_ptr)] == iocb->batch_vec_ptr->size()) {
+                // this batch has completed all its iocbs, go ahead to send batch io done msg;
                 s_comp_map.erase((void*)(iocb->batch_vec_ptr));
-                sisl::VectorPool< SpdkIocb* >::free(iocb->batch_vec_ptr);
-            }
 
-            s_comp_batch_io->push_back(iocb);
-            iocb->batch_vec_ptr = s_comp_batch_io;
-            if (s_comp_batch_io->size() == SPDK_BATCH_IO_NUM) {
-                // reuse s_batch_io and send batch io done msg to spdk thread;
                 iocb->result = res;
                 auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
                                                (uint8_t*)iocb->batch_vec_ptr, sizeof(SpdkIocb*) * SPDK_BATCH_IO_NUM);
                 iomanager.send_msg(iocb->owner_thread, reply);
-                s_comp_batch_io = nullptr;
+
+                // batch vec memory will be freed by spdk thread after all iocb have been processed
             }
         } else {
             iocb->result = res;
