@@ -3,6 +3,7 @@
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
 #include <fds/utils.hpp>
+#include <fds/vector_pool.hpp>
 #include <optional>
 #include <spdk/bdev.h>
 #include "iomgr_msg.hpp"
@@ -18,9 +19,16 @@ struct SpdkDriveDeviceContext {
 struct spdk_msg_type {
     static constexpr int QUEUE_IO = 100;
     static constexpr int ASYNC_IO_DONE = 101;
+    static constexpr int QUEUE_BATCH_IO = 102;
+    static constexpr int ASYNC_BATCH_IO_DONE = 103;
 };
 
 struct SpdkIocb;
+
+static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
+
+static_assert(SPDK_BATCH_IO_NUM > 1);
+
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;
 
@@ -64,8 +72,8 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    bool try_submit_io(SpdkIocb* iocb);
-    void do_async_in_tloop_thread(SpdkIocb* iocb);
+    bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
+    void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
 
@@ -79,10 +87,31 @@ private:
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
 
+struct SpdkBatchIocb {
+    SpdkBatchIocb() {
+        batch_io = sisl::VectorPool< SpdkIocb* >::alloc();
+        num_io_comp = 0;
+    }
+
+    ~SpdkBatchIocb() {
+        batch_io->clear();
+        sisl::VectorPool< SpdkIocb* >::free(batch_io);
+        batch_io = nullptr;
+    }
+
+    uint32_t num_io_comp = 0;
+    std::vector< SpdkIocb* >* batch_io = nullptr;
+};
+
 struct SpdkIocb {
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
-            iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
+            iodev(iodev),
+            iface(iface),
+            op_type(op_type),
+            size(size),
+            offset(offset),
+            user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
@@ -119,5 +148,6 @@ struct SpdkIocb {
     io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
+    SpdkBatchIocb* batch_info_ptr = nullptr;
 };
 } // namespace iomgr
