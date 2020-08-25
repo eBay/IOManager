@@ -136,11 +136,9 @@ void IOManager::start_spdk() {
         // Set VA mode if given
         auto va_mode = std::string("pa");
         try {
-            va_mode = SDS_OPTIONS["iova-mode"].as<std::string>();
+            va_mode = SDS_OPTIONS["iova-mode"].as< std::string >();
             LOGDEBUG("Using IOVA = {} mode", va_mode);
-        } catch (std::exception& e) {
-            LOGDEBUG("Using default IOVA = {} mode", va_mode);
-        }
+        } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
         opts.iova_mode = va_mode.c_str();
         //    opts.mem_size = 512;
 
@@ -173,8 +171,8 @@ void IOManager::stop() {
     m_global_worker_timer.reset(nullptr);
 
     // Send all the threads to reliquish its io thread status
-    multicast_msg(thread_regex::all_io,
-                  iomgr_msg::create(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id));
+    sync_iomgr_msg smsg(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id);
+    multicast_msg_and_wait(thread_regex::all_io, smsg);
 
     // Now decrement and check if all io threads have already reliquished the io thread status.
     if (m_yet_to_stop_nreactors.decrement_testz()) {
