@@ -72,8 +72,8 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    bool try_submit_io(SpdkIocb* iocb);
-    void do_async_in_tloop_thread(SpdkIocb* iocb);
+    bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
+    void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb);
 
@@ -148,7 +148,6 @@ struct SpdkIocb {
     io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
-    bool part_of_batch = false;
     SpdkBatchIocb* batch_info_ptr = nullptr;
 };
 } // namespace iomgr

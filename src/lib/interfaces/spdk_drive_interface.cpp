@@ -270,12 +270,12 @@ static void submit_io(void* b) {
     }
 }
 
-inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb) {
+inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
     bool ret = true;
     if (iomanager.am_i_tight_loop_reactor()) {
         submit_io(iocb);
     } else if (iomanager.am_i_io_reactor()) {
-        do_async_in_tloop_thread(iocb);
+        do_async_in_tloop_thread(iocb, part_of_batch);
     } else {
         ret = false;
     }
@@ -288,8 +288,7 @@ void SpdkDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->part_of_batch = part_of_batch;
-    if (!try_submit_io(iocb)) {
+    if (!try_submit_io(iocb, part_of_batch)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -301,8 +300,7 @@ void SpdkDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, 
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, cookie);
     iocb->user_data = (char*)data;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->part_of_batch = part_of_batch;
-    if (!try_submit_io(iocb)) {
+    if (!try_submit_io(iocb, part_of_batch)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -316,8 +314,7 @@ void SpdkDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iov
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->part_of_batch = part_of_batch;
-    if (!try_submit_io(iocb)) {
+    if (!try_submit_io(iocb, part_of_batch)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -330,8 +327,7 @@ void SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovc
     iocb->iovs = (iovec*)iov;
     iocb->iovcnt = iovcnt;
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->part_of_batch = part_of_batch;
-    if (!try_submit_io(std::move(iocb))) {
+    if (!try_submit_io(std::move(iocb), part_of_batch)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -342,8 +338,7 @@ void SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t of
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::UNMAP, size, offset, cookie);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->part_of_batch = part_of_batch;
-    if (!try_submit_io(iocb)) {
+    if (!try_submit_io(iocb, part_of_batch)) {
         auto ret = do_sync_io(iocb);
         if (m_comp_cb) m_comp_cb((ret != size), cookie);
     }
@@ -414,28 +409,26 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb) {
     return ret;
 }
 
-void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
+void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
     static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
-        if (!iocb->part_of_batch) {
-            iocb->result = res;
+        iocb->result = res;
+        if (!iocb->batch_info_ptr) {
             auto reply =
                 iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
             iomanager.send_msg(iocb->owner_thread, reply);
         } else {
             ++(iocb->batch_info_ptr->num_io_comp);
 
-            assert(iocb->batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM);
             // batch io completion count should never exceed nuber of batch io;
             assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
 
             // re-use the batch info ptr which contains all the batch iocbs to send/create async_batch_io_done msg;
             if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
-                iocb->result = res;
                 auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
                                                (uint8_t*)iocb->batch_info_ptr, sizeof(SpdkBatchIocb*));
                 iomanager.send_msg(iocb->owner_thread, reply);
@@ -446,7 +439,7 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb) {
         }
     };
 
-    if (!iocb->part_of_batch) {
+    if (part_of_batch) {
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
     } else {
