@@ -34,10 +34,9 @@ namespace iomgr {
 using reactor_idx_t = uint32_t;
 typedef std::function< void(bool) > thread_state_notifier_t;
 
-class IOThreadMetrics : public sisl::MetricsGroupWrapper {
+class IOThreadMetrics : public sisl::MetricsGroup {
 public:
-    explicit IOThreadMetrics(const std::string& thread_name) :
-            sisl::MetricsGroupWrapper("IOThreadMetrics", thread_name) {
+    explicit IOThreadMetrics(const std::string& thread_name) : sisl::MetricsGroup("IOThreadMetrics", thread_name) {
         LOGINFO("Registring metrics group name = IOThreadMetrics, thread_name = {}", thread_name);
 
         REGISTER_GAUGE(iomgr_thread_io_count, "IO Manager per thread IO count");
@@ -115,7 +114,8 @@ ENUM(thread_regex, uint8_t,
      least_busy_worker, // Represents least busy worker io thread
      random_worker,     // Represents a random worker io thread
      all_user,          // Represents all user created io threads
-     least_busy_user    // Represents least busy user io thread
+     least_busy_user,   // Represents least busy user io thread
+     all_tloop          // Represents all tight loop threads (could be either worker or user)
 );
 using thread_specifier = std::variant< thread_regex, io_thread_t >;
 
@@ -173,7 +173,8 @@ class IOReactor : public std::enable_shared_from_this< IOReactor > {
 
 public:
     virtual ~IOReactor();
-    virtual void run(int iomgr_slot_num, const iodev_selector_t& iodev_selector = nullptr,
+    virtual void run(int iomgr_slot_num, bool user_controlled_loop = false,
+                     const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
@@ -227,6 +228,7 @@ protected:
     sisl::atomic_counter< int32_t > m_io_thread_count = 0;
     int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
+    bool m_user_controlled_loop = false;
 
     std::unique_ptr< timer > m_thread_timer;
     thread_state_notifier_t m_this_thread_notifier;

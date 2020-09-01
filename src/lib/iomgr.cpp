@@ -225,6 +225,17 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
     iface_list->push_back(iface);
 }
 
+void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
+                                    const iodev_selector_t& iodev_selector,
+                                    const thread_state_notifier_t& addln_notifier) {
+    if (is_tloop_reactor) {
+        *(m_reactors.get()) = std::make_shared< IOReactorSPDK >();
+    } else {
+        *(m_reactors.get()) = std::make_shared< IOReactorEPoll >();
+    }
+    this_reactor()->run(-1, user_controlled_loop, iodev_selector, addln_notifier);
+}
+
 void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
     if (is_tloop_reactor) {
@@ -232,7 +243,7 @@ void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const io
     } else {
         *(m_reactors.get()) = std::make_shared< IOReactorEPoll >();
     }
-    this_reactor()->run(iomgr_slot_num, iodev_selector, addln_notifier);
+    this_reactor()->run(iomgr_slot_num, false /* user_controlled_loop */, iodev_selector, addln_notifier);
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
@@ -261,6 +272,7 @@ void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
 
 static bool match_regex(thread_regex r, const io_thread_t& thr) {
     if ((r == thread_regex::all_io) || (r == thread_regex::least_busy_io)) { return true; }
+    if (r == thread_regex::all_tloop) { return thr->reactor->is_tight_loop_reactor(); }
     if (thr->reactor->is_worker()) {
         return ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker) ||
                 (r == thread_regex::random_worker));

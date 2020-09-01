@@ -40,7 +40,13 @@ static constexpr int inbuilt_interface_count = 1;
 
 class DriveInterface;
 
-ENUM(iomgr_state, uint16_t, stopped, interface_init, reactor_init, sys_init, running, stopping)
+ENUM(iomgr_state, uint16_t,
+     stopped,        // Stopped - this is the initial state
+     interface_init, // Interface initialization is ongoing.
+     reactor_init,   // All worker reactors are being initialized
+     sys_init,       // Any system wide init, say timer, spdk bdev initialization etc..
+     running,        // Active, ready to take traffic
+     stopping)
 
 template < class... Ts >
 struct overloaded : Ts... {
@@ -69,34 +75,100 @@ public:
     static constexpr uint32_t max_msg_modules = 64;
     static constexpr uint32_t max_io_threads = 1024; // Keep in mind increasing this cause increased mem footprint
 
-    IOManager();
-    ~IOManager();
-
     /********* Start/Stop Control Related Operations ********/
+
+    /**
+     * @brief Start the IOManager. This is expected to be among the first call while application is started to enable
+     * for it to do IO. Without this start, any other iomanager call would fail.
+     *
+     * @param num_threads Total number of worker reactors to start with. Expected to be > 0
+     * @param is_spdk Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
+     * automatically started as spdk worker reactors.
+     * @param notifier [OPTONAL] A callback every time a new reactor is started or stopped. This will be called from the
+     * reactor thread which is starting or stopping.
+     * @param iface_adder [OPTIONAL] Callback to add interface by the caller during iomanager start. If null, then
+     * iomanager will add all the default interfaces essential to do the IO.
+     */
     void start(size_t num_threads, bool is_spdk = false, const thread_state_notifier_t& notifier = nullptr,
                const interface_adder_t& iface_adder = nullptr);
+
+    /**
+     * @brief Stop the IOManager. It is expected to the last call after all IOs are completed and before application
+     * shutdown. If an application does a start, but goes down without stop call, then resource leaks and race
+     * condition problems could happen.
+     */
     void stop();
+
+    /**
+     * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
+     * and thus will return only after the loop is exited
+     *
+     * @param is_tloop_reactor Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll)
+     * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
+     * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
+     * needs to ignore this device.
+     * @param addln_notifier Callback which notifies after reactor is ready or shutting down (with true or false)
+     * parameter. This is per reactor override of the same callback as iomanager start.
+     */
     void run_io_loop(bool is_tloop_reactor, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& addln_notifier = nullptr) {
         _run_io_loop(-1, is_tloop_reactor, iodev_selector, addln_notifier);
     }
+
+    /**
+     * @brief Convert the current thread to new user reactor
+     *
+     * @param is_tloop_reactor Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll)
+     * @param start_loop Should the API create a IO loop or is user themselves running an io loop.
+     * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
+     * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
+     * needs to ignore this device.
+     * @param addln_notifier  Callback which notifies after reactor is ready or shutting down (with true or false)
+     * parameter. This is per reactor override of the same callback as iomanager start.
+     */
+    void become_user_reactor(bool is_tloop_reactor = true, bool user_controlled_loop = true,
+                             const iodev_selector_t& iodev_selector = nullptr,
+                             const thread_state_notifier_t& addln_notifier = nullptr);
+
+    /**
+     * @brief Stop the IO Loop and cease to being a reactor for the current thread. The current thread can choose
+     * to exit much later, but once called, it will stop being a reactor and iomanager will stop tracking this thread.
+     */
     void stop_io_loop();
 
     /********* Interface/Device Related Operations ********/
+
+    /**
+     * @brief Add a new IOInterface to the iomanager. All iodevice added to IOManager have to be part of some interface.
+     * By default iomanager automatically creates genericinterface and driveinterfaces. Any additional interface can
+     * be added through this API.
+     *
+     * @param iface Shared pointer to the IOInterface to be added
+     * @param iface_scope [OPTIONAL] Scope of which reactors these interface is to be added. By default it will be
+     * added to all IO reactors. While it can accept any thread_regex, really it is not practical to use
+     * thread_regex::random_user or thread_regex::any_worker.
+     */
     void add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope = thread_regex::all_io);
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default,
                              thread_regex iface_scope = thread_regex::all_io);
+
+    /**
+     * @brief Reschedule the IO to a different device. This is used for SCST interfaces and given that it could be
+     * depreacted, this API is not used actively anymore. One can do this with using run_on() APIs
+     *
+     * @param iodev
+     * @param event
+     */
     void device_reschedule(const io_device_ptr& iodev, int event);
 
-    /*template < class... Args >
-    int run_on(thread_specifier s, Args&&... args) {
-        if (std::holds_alternative< thread_regex >(s)) {
-            run_on(std::get< thread_regex >(s), std::forward< Args >(args)...);
-        } else {
-            run_on(std::get< io_thread_t >(s), std::forward< Args >(args)...);
-        }
-    }*/
-
+    /**
+     * @brief Run a method on one or more reactors and optionally wait for that method to complete.
+     *
+     * @param r One of the thread_regex indicating which all reactors this method has to run.
+     * @param fn
+     * @param wait_for_completion
+     * @return int
+     */
     int run_on(thread_regex r, const auto& fn, bool wait_for_completion = false) {
         int sent_to = 0;
         if (wait_for_completion) {
@@ -211,6 +283,9 @@ public:
     void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
 
 private:
+    IOManager();
+    ~IOManager();
+
     void foreach_interface(const auto& iface_cb);
 
     void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,

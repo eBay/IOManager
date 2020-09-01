@@ -23,6 +23,22 @@ struct spdk_msg_type {
     static constexpr int ASYNC_BATCH_IO_DONE = 103;
 };
 
+class SpdkDriveInterfaceMetrics : public sisl::MetricsGroup {
+public:
+    explicit SpdkDriveInterfaceMetrics(const char* inst_name = "SpdkDriveInterface") :
+            sisl::MetricsGroup("SpdkDriveInterface", inst_name) {
+        REGISTER_COUNTER(num_async_io_non_spdk_thread, "Count of async ios issued from non-spdk threads");
+        REGISTER_COUNTER(force_sync_io_non_spdk_thread,
+                         "Count of async ios converted to sync ios because of non-spdk threads");
+        REGISTER_COUNTER(queued_ios_for_memory_pressure, "Count of times drive queued ios because of lack of memory");
+        REGISTER_COUNTER(completion_errors, "Spdk Drive Completion errors");
+
+        register_me_to_farm();
+    }
+
+    ~SpdkDriveInterfaceMetrics() { deregister_me_from_farm(); }
+};
+
 struct SpdkIocb;
 
 static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
@@ -64,6 +80,8 @@ public:
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
     io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
 
+    SpdkDriveInterfaceMetrics& get_metrics() { return m_metrics; }
+
 private:
     io_device_ptr _open_dev(const std::string& devname);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
@@ -83,6 +101,7 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
+    SpdkDriveInterfaceMetrics m_metrics;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)

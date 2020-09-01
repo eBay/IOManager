@@ -169,8 +169,6 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
             return;
         }
     }
-    COUNTER_INCREMENT(m_metrics, async_write_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -197,8 +195,6 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
             return;
         }
     }
-    COUNTER_INCREMENT(m_metrics, async_read_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -236,8 +232,6 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
             return;
         }
     }
-    COUNTER_INCREMENT(m_metrics, async_write_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -276,8 +270,6 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
             return;
         }
     }
-    COUNTER_INCREMENT(m_metrics, async_read_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 }
 
 void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -337,8 +329,6 @@ ssize_t AioDriveInterface::_sync_write(int fd, const char* data, uint32_t size, 
         folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
                                             offset, size, written_size, errno, fd));
     }
-    COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 
     return written_size;
 }
@@ -357,8 +347,6 @@ ssize_t AioDriveInterface::_sync_writev(int fd, const iovec* iov, int iovcnt, ui
             fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
                         size, written_size, iovcnt, errno, fd));
     }
-    COUNTER_INCREMENT(m_metrics, sync_write_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, write_io_sizes, (((size - 1) / 1024) + 1));
 
     return written_size;
 }
@@ -376,8 +364,6 @@ ssize_t AioDriveInterface::_sync_read(int fd, char* data, uint32_t size, uint64_
         folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
                                             offset, size, read_size, errno, fd));
     }
-    COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 
     return read_size;
 }
@@ -396,8 +382,6 @@ ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uin
             fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,
                         size, read_size, iovcnt, errno, fd));
     }
-    COUNTER_INCREMENT(m_metrics, sync_read_count, 1);
-    HISTOGRAM_OBSERVE(m_metrics, read_io_sizes, (((size - 1) / 1024) + 1));
 
     return read_size;
 }
