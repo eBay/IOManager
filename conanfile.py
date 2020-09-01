@@ -26,12 +26,13 @@ class IOMgrConan(ConanFile):
 
     requires = (
             "sds_logging/[~=7, include_prerelease=True]@sds/master",
-            "sisl/[~=4, include_prerelease=True]@hkadayam/master",
+            "sds_options/[~=1, include_prerelease=True]@sds/master",
+            "sisl/[~=3, include_prerelease=True]@sisl/master",
+
             "boost/1.73.0",
             "folly/2020.05.04.00",
             "libevent/2.1.11",
             "spdk/20.07.x",
-            "openssl/1.1.1g"
             )
     build_requires = (
                 "gtest/1.10.0",
