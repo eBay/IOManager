@@ -142,9 +142,9 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
     auto create_ctx = std::make_shared< creat_ctx >();
     create_ctx->address = devname;
     {
-        iomanager.run_on(thread_regex::least_busy_worker,
-                         [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
-                         false /* wait_for_completion */);
+        iomanager.run_on(
+            thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
+            false /* wait_for_completion */);
         auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
         create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
     }
@@ -166,7 +166,7 @@ io_device_ptr SpdkDriveInterface::_open_dev(const std::string& bdev_name) {
 
     auto iodev = std::make_shared< IODevice >();
     iodev->dev = backing_dev_t(desc);
-    iodev->thread_scope = thread_regex::all_worker;
+    iodev->thread_scope = thread_regex::all_tloop;
     iodev->pri = 9;
     iodev->io_interface = this;
     iodev->devname = bdev_name;
@@ -221,7 +221,7 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
         iocb->result = 0;
         LOGTRACEMOD(iomgr, "bdev io completed successfully. io info: {}", iocb->to_string());
     } else {
-        // COUNTER_INCREMENT(m_metrics, completion_errors, 1);
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), completion_errors, 1);
         iocb->result = -1;
     }
 
@@ -264,6 +264,7 @@ static void submit_io(void* b) {
     if (rc != 0) {
         if (rc == -ENOMEM) {
             LOGDEBUGMOD(iomgr, "Bdev is lacking memory to do IO right away, queueing it\n");
+            COUNTER_INCREMENT(iocb->iface->get_metrics(), queued_ios_for_memory_pressure, 1);
             iocb->copy_iovs();
             spdk_bdev_queue_io_wait(iocb->iodev->bdev(), get_io_channel(iocb->iodev), &iocb->io_wait_entry);
         }
@@ -275,8 +276,10 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     if (iomanager.am_i_tight_loop_reactor()) {
         submit_io(iocb);
     } else if (iomanager.am_i_io_reactor()) {
+        COUNTER_INCREMENT(m_metrics, num_async_io_non_spdk_thread, 1);
         do_async_in_tloop_thread(iocb, part_of_batch);
     } else {
+        COUNTER_INCREMENT(m_metrics, force_sync_io_non_spdk_thread, 1);
         ret = false;
     }
     return ret;

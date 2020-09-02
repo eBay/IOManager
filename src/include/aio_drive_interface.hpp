@@ -188,10 +188,10 @@ struct aio_thread_context {
     }
 };
 
-class AioDriveInterfaceMetrics : public sisl::MetricsGroupWrapper {
+class AioDriveInterfaceMetrics : public sisl::MetricsGroup {
 public:
     explicit AioDriveInterfaceMetrics(const char* inst_name = "AioDriveInterface") :
-            sisl::MetricsGroupWrapper("AioDriveInterface", inst_name) {
+            sisl::MetricsGroup("AioDriveInterface", inst_name) {
         REGISTER_COUNTER(spurious_events, "Spurious events count");
         REGISTER_COUNTER(completion_errors, "Aio Completion errors");
         REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
@@ -200,17 +200,9 @@ public:
                          {"io_direction", "read"});
         REGISTER_COUNTER(force_sync_io_empty_iocb, "Forced sync io because of empty iocb");
         REGISTER_COUNTER(force_sync_io_eagain_error, "Forced sync io because of EAGAIN error");
-        REGISTER_COUNTER(async_write_count, "Aio Drive async write count", "io_count", {"io_direction", "write"});
-        REGISTER_COUNTER(async_read_count, "Aio Drive async read count", "io_count", {"io_direction", "read"});
-        REGISTER_COUNTER(sync_write_count, "Aio Drive sync write count", "io_count", {"io_direction", "write"});
-        REGISTER_COUNTER(sync_read_count, "Aio Drive sync read count", "io_count", {"io_direction", "read"});
+
         REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
-
-        REGISTER_HISTOGRAM(write_io_sizes, "Write IO Sizes", "io_sizes", {"io_direction", "write"},
-                           HistogramBucketsType(ExponentialOfTwoBuckets));
-        REGISTER_HISTOGRAM(read_io_sizes, "Read IO Sizes", "io_sizes", {"io_direction", "read"},
-                           HistogramBucketsType(ExponentialOfTwoBuckets));
         register_me_to_farm();
     }
 

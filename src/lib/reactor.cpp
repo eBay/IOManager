@@ -25,7 +25,7 @@ IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
 
-void IOReactor::run(int worker_slot_num, const iodev_selector_t& iodev_selector,
+void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_selector_t& iodev_selector,
                     const thread_state_notifier_t& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
@@ -33,6 +33,7 @@ void IOReactor::run(int worker_slot_num, const iodev_selector_t& iodev_selector,
         return;
     }
 
+    m_user_controlled_loop = user_controlled_loop;
     if (!is_io_reactor()) {
         m_worker_slot_num = worker_slot_num;
         m_iodev_selector = iodev_selector;
@@ -45,8 +46,10 @@ void IOReactor::run(int worker_slot_num, const iodev_selector_t& iodev_selector,
         if (m_keep_running) { REACTOR_LOG(INFO, base, , "IOReactor is ready to go to listen loop"); }
     }
 
-    while (m_keep_running) {
-        listen();
+    if (!m_user_controlled_loop) {
+        while (m_keep_running) {
+            listen();
+        }
     }
 }
 
@@ -103,7 +106,7 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
         std::make_unique< IOThreadMetrics >(fmt::format("{}.{}-{}", reactor_idx(), thr->thread_addr, loop_type()));
 
     // Initialize any thing specific to specialized reactors
-    if (!reactor_specific_init_thread(thr)) { return; }
+    if (!m_user_controlled_loop && !reactor_specific_init_thread(thr)) { return; }
 
     // Notify all the interfaces about new thread, which in turn will add all relevant devices to current reactor.
     {
@@ -129,7 +132,7 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
     }
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
-    reactor_specific_exit_thread(thr);
+    if (!m_user_controlled_loop) { reactor_specific_exit_thread(thr); }
 
     thr->m_metrics = nullptr;
     m_io_threads[thr->thread_addr] = nullptr;
