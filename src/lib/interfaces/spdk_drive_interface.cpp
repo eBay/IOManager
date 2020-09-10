@@ -29,6 +29,7 @@ static void bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev* bdev
 
 struct creat_ctx {
     std::string address;
+    iomgr_drive_type addr_type;
     std::error_condition err;
     const char* names[128];
     std::mutex lock;
@@ -124,23 +125,56 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
     // Check if the device is a file, if so create a bdev out of the file and open that bdev. This is meant only for
     // a testing and docker environment
     try {
-        if (std::filesystem::is_regular_file(std::filesystem::status(ctx->address))) {
-            create_fs_bdev(ctx);
-            return;
+        if (ctx->addr_type == iomgr_drive_type::unknown) {
+            ctx->addr_type = DriveInterface::get_drive_type(ctx->address);
         }
-    } catch (std::exception& e) {}
-    // Assume this is a PCIe address for now, we don't support anything else ATM
-    create_nvme_bdev(ctx);
+
+        switch (ctx->addr_type) {
+        case iomgr_drive_type::raw_nvme:
+            create_nvme_bdev(ctx);
+            break;
+
+        case iomgr_drive_type::file:
+        case iomgr_drive_type::block:
+            create_fs_bdev(ctx);
+            break;
+
+        case iomgr_drive_type::spdk_bdev:
+            // Already a bdev, set the ctx as done
+            ctx->bdev_name = ctx->address;
+            ctx->done = true;
+            break;
+
+        default:
+            LOGMSG_ASSERT(0, "Unsupported device={} of type={} being opened", ctx->address, enum_name(ctx->addr_type));
+            ctx->err = std::make_error_condition(std::errc::bad_file_descriptor);
+        }
+    } catch (std::exception& e) {
+        if (!ctx->err) {
+            LOGMSG_ASSERT(0, "Error in creating bdev for device={} of type={}, Exception={}", ctx->address,
+                          enum_name(ctx->addr_type), e.what());
+            ctx->err = std::make_error_condition(std::errc::bad_file_descriptor);
+        }
+    }
 }
 
-io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_unused]] int oflags) {
+io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_drive_type drive_type,
+                                           [[maybe_unused]] int oflags) {
     io_device_ptr ret{nullptr};
+
+    m_opened_device.withRLock([&devname, &ret](auto& m) {
+        auto it = m.find(devname);
+        if (it != m.end()) { ret = it->second; }
+    });
+    if (ret != nullptr) { return ret; }
+
     RELEASE_ASSERT(!iomanager.am_i_worker_reactor(),
                    "We cannot open the device from a worker reactor thread unless its a bdev");
 
     // First create the bdev
     auto create_ctx = std::make_shared< creat_ctx >();
     create_ctx->address = devname;
+    create_ctx->addr_type = drive_type;
     {
         iomanager.run_on(
             thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
@@ -156,6 +190,8 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, [[maybe_u
             [this, &ret, bdev_name = create_ctx->bdev_name](io_thread_addr_t taddr) { ret = _open_dev(bdev_name); },
             true /* wait_for_completion */);
     }
+
+    m_opened_device.wlock()->insert(std::make_pair<>(devname, ret));
     return ret;
 }
 
@@ -178,6 +214,8 @@ io_device_ptr SpdkDriveInterface::_open_dev(const std::string& bdev_name) {
 
 void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);
+    m_opened_device.wlock()->erase(iodev->devname);
+
     // TODO: Close the bdev device
     iodev->clear();
 }
@@ -229,7 +267,8 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
     cb(*iocb->result, (uint8_t*)iocb->user_cookie);
 
     if (iocb->owner_thread == nullptr) {
-        // If the iocb has been issued by this thread, we need to complete io, else that different thread will do so
+        // If the iocb has been issued by this thread, we need to complete io, else that different thread
+        // will do so
         complete_io(iocb);
     }
 }
@@ -430,15 +469,17 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
             // batch io completion count should never exceed nuber of batch io;
             assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
 
-            // re-use the batch info ptr which contains all the batch iocbs to send/create async_batch_io_done msg;
+            // re-use the batch info ptr which contains all the batch iocbs to send/create
+            // async_batch_io_done msg;
             if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
                 auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
                                                (uint8_t*)iocb->batch_info_ptr, sizeof(SpdkBatchIocb*));
                 iomanager.send_msg(iocb->owner_thread, reply);
             }
 
-            // if there is any batched io doesn't get all the iocb completion, we will see memory leak in the end
-            // reported becuase batch io will not freed by spdk thread due to missing async io done msg;
+            // if there is any batched io doesn't get all the iocb completion, we will see memory leak in
+            // the end reported becuase batch io will not freed by spdk thread due to missing async io done
+            // msg;
         }
     };
 
@@ -503,4 +544,19 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
 size_t SpdkDriveInterface::get_size(IODevice* iodev) {
     return spdk_bdev_get_num_blocks(iodev->bdev()) * spdk_bdev_get_block_size(iodev->bdev());
 }
+
+drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) const {
+    assert(dev->is_spdk_dev());
+
+    drive_attributes attr;
+    attr.phys_page_size = spdk_bdev_get_block_size(dev->bdev());
+    attr.align_size = spdk_bdev_get_buf_align(dev->bdev());
+    attr.atomic_phys_page_size = spdk_bdev_get_acwu(dev->bdev());
+    return attr;
+}
+
+drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
+    return get_attributes(open_dev(devname, drive_type, 0));
+}
+
 } // namespace iomgr
