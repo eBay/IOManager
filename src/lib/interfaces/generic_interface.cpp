@@ -147,7 +147,10 @@ void IOInterface::_remove_from_thread(const io_device_ptr& iodev, const io_threa
 /*************************** GenericIOInterface ******************************/
 io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                                  bool is_per_thread_dev, const ev_callback& cb) {
-    return make_io_device(dev, events_interested, pri, cookie, iomanager.iothread_self(), std::move(cb));
+    return make_io_device(dev, events_interested, pri, cookie,
+                          is_per_thread_dev ? thread_specifier{iomanager.iothread_self()}
+                                            : thread_specifier{thread_regex::all_io},
+                          std::move(cb));
 }
 
 io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
