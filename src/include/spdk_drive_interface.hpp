@@ -85,7 +85,8 @@ public:
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
 private:
-    io_device_ptr _open_dev(const std::string& devname);
+    io_device_ptr _real_open_dev(const std::string& devname, iomgr_drive_type drive_type);
+    io_device_ptr _open_dev_in_worker(const std::string& devname);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
