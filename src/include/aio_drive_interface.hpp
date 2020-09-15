@@ -217,7 +217,7 @@ public:
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
     void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override { m_io_end_of_batch_cb = cb; }
     void detach_end_of_batch_cb() override { m_io_end_of_batch_cb = nullptr; }
-    io_device_ptr open_dev(const std::string& devname, int oflags) override;
+    io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
     ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
@@ -236,6 +236,8 @@ public:
     void process_completions(IODevice* iodev, void* cookie, int event);
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
+    drive_attributes get_attributes(const io_device_ptr& dev) const override;
+    drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;

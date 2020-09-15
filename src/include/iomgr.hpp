@@ -46,7 +46,7 @@ ENUM(iomgr_state, uint16_t,
      reactor_init,   // All worker reactors are being initialized
      sys_init,       // Any system wide init, say timer, spdk bdev initialization etc..
      running,        // Active, ready to take traffic
-     stopping)
+     stopping);
 
 template < class... Ts >
 struct overloaded : Ts... {

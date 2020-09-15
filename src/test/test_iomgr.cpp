@@ -87,7 +87,8 @@ static void do_read_io(size_t offset) {
 
 static void issue_preload() {
     static std::once_flag flag1;
-    std::call_once(flag1, [&]() { g_iodev = g_aio_iface->open_dev("/tmp/f1", O_CREAT | O_RDWR); });
+    std::call_once(flag1,
+                   [&]() { g_iodev = g_aio_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR); });
 
     if (work.next_io_offset >= work.offset_end) {
         work.is_preload_phase = false;

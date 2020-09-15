@@ -44,12 +44,18 @@ thread_local aio_thread_context* AioDriveInterface::_aio_ctx;
 
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
 
-io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags) {
+io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
+#ifndef NDEBUG
+    if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
+    LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
+                  "Unexpected dev type to open {}", dev_type);
+#endif
+
     /* it doesn't need to keep track of any fds */
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
-        folly::throwSystemError(
-            fmt::format("Unable to open the device={} errno={} strerror={}", devname, errno, strerror(errno)));
+        folly::throwSystemError(fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
+                                            dev_type, errno, strerror(errno)));
         return nullptr;
     }
 
@@ -60,7 +66,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, int oflags
     iodev->io_interface = this;
     iodev->devname = devname;
 
-    LOGINFO("Device {} opened with flags={} successfully, fd={}", devname, oflags, fd);
+    LOGINFO("Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
     return iodev;
 }
 
@@ -399,4 +405,22 @@ size_t AioDriveInterface::get_size(IODevice* iodev) {
     folly::throwSystemError(fmt::format("device stat failed for dev {} errno = {}", iodev->fd(), errno));
     return 0;
 }
+
+drive_attributes AioDriveInterface::get_attributes([[maybe_unused]] const io_device_ptr& dev) const {
+    // TODO: Get this information from SSD using /sys commands
+    drive_attributes attr;
+    attr.phys_page_size = 4096;
+    attr.align_size = 512;
+#ifndef NDEBUG
+    attr.atomic_phys_page_size = 512;
+#else
+    attr.atomic_phys_page_size = 4096;
+#endif
+    return attr;
+}
+
+drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
+    return get_attributes(nullptr);
+}
+
 } // namespace iomgr
