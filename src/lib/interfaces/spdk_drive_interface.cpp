@@ -15,6 +15,7 @@ extern "C" {
 #include <spdk/module/bdev/aio/bdev_aio.h>
 #endif
 #include <spdk/module/bdev/nvme/bdev_nvme.h>
+#include <spdk/nvme.h>
 }
 namespace iomgr {
 
@@ -554,11 +555,40 @@ size_t SpdkDriveInterface::get_size(IODevice* iodev) {
 
 drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) const {
     assert(dev->is_spdk_dev());
-
     drive_attributes attr;
-    attr.phys_page_size = spdk_bdev_get_block_size(dev->bdev());
-    attr.align_size = spdk_bdev_get_buf_align(dev->bdev());
-    attr.atomic_phys_page_size = spdk_bdev_get_acwu(dev->bdev());
+    attr.atomic_phys_page_size = 0;
+    attr.phys_page_size = 0;
+
+    struct spdk_bdev* g_bdev = dev->bdev();
+    if (strncmp(g_bdev->product_name, "NVMe disk", sizeof("NVMe disk")) == 0) {
+        struct nvme_bdev* n_bdev = (struct nvme_bdev*)g_bdev->ctxt;
+
+        // Get the namespace data if available
+        const struct spdk_nvme_ns_data* nsdata = spdk_nvme_ns_get_data(n_bdev->nvme_ns->ns);
+        if (nsdata->nsfeat.ns_atomic_write_unit) {
+            attr.atomic_phys_page_size = nsdata->nawupf;
+            attr.phys_page_size = nsdata->nawun;
+        } else {
+            const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_bdev_ctrlr->ctrlr);
+            attr.atomic_phys_page_size = cdata->awupf;
+            attr.phys_page_size = cdata->awun;
+        }
+    }
+
+    // TODO: At the moment we would not be able to support drive whose atomic phys page size < 4K. Need a way
+    // to ensure that or fail the startup.
+    if (attr.atomic_phys_page_size < 4096) {
+        auto blk_size = spdk_bdev_get_block_size(g_bdev);
+        attr.atomic_phys_page_size = std::max(blk_size * spdk_bdev_get_acwu(dev->bdev()), 4096u);
+    }
+
+    // At the moment we are hard coding this - there is no sure shot way of getting this correctly. Our performance
+    // metrics indicate this is the good phys page size;
+    attr.phys_page_size = std::max(attr.phys_page_size, 4096u);
+
+    // We want alignment to be mininum 512. TODO: Can we let it be 1 byte too??
+    attr.align_size = std::max(spdk_bdev_get_buf_align(g_bdev), 512ul);
+
     return attr;
 }
 
