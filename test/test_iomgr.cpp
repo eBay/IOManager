@@ -19,7 +19,7 @@ using log_level = spdlog::level::level_enum;
 
 THREAD_BUFFER_INIT;
 
-SDS_LOGGING_INIT(iomgr)
+SDS_LOGGING_INIT(IOMGR_LOG_MODS)
 SDS_OPTIONS_ENABLE(logging)
 
 using namespace iomgr;
