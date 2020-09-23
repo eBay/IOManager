@@ -35,6 +35,7 @@ extern "C" {
 #include <utility/thread_factory.hpp>
 #include <fds/obj_allocator.hpp>
 #include <experimental/random>
+#include <sds_logging/logging.h>
 
 SDS_OPTION_GROUP(iomgr,
                  (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -124,7 +125,32 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         false /* wait_for_completion */);
 }
 
+static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
+    switch (lvl) {
+    case spdlog::level::level_enum::off:
+        return SPDK_LOG_DISABLED;
+    case spdlog::level::level_enum::critical:
+    case spdlog::level::level_enum::err:
+        return SPDK_LOG_ERROR;
+    case spdlog::level::level_enum::warn:
+        return SPDK_LOG_WARN;
+    case spdlog::level::level_enum::info:
+        return SPDK_LOG_NOTICE;
+    case spdlog::level::level_enum::debug:
+        return SPDK_LOG_INFO;
+    case spdlog::level::level_enum::trace:
+        return SPDK_LOG_DEBUG;
+    default:
+        return SPDK_LOG_NOTICE;
+    }
+}
+
 void IOManager::start_spdk() {
+    // Set the spdk log level based on module spdk
+    spdk_log_set_flag("all");
+    // spdk_log_set_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
+    spdk_log_set_print_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
+
     // Initialize if spdk has still not been initialized
     m_is_spdk_inited_externally = !spdk_env_dpdk_external_init();
     if (!m_is_spdk_inited_externally) {
