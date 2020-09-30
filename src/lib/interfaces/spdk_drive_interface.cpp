@@ -491,7 +491,11 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
         }
     };
 
-    if (part_of_batch) {
+    if (!part_of_batch) {
+        // we don't have a use-case for same user thread to issue part_of_batch to both true and false for now.
+        // if we support same user-thread to send both, we should not use iocb->batch_info_ptr to check whether it is
+        // batch io in comp_cb (line: 470);
+        assert(iocb->batch_info_ptr == nullptr);
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
     } else {
