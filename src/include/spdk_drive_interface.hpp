@@ -96,7 +96,7 @@ private:
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
-    ssize_t do_sync_io(SpdkIocb* iocb);
+    ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
 
 private:
     io_interface_comp_cb_t m_comp_cb;
