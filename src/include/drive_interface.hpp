@@ -74,7 +74,7 @@ public:
     virtual drive_attributes get_attributes(const io_device_ptr& dev) const = 0;
     virtual drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) = 0;
 
-    static iomgr_drive_type get_drive_type(const std::string& devname) {
+    virtual iomgr_drive_type get_drive_type(const std::string& devname) const {
         if (std::filesystem::is_regular_file(std::filesystem::status(devname))) {
             return iomgr_drive_type::file;
         } else if (std::filesystem::is_block_file(std::filesystem::status(devname))) {

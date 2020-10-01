@@ -56,7 +56,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         return;
     }
 
-    LOGINFO("Starting IOManager version {} with {} threads", PACKAGE_VERSION, num_threads);
+    LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
     // m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(num_threads);

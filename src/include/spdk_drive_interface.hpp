@@ -84,6 +84,8 @@ public:
     drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
+    iomgr_drive_type get_drive_type(const std::string& devname) const override;
+
 private:
     io_device_ptr _real_open_dev(const std::string& devname, iomgr_drive_type drive_type);
     io_device_ptr _open_dev_in_worker(const std::string& devname);

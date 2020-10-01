@@ -8,3 +8,6 @@ cmake-build*
 cmake-build*
 
 .clangd
+debug/*
+release/*
+nosanitize/*

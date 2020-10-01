@@ -126,10 +126,6 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
     // Check if the device is a file, if so create a bdev out of the file and open that bdev. This is meant only for
     // a testing and docker environment
     try {
-        if (ctx->addr_type == iomgr_drive_type::unknown) {
-            ctx->addr_type = DriveInterface::get_drive_type(ctx->address);
-        }
-
         switch (ctx->addr_type) {
         case iomgr_drive_type::raw_nvme:
             create_nvme_bdev(ctx);
@@ -182,7 +178,7 @@ io_device_ptr SpdkDriveInterface::_real_open_dev(const std::string& devname, iom
     // First create the bdev
     auto create_ctx = std::make_shared< creat_ctx >();
     create_ctx->address = devname;
-    create_ctx->addr_type = drive_type;
+    create_ctx->addr_type = (drive_type == iomgr_drive_type::unknown) ? get_drive_type(devname) : drive_type;
     {
         iomanager.run_on(
             thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
@@ -228,6 +224,24 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     iodev->clear();
 }
 
+iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) const {
+    iomgr_drive_type type = DriveInterface::get_drive_type(devname);
+    if (type != iomgr_drive_type::unknown) { return type; }
+
+    /* Lets find out if it is a nvme transport */
+    spdk_nvme_transport_id trid;
+    memset(&trid, 0, sizeof(trid));
+    auto devname_c = devname.c_str();
+
+    auto rc = spdk_nvme_transport_id_parse(&trid, devname_c);
+    if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
+
+    auto bdev = spdk_bdev_get_by_name(devname_c);
+    if (bdev) { return iomgr_drive_type::spdk_bdev; }
+
+    return iomgr_drive_type::unknown;
+}
+
 void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
     auto dctx = new SpdkDriveDeviceContext();
     iodev->m_thread_local_ctx[thr->thread_idx] = (void*)dctx;
@@ -250,8 +264,8 @@ static spdk_io_channel* get_io_channel(IODevice* iodev) {
 }
 
 static void complete_io(SpdkIocb* iocb) {
-    // As of now we complete the batch as soon as 1 io is completed. We can potentially do batching based on if async
-    // thread is completed or not
+    // As of now we complete the batch as soon as 1 io is completed. We can potentially do batching based on if
+    // async thread is completed or not
     auto& ecb = iocb->iface->get_end_of_batch_cb();
     if (ecb) { ecb(1); }
 
@@ -546,36 +560,39 @@ size_t SpdkDriveInterface::get_size(IODevice* iodev) {
 
 drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) const {
     assert(dev->is_spdk_dev());
-    drive_attributes attr;
-    attr.atomic_phys_page_size = 0;
-    attr.phys_page_size = 0;
-
     struct spdk_bdev* g_bdev = dev->bdev();
+    drive_attributes attr;
+
+    auto blk_size = spdk_bdev_get_block_size(g_bdev);
+
+    /* Try to get the atomic physical page size from controller */
+    attr.atomic_phys_page_size = 0;
     if (strncmp(g_bdev->product_name, "NVMe disk", sizeof("NVMe disk")) == 0) {
         struct nvme_bdev* n_bdev = (struct nvme_bdev*)g_bdev->ctxt;
 
         // Get the namespace data if available
         const struct spdk_nvme_ns_data* nsdata = spdk_nvme_ns_get_data(n_bdev->nvme_ns->ns);
         if (nsdata->nsfeat.ns_atomic_write_unit) {
-            attr.atomic_phys_page_size = nsdata->nawupf;
-            attr.phys_page_size = nsdata->nawun;
+            attr.atomic_phys_page_size = nsdata->nawupf * blk_size;
         } else {
             const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_bdev_ctrlr->ctrlr);
-            attr.atomic_phys_page_size = cdata->awupf;
-            attr.phys_page_size = cdata->awun;
+            attr.atomic_phys_page_size = cdata->awupf * blk_size;
         }
     }
 
     // TODO: At the moment we would not be able to support drive whose atomic phys page size < 4K. Need a way
     // to ensure that or fail the startup.
     if (attr.atomic_phys_page_size < 4096) {
-        auto blk_size = spdk_bdev_get_block_size(g_bdev);
         attr.atomic_phys_page_size = std::max(blk_size * spdk_bdev_get_acwu(dev->bdev()), 4096u);
     }
 
-    // At the moment we are hard coding this - there is no sure shot way of getting this correctly. Our performance
-    // metrics indicate this is the good phys page size;
-    attr.phys_page_size = std::max(attr.phys_page_size, 4096u);
+    // TODO-1 At the moment we are hard coding this - there is no sure shot way of getting this correctly. Our
+    // performance metrics indicate this is the good phys page size. In NVMe 1.4 spec, there is a way to get the page
+    // size optimal for NVMe viz. Namespace Preferred Write Granularity (NPWG) and Namespace Preferred Write Alignment
+    // (NPWA).
+    // TODO-2 Introduce attr.optimal_delete_boundary which can obtained from attribute - Namespace Preferred Deallocate
+    // Granularity (NPDG):
+    attr.phys_page_size = 4096u;
 
     // We want alignment to be mininum 512. TODO: Can we let it be 1 byte too??
     attr.align_size = std::max(spdk_bdev_get_buf_align(g_bdev), 512ul);

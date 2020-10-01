@@ -180,15 +180,6 @@ int main(int argc, char* argv[]) {
     iomanager.start(nthreads, false, on_io_thread_state_change);
     iomanager.default_drive_interface()->attach_completion_cb(on_io_completion);
 
-#if 0
-    // Create and add AIO Drive Interface to the IOManager, Also open the device
-    // NOTE: We do not need to add the fd to the device, since either Read or Write IO will always be triggered
-    // by the application on AIO fd (unlike network or other fd, where we will be pinged asynchornously)
-    // g_aio_iface = std::make_shared< AioDriveInterface >(on_io_completion);
-    g_aio_iface = std::make_shared< SpdkDriveInterface >(on_io_completion);
-    iomanager.add_interface(std::dynamic_pointer_cast< IOInterface >(g_aio_iface));
-#endif
-
     // Wait for IO to finish on all threads.
     runner.wait();
 
