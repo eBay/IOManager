@@ -211,7 +211,7 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 #endif
     ) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async writev: size {}, offset {}, doing sync read instead",
+        LOGWARN("Not enough available iocbs to schedule an async writev: size {}, offset {}, doing sync writev instead",
                 size, offset);
         sync_writev(iodev, iov, iovcnt, size, offset);
         if (m_comp_cb) m_comp_cb(0, cookie);
@@ -249,7 +249,7 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
 #endif
     ) {
         COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async readv: size {}, offset {}, doing sync read instead",
+        LOGWARN("Not enough available iocbs to schedule an async readv: size {}, offset {}, doing sync readv instead",
                 size, offset);
         sync_readv(iodev, iov, iovcnt, size, offset);
         if (m_comp_cb) m_comp_cb(0, cookie);
