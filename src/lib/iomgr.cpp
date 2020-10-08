@@ -26,6 +26,8 @@ extern "C" {
 #include <functional>
 #include <thread>
 #include <vector>
+#include <filesystem>
+#include <sys/mount.h>
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
@@ -43,7 +45,21 @@ SDS_OPTION_GROUP(iomgr,
 
 namespace iomgr {
 
+#define HUGETLBFS_PATH "/mnt/huge"
 IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
+    /* mkdir -p /mnt/huge */
+    if (!std::filesystem::exists(HUGETLBFS_PATH)) {
+        std::error_code ec;
+        if (!std::filesystem::create_directory(HUGETLBFS_PATH, &ec)) {
+            LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
+            throw std::runtime_error("Failed to create /mnt/huge");
+        }
+    }
+    /* mount -t hugetlbfs nodev /mnt/huge */
+    if (int err = mount("nodev", HUGETLBFS_PATH, "hugetlbfs", 0, ""); err) {
+        LOGERROR("Failed to mount hugetlbfs. Error = {}", err);
+        throw std::runtime_error("Hugetlbfs mount failed");
+    }
     m_iface_list.wlock()->reserve(inbuilt_interface_count + 5);
 }
 
