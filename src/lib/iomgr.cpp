@@ -50,7 +50,7 @@ IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
     /* mkdir -p /mnt/huge */
     if (!std::filesystem::exists(HUGETLBFS_PATH)) {
         std::error_code ec;
-        if (!std::filesystem::create_directory(HUGETLBFS_PATH, &ec)) {
+        if (!std::filesystem::create_directory(HUGETLBFS_PATH, ec)) {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
