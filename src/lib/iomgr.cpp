@@ -56,8 +56,8 @@ IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
         }
     }
     /* mount -t hugetlbfs nodev /mnt/huge */
-    if (int err = mount("nodev", HUGETLBFS_PATH, "hugetlbfs", 0, ""); err) {
-        LOGERROR("Failed to mount hugetlbfs. Error = {}", err);
+    if (mount("nodev", HUGETLBFS_PATH, "hugetlbfs", 0, "")) {
+        LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs mount failed");
     }
     m_iface_list.wlock()->reserve(inbuilt_interface_count + 5);
