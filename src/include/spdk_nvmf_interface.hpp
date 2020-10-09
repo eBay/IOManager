@@ -18,6 +18,7 @@ class IOReactor;
 class SpdkNvmfInterface : public IOInterface {
 public:
     SpdkNvmfInterface(struct spdk_nvmf_tgt* tgt);
+    [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
