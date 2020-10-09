@@ -15,6 +15,7 @@ extern "C" {
 #include <spdk/bdev.h>
 #include <spdk/env_dpdk.h>
 #include <rte_errno.h>
+#include <rte_mempool.h>
 }
 
 #include <sds_logging/logging.h>
@@ -58,6 +59,8 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
+    m_num_workers = num_threads;
+
     // m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(num_threads);
     m_worker_reactors.reserve(num_threads * 2); // Have preallocate for iomgr slots
@@ -108,6 +111,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
                 spdk_bdev_initialize(
                     [](void* cb_arg, int rc) {
                         IOManager* pthis = (IOManager*)cb_arg;
+                        pthis->mempool_metrics_populate();
                         pthis->set_state_and_notify(iomgr_state::running);
                     },
                     (void*)this);
@@ -180,6 +184,7 @@ void IOManager::start_spdk() {
             throw std::runtime_error("SPDK Thread Lib Init failed");
         }
     }
+
     // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned allocations
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
 }
@@ -504,7 +509,7 @@ uint8_t* IOManager::iobuf_realloc(uint8_t* buf, size_t align, size_t new_size) {
     return m_is_spdk ? (uint8_t*)spdk_realloc((void*)buf, new_size, align) : sisl_aligned_realloc(buf, align, new_size);
 }
 
-/* SpkdAllocator Implementaion */
+/************* Spdk Memory Allocator section ************************/
 uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
     return (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 }
@@ -515,4 +520,39 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
 }
 
+/************* Mempool Metrics section ************************/
+void IOManager::register_mempool_metrics(struct rte_mempool* mp) {
+    std::string name = mp->name;
+    m_mempool_metrics_set.withWLock([&](auto& m) { m.try_emplace(name, name, (const struct spdk_mempool*)mp); });
+}
+
+void IOManager::mempool_metrics_populate() {
+    rte_mempool_walk(
+        [](struct rte_mempool* mp, void* arg) {
+            IOManager* iomgr = (IOManager*)arg;
+            iomgr->register_mempool_metrics(mp);
+        },
+        (void*)this);
+}
+
+IOMempoolMetrics::IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp) :
+        sisl::MetricsGroup("IOMemoryPool", pool_name),
+        m_mp{mp} {
+    REGISTER_GAUGE(iomempool_obj_size, "Size of the entry for this mempool");
+    REGISTER_GAUGE(iomempool_free_count, "Total count of objects which are free in this pool");
+    REGISTER_GAUGE(iomempool_alloced_count, "Total count of objects which are alloced in this pool");
+    REGISTER_GAUGE(iomempool_cache_size, "Total number of entries cached per lcore in this pool");
+
+    register_me_to_farm();
+    attach_gather_cb(std::bind(&IOMempoolMetrics::on_gather, this));
+
+    // This is not going to change once created, so set it up avoiding atomic operations during gather
+    GAUGE_UPDATE(*this, iomempool_obj_size, ((const struct rte_mempool*)m_mp)->elt_size);
+    GAUGE_UPDATE(*this, iomempool_cache_size, ((const struct rte_mempool*)m_mp)->cache_size);
+}
+
+void IOMempoolMetrics::on_gather() {
+    GAUGE_UPDATE(*this, iomempool_free_count, spdk_mempool_count(m_mp));
+    GAUGE_UPDATE(*this, iomempool_alloced_count, rte_mempool_in_use_count((const struct rte_mempool*)m_mp));
+}
 } // namespace iomgr
