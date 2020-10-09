@@ -202,6 +202,13 @@ void IOManager::start_spdk() {
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
 }
 
+void IOManager::stop_spdk() {
+    if (umount(HUGETLBFS_PATH)) {
+        LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
+        throw std::runtime_error("Hugetlbfs umount failed");
+    }
+}
+
 void IOManager::stop() {
     LOGINFO("Stopping IOManager");
     set_state(iomgr_state::stopping);
@@ -245,6 +252,8 @@ void IOManager::stop() {
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
+
+    if (m_is_spdk) { stop_spdk(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,

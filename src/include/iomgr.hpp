@@ -295,6 +295,7 @@ private:
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
+    void stop_spdk();
     void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
     iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
     void set_state_and_notify(iomgr_state state) {
