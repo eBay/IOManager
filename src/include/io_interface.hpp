@@ -36,6 +36,7 @@ public:
 
     thread_regex scope() const { return m_thread_scope; }
     void set_scope(thread_regex t) { m_thread_scope = t; }
+    [[nodiscard]] virtual bool is_spdk_interface() const { return false; }
 
 protected:
     virtual void init_iface_thread_ctx(const io_thread_t& thr) = 0;

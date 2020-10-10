@@ -254,6 +254,7 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
         true /* wait_for_completion */);
 
     iface_list->push_back(iface);
+    if (iface->is_spdk_interface()) { mempool_metrics_populate(); }
 }
 
 void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
