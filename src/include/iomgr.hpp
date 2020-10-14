@@ -30,6 +30,8 @@ extern "C" {
 struct spdk_bdev_desc;
 struct spdk_bdev;
 struct spdk_nvmf_qpair;
+struct spdk_mempool;
+struct rte_mempool;
 
 namespace iomgr {
 
@@ -59,6 +61,20 @@ using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
 using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
 typedef void (*spdk_msg_signature_t)(void*);
+
+class IOMempoolMetrics : public sisl::MetricsGroup {
+public:
+    IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp);
+    ~IOMempoolMetrics() {
+        detach_gather_cb();
+        deregister_me_from_farm();
+    }
+
+    void on_gather();
+
+private:
+    const struct spdk_mempool* m_mp;
+};
 
 class IOManager {
 public:
@@ -295,7 +311,12 @@ private:
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
+
     void stop_spdk();
+
+    void mempool_metrics_populate();
+    void register_mempool_metrics(struct rte_mempool* mp);
+
     void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
     iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
     void set_state_and_notify(iomgr_state state) {
@@ -309,12 +330,14 @@ private:
 
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
+    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
     std::atomic< iomgr_state > m_state = iomgr_state::stopped;    // Current state of IOManager
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors = 0; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
+    uint32_t m_num_workers = 0;
 
     folly::Synchronized< std::vector< std::shared_ptr< IOInterface > > > m_iface_list;
     folly::Synchronized< std::unordered_map< backing_dev_t, io_device_ptr > > m_iodev_map;
@@ -332,8 +355,6 @@ private:
 
     sisl::sparse_vector< reactor_info_t > m_worker_reactors;
 
-    bool m_is_spdk = false;
-    bool m_is_spdk_inited_externally = false;
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
 
@@ -343,6 +364,11 @@ private:
     msg_module_id_t m_internal_msg_module_id;
     thread_state_notifier_t m_common_thread_state_notifier = nullptr;
     sisl::IDReserver m_thread_idx_reserver;
+
+    // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
+    bool m_is_spdk = false;
+    bool m_is_spdk_inited_externally = false;
+    folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
 };
 
 struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
