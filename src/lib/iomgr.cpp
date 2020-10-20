@@ -151,19 +151,19 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     }
 }
 
-static constexpr char hugetlbfs_path[] = "/mnt/huge";
+constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
     /* mkdir -p /mnt/huge */
-    if (!std::filesystem::exists(std::to_string(hugetlbfs_path))) {
+    if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
-        if (!std::filesystem::create_directory(std::to_string(hugetlbfs_path), ec)) {
+        if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
     }
 
     /* mount -t hugetlbfs nodev /mnt/huge */
-    if (mount("nodev", hugetlbfs_path, "hugetlbfs", 0, "")) {
+    if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
         LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs mount failed");
     }
@@ -208,7 +208,7 @@ void IOManager::start_spdk() {
 }
 
 void IOManager::stop_spdk() {
-    if (umount(hugetlbfs_path)) {
+    if (umount(std::string(hugetlbfs_path).data())) {
         LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs umount failed");
     }
