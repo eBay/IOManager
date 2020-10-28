@@ -328,6 +328,7 @@ static void submit_io(void* b) {
         if (rc == -ENOMEM) {
             LOGDEBUGMOD(iomgr, "Bdev is lacking memory to do IO right away, queueing it\n");
             COUNTER_INCREMENT(iocb->iface->get_metrics(), queued_ios_for_memory_pressure, 1);
+            iocb->copy_iovs();
             spdk_bdev_queue_io_wait(iocb->iodev->bdev(), get_io_channel(iocb->iodev), &iocb->io_wait_entry);
         }
     }
@@ -439,6 +440,7 @@ ssize_t SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int io
 ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb) {
     iocb->io_wait_entry.cb_fn = submit_io;
     iocb->owner_thread = _non_io_thread;
+    iocb->copy_iovs();
     iocb->comp_cb = [&](int64_t res, uint8_t* cookie) {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
         iocb->result = res;
@@ -465,6 +467,7 @@ void SpdkDriveInterface::do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_b
 
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
+    iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
         iocb->result = res;
         if (!iocb->batch_info_ptr) {
