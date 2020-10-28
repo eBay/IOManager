@@ -146,8 +146,9 @@ struct SpdkIocb {
     ~SpdkIocb() {}
 
     void copy_iovs() {
-        addln_iovs = std::unique_ptr< iovec[] >(new iovec[iovcnt]);
-        memcpy((void*)addln_iovs.get(), (void*)iovs, iovcnt * sizeof(iovec));
+        auto _tmp = std::unique_ptr< iovec[] >(new iovec[iovcnt]);
+        memcpy((void*)_tmp.get(), (void*)iovs, iovcnt * sizeof(iovec));
+        addln_iovs = std::move(_tmp);
         iovs = addln_iovs.get();
     }
 
