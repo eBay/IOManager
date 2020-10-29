@@ -164,7 +164,7 @@ void IOManager::start_spdk() {
         }
     } else {
         struct stat buf;
-        if (!stat(hugetlbfs_path, &buf)) { hugetlbfs_umount(); }
+        if (!stat(std::string(hugetlbfs_path).data(), &buf)) { hugetlbfs_umount(); }
     }
 
     /* mount -t hugetlbfs nodev /mnt/huge */
