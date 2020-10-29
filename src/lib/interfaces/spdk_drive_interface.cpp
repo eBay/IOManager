@@ -303,6 +303,7 @@ static void submit_io(void* b) {
             rc = spdk_bdev_read(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->user_data, iocb->offset,
                                 iocb->size, process_completions, (void*)iocb);
         } else {
+            iocb->copy_iovs();
             rc = spdk_bdev_readv(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->iovs, iocb->iovcnt,
                                  iocb->offset, iocb->size, process_completions, (void*)iocb);
         }
@@ -311,6 +312,7 @@ static void submit_io(void* b) {
             rc = spdk_bdev_write(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->user_data, iocb->offset,
                                  iocb->size, process_completions, (void*)iocb);
         } else {
+            iocb->copy_iovs();
             rc = spdk_bdev_writev(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->iovs, iocb->iovcnt,
                                   iocb->offset, iocb->size, process_completions, (void*)iocb);
         }

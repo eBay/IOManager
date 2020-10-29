@@ -29,6 +29,8 @@ extern "C" {
 #include <vector>
 #include <filesystem>
 #include <sys/mount.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
@@ -160,6 +162,9 @@ void IOManager::start_spdk() {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
+    } else {
+        struct stat buf;
+        if (!stat(hugetlbfs_path, &buf)) { hugetlbfs_umount(); }
     }
 
     /* mount -t hugetlbfs nodev /mnt/huge */
@@ -207,7 +212,7 @@ void IOManager::start_spdk() {
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
 }
 
-void IOManager::stop_spdk() {
+void IOManager::hugetlbfs_umount() {
     if (umount(std::string(hugetlbfs_path).data())) {
         LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs umount failed");
@@ -258,7 +263,7 @@ void IOManager::stop() {
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 
-    if (m_is_spdk) { stop_spdk(); }
+    if (m_is_spdk) { hugetlbfs_umount(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
