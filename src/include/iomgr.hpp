@@ -312,7 +312,7 @@ private:
 
     void start_spdk();
 
-    void stop_spdk();
+    void hugetlbfs_umount();
 
     void mempool_metrics_populate();
     void register_mempool_metrics(struct rte_mempool* mp);
