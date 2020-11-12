@@ -311,6 +311,9 @@ private:
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
+
+    void hugetlbfs_umount();
+
     void mempool_metrics_populate();
     void register_mempool_metrics(struct rte_mempool* mp);
 

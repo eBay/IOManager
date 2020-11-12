@@ -27,6 +27,10 @@ extern "C" {
 #include <functional>
 #include <thread>
 #include <vector>
+#include <filesystem>
+#include <sys/mount.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
@@ -149,7 +153,26 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     }
 }
 
+constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
+    /* mkdir -p /mnt/huge */
+    if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
+        std::error_code ec;
+        if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
+            LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
+            throw std::runtime_error("Failed to create /mnt/huge");
+        }
+    } else {
+        struct stat buf;
+        if (!stat(std::string(hugetlbfs_path).data(), &buf)) { hugetlbfs_umount(); }
+    }
+
+    /* mount -t hugetlbfs nodev /mnt/huge */
+    if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+        LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
+        throw std::runtime_error("Hugetlbfs mount failed");
+    }
+
     // Set the spdk log level based on module spdk
     spdk_log_set_flag("all");
     // spdk_log_set_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
@@ -187,6 +210,13 @@ void IOManager::start_spdk() {
 
     // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned allocations
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
+}
+
+void IOManager::hugetlbfs_umount() {
+    if (umount(std::string(hugetlbfs_path).data())) {
+        LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
+        throw std::runtime_error("Hugetlbfs umount failed");
+    }
 }
 
 void IOManager::stop() {
@@ -232,6 +262,8 @@ void IOManager::stop() {
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
+
+    if (m_is_spdk) { hugetlbfs_umount(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
