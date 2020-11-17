@@ -44,9 +44,8 @@ protected:
     virtual void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
     virtual void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
 
-private:
-    void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
-    void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    virtual void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    virtual void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
 
 protected:
     // std::shared_mutex m_mtx;

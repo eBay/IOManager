@@ -8,12 +8,15 @@
 #include <spdk/bdev.h>
 #include "iomgr_msg.hpp"
 #include <utility/enum.hpp>
+#include <chrono>
 
 struct spdk_io_channel;
+struct spdk_thread;
 
+using namespace std::chrono_literals;
 namespace iomgr {
 struct SpdkDriveDeviceContext {
-    struct spdk_io_channel* channel;
+    struct spdk_io_channel* channel{NULL};
 };
 
 struct spdk_msg_type {
@@ -88,6 +91,9 @@ public:
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
 private:
+    void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
+
     io_device_ptr _real_open_dev(const std::string& devname, iomgr_drive_type drive_type);
     io_device_ptr _open_dev_in_worker(const std::string& devname);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
@@ -97,9 +103,11 @@ private:
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
-    void do_async_in_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
+    void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
+    void submit_sync_io_to_tloop_thread(SpdkIocb* iocb);
+    void submit_sync_io_in_this_thread(SpdkIocb* iocb);
 
 private:
     io_interface_comp_cb_t m_comp_cb;
@@ -109,6 +117,10 @@ private:
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
+
+    static constexpr auto max_wait_sync_io_us = 5us;
+    static constexpr auto min_wait_sync_io_us = 0us;
+    static thread_local int s_num_user_sync_devs;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
@@ -130,6 +142,9 @@ struct SpdkBatchIocb {
 };
 
 struct SpdkIocb {
+#ifndef NDEBUG
+    static std::atomic< uint64_t > _iocb_id_counter;
+#endif
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
             iodev(iodev),
@@ -141,9 +156,12 @@ struct SpdkIocb {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
+#ifndef NDEBUG
+        iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
+#endif
     }
 
-    ~SpdkIocb() {}
+    ~SpdkIocb() = default;
 
     void copy_iovs() {
         auto _tmp = std::unique_ptr< iovec[] >(new iovec[iovcnt]);
@@ -153,8 +171,13 @@ struct SpdkIocb {
     }
 
     std::string to_string() const {
-        auto str = fmt::format("op_type={}, size={}, offset={}, iovcnt={} data={}", enum_name(op_type), size, offset,
-                               iovcnt, (void*)user_data);
+        std::string str;
+#ifndef NDEBUG
+        str = fmt::format("id={} ", iocb_id);
+#endif
+        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, data={}, owner_thread={}, batch_sz={} ",
+                           (void*)this, enum_name(op_type), size, offset, iovcnt, (void*)user_data, owner_thread,
+                           batch_info_ptr ? batch_info_ptr->batch_io->size() : 0);
         for (auto i = 0; i < iovcnt; ++i) {
             str += fmt::format("iov[{}]=<base={},len={}>", i, iovs[i].iov_base, iovs[i].iov_len);
         }
@@ -176,5 +199,9 @@ struct SpdkIocb {
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
     SpdkBatchIocb* batch_info_ptr = nullptr;
+#ifndef NDEBUG
+    uint64_t iocb_id;
+    bool owns_by_spdk{false};
+#endif
 };
 } // namespace iomgr

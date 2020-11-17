@@ -131,7 +131,7 @@ void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
 
 void IOInterface::_add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
-        thr->reactor->add_iodev_to_thread(iodev, thr);
+        thr->reactor->add_iodev_to_reactor(iodev, thr);
         init_iodev_thread_ctx(iodev, thr);
         if (!iodev->is_global()) iodev->thread_scope = thr;
     }
@@ -140,7 +140,7 @@ void IOInterface::_add_to_thread(const io_device_ptr& iodev, const io_thread_t& 
 void IOInterface::_remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
         clear_iodev_thread_ctx(iodev, thr);
-        thr->reactor->remove_iodev_from_thread(iodev, thr);
+        thr->reactor->remove_iodev_from_reactor(iodev, thr);
     }
 }
 

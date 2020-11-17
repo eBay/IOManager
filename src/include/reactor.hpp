@@ -194,8 +194,8 @@ public:
     void stop_io_thread(const io_thread_t& thr);
 
     const io_thread_t& addr_to_thread(io_thread_addr_t addr);
-    int add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
-    int remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    int add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
+    int remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
 
     const std::vector< io_thread_t >& io_threads() const { return m_io_threads; }
 
@@ -212,8 +212,8 @@ public:
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
     virtual void reactor_specific_exit_thread(const io_thread_t& thr) = 0;
-    virtual int _add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
-    virtual int _remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int _add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int _remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
 
     void notify_thread_state(bool is_started);
     // const io_thread_t& sthread_from_addr(io_thread_addr_t addr);

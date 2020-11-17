@@ -27,7 +27,6 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 }
 
 #define MAX_EVENTS 20
-#define ESTIMATED_MSGS_PER_THREAD 10000
 
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     IODevice* iodev1 = (IODevice*)ev1.data.ptr;
@@ -38,7 +37,7 @@ static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     return (iodev1->pri > iodev2->pri);
 }
 
-IOReactorEPoll::IOReactorEPoll() : m_msg_q(ESTIMATED_MSGS_PER_THREAD) {}
+IOReactorEPoll::IOReactorEPoll() : m_msg_q() {}
 
 bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
     // Create a epollset for one per thread
@@ -65,7 +64,7 @@ bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
     m_msg_iodev->pri = 1; // Set message fd as high priority. TODO: Make multiple messages fd for various priority
     REACTOR_LOG(INFO, base, thr->thread_addr, "Creating a message event fd {} and add to this thread epoll fd {}",
                 m_msg_iodev->fd(), m_epollfd)
-    if (add_iodev_to_thread(m_msg_iodev, thr) == -1) { goto error; }
+    if (add_iodev_to_reactor(m_msg_iodev, thr) == -1) { goto error; }
 
     // Create a per thread timer
     m_thread_timer = std::make_unique< timer_epoll >(iothread_self());
@@ -86,7 +85,7 @@ error:
 
 void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
     if (m_msg_iodev && (m_msg_iodev->fd() != -1)) {
-        remove_iodev_from_thread(m_msg_iodev, thr);
+        remove_iodev_from_reactor(m_msg_iodev, thr);
         close(m_msg_iodev->fd());
     }
 
@@ -96,7 +95,7 @@ void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
     // Drain the message q and drop the message.
     auto dropped = 0u;
     iomgr_msg* msg;
-    while (m_msg_q.read(msg)) {
+    while (m_msg_q.try_dequeue(msg)) {
         if (msg->has_sem_block()) { msg->m_msg_sem->done(); }
         iomgr_msg::free(msg);
     }
@@ -144,7 +143,7 @@ void IOReactorEPoll::listen() {
     }
 }
 
-int IOReactorEPoll::_add_iodev_to_thread(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
+int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     struct epoll_event ev;
     ev.events = EPOLLET | EPOLLEXCLUSIVE | iodev->ev;
     ev.data.ptr = (void*)iodev.get();
@@ -158,7 +157,7 @@ int IOReactorEPoll::_add_iodev_to_thread(const io_device_ptr& iodev, [[maybe_unu
     return 0;
 }
 
-int IOReactorEPoll::_remove_iodev_from_thread(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
+int IOReactorEPoll::_remove_iodev_from_reactor(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
         LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
@@ -175,7 +174,7 @@ bool IOReactorEPoll::put_msg(iomgr_msg* msg) {
     REACTOR_LOG(DEBUG, iomgr, msg->m_dest_thread, "Put msg of type {} to its msg fd = {}, ptr = {}", msg->m_type,
                 m_reactor_num, msg->m_dest_thread, m_msg_iodev->fd(), (void*)m_msg_iodev.get());
 
-    m_msg_q.blockingWrite(msg);
+    m_msg_q.enqueue(msg);
     uint64_t temp = 1;
     while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
         ;
@@ -191,7 +190,7 @@ void IOReactorEPoll::on_msg_fd_notification() {
     // Start pulling all the messages and handle them.
     while (true) {
         iomgr_msg* msg;
-        if (!m_msg_q.read(msg)) { break; }
+        if (!m_msg_q.try_dequeue(msg)) { break; }
         handle_msg(msg);
     }
 }
