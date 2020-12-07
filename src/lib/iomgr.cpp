@@ -213,10 +213,11 @@ void IOManager::start_spdk() {
 }
 
 void IOManager::hugetlbfs_umount() {
-    if (umount(std::string(hugetlbfs_path).data())) {
+/*    if (umount2(std::string(hugetlbfs_path).data(), MNT_FORCE)) {
         LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs umount failed");
     }
+ */
 }
 
 void IOManager::stop() {
