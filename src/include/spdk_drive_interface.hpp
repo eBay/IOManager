@@ -103,7 +103,7 @@ private:
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
-    void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch, bool end_of_batch = false);
+    void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
     void submit_sync_io_to_tloop_thread(SpdkIocb* iocb);
