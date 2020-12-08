@@ -564,7 +564,15 @@ void SpdkDriveInterface::submit_batch() {
     if (s_batch_info_ptr) {
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
                                      sizeof(SpdkBatchIocb*));
-        iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+        auto sent_to = iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+
+        if (sent_to == 0) {
+            // assert in debug and log a message in release;
+            LOGMSG_ASSERT(0, "multicast_msg returned failure");
+
+            // if message is not delivered, release memory here;
+            delete s_batch_info_ptr;
+        }
 
         // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
         s_batch_info_ptr = nullptr;
@@ -611,7 +619,7 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
     } else {
-        if (!s_batch_info_ptr) { s_batch_info_ptr = new SpdkBatchIocb(); }
+        if (s_batch_info_ptr == nullptr) { s_batch_info_ptr = new SpdkBatchIocb(); }
 
         iocb->batch_info_ptr = s_batch_info_ptr;
         s_batch_info_ptr->batch_io->push_back(iocb);
