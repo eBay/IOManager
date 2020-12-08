@@ -557,10 +557,32 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
 
-void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
-    static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
+static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 
+void SpdkDriveInterface::submit_batch() {
+    // s_batch_info_ptr could be nullptr when client calls submit_batch
+    if (s_batch_info_ptr) {
+        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
+                                     sizeof(SpdkBatchIocb*));
+        auto sent_to = iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+
+        if (sent_to == 0) {
+            // if message is not delivered, release memory here;
+            delete s_batch_info_ptr;
+
+            // assert in debug and log a message in release;
+            LOGMSG_ASSERT(0, "multicast_msg returned failure");
+        }
+
+        // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
+        s_batch_info_ptr = nullptr;
+    }
+    // it will be null operation if client calls this function without anything in s_batch_info_ptr
+}
+
+void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
+
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
@@ -602,14 +624,9 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         iocb->batch_info_ptr = s_batch_info_ptr;
         s_batch_info_ptr->batch_io->push_back(iocb);
 
-        // send this batch
         if (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM) {
-            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
-                                         sizeof(SpdkBatchIocb*));
-            iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-
-            // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
-            s_batch_info_ptr = nullptr;
+            // this batch is ready to be processed;
+            submit_batch();
         }
     }
 }
@@ -703,4 +720,5 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
 drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
     return get_attributes(open_dev(devname, drive_type, 0));
 }
+
 } // namespace iomgr

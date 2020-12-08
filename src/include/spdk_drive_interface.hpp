@@ -63,7 +63,7 @@ public:
     void close_dev(const io_device_ptr& iodev) override;
 
     size_t get_size(IODevice* iodev) override;
-    virtual void submit_batch(){};
+    virtual void submit_batch();
 
     ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
