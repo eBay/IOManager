@@ -567,11 +567,11 @@ void SpdkDriveInterface::submit_batch() {
         auto sent_to = iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
 
         if (sent_to == 0) {
-            // assert in debug and log a message in release;
-            LOGMSG_ASSERT(0, "multicast_msg returned failure");
-
             // if message is not delivered, release memory here;
             delete s_batch_info_ptr;
+
+            // assert in debug and log a message in release;
+            LOGMSG_ASSERT(0, "multicast_msg returned failure");
         }
 
         // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
