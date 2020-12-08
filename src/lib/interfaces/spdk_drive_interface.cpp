@@ -557,37 +557,45 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
 
-void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
+void SpdkDriveInterface::submit_batch() {
+    submit_async_io_to_tloop_thread(nullptr, true /* part_of_batch */, true /* end_of_batch */);
+}
+
+void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch, bool end_of_batch) {
     static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
-    iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
-    iocb->copy_iovs();
-    iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
-        iocb->result = res;
-        if (!iocb->batch_info_ptr) {
-            auto reply =
-                iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
-            iomanager.send_msg(iocb->owner_thread, reply);
-        } else {
-            ++(iocb->batch_info_ptr->num_io_comp);
 
-            // batch io completion count should never exceed number of batch io;
-            assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
-
-            // re-use the batch info ptr which contains all the batch iocbs to send/create
-            // async_batch_io_done msg;
-            if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
-                auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
-                                               (uint8_t*)iocb->batch_info_ptr, sizeof(SpdkBatchIocb*));
+    // iocb could be null when end_of_batch is set;
+    if (iocb) {
+        iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
+        iocb->copy_iovs();
+        iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
+            iocb->result = res;
+            if (!iocb->batch_info_ptr) {
+                auto reply =
+                    iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
                 iomanager.send_msg(iocb->owner_thread, reply);
-            }
+            } else {
+                ++(iocb->batch_info_ptr->num_io_comp);
 
-            // if there is any batched io doesn't get all the iocb completion, we will see memory leak in
-            // the end reported becuase batch io will not freed by spdk thread due to missing async io done
-            // msg;
-        }
-    };
+                // batch io completion count should never exceed number of batch io;
+                assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
+
+                // re-use the batch info ptr which contains all the batch iocbs to send/create
+                // async_batch_io_done msg;
+                if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
+                    auto reply = iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
+                                                   (uint8_t*)iocb->batch_info_ptr, sizeof(SpdkBatchIocb*));
+                    iomanager.send_msg(iocb->owner_thread, reply);
+                }
+
+                // if there is any batched io doesn't get all the iocb completion, we will see memory leak in
+                // the end reported becuase batch io will not freed by spdk thread due to missing async io done
+                // msg;
+            }
+        };
+    }
 
     if (!part_of_batch) {
         // we don't have a use-case for same user thread to issue part_of_batch to both true and false for now.
@@ -597,13 +605,17 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, (uint8_t*)iocb, sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
     } else {
-        if (s_batch_info_ptr == nullptr) { s_batch_info_ptr = new SpdkBatchIocb(); }
+        // no need to allocate if iocb is null - when end_of_batch is set;
+        if (!s_batch_info_ptr && iocb) { s_batch_info_ptr = new SpdkBatchIocb(); }
 
-        iocb->batch_info_ptr = s_batch_info_ptr;
-        s_batch_info_ptr->batch_io->push_back(iocb);
+        if (iocb) {
+            iocb->batch_info_ptr = s_batch_info_ptr;
+            s_batch_info_ptr->batch_io->push_back(iocb);
+        }
 
-        // send this batch
-        if (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM) {
+        // Send this batch if end_of_batch is set or reach IO limit;
+        if ((end_of_batch && s_batch_info_ptr) || // s_batch_info_ptr could be null at this point;
+            (!end_of_batch && (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM))) {
             auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
                                          sizeof(SpdkBatchIocb*));
             iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
@@ -611,6 +623,8 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
             // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
             s_batch_info_ptr = nullptr;
         }
+
+        // if end_of_batch is true, but s_batch_info_ptr is nullptr, it means nothing is there to be sent;
     }
 }
 
@@ -703,4 +717,5 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
 drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
     return get_attributes(open_dev(devname, drive_type, 0));
 }
+
 } // namespace iomgr
