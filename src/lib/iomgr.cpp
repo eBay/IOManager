@@ -162,15 +162,14 @@ void IOManager::start_spdk() {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
-    } else {
-        struct stat buf;
-        if (!stat(std::string(hugetlbfs_path).data(), &buf)) { hugetlbfs_umount(); }
     }
-
-    /* mount -t hugetlbfs nodev /mnt/huge */
-    if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
-        LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
-        throw std::runtime_error("Hugetlbfs mount failed");
+    struct stat buf;
+    if (stat(std::string(hugetlbfs_path).data(), &buf)) {
+        /* mount -t hugetlbfs nodev /mnt/huge */
+        if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+            LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
+            throw std::runtime_error("Hugetlbfs mount failed");
+        }
     }
 
     // Set the spdk log level based on module spdk
@@ -263,7 +262,7 @@ void IOManager::stop() {
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 
-    if (m_is_spdk) { hugetlbfs_umount(); }
+    //if (m_is_spdk) { hugetlbfs_umount(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
