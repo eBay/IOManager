@@ -52,18 +52,21 @@ static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
                 ctx->address);
         auto const bdev_name = ctx->address + std::string("_bdev");
 
+        auto bdev = spdk_bdev_get_by_name(bdev_name.c_str());
+        if (bdev == nullptr) {
 #ifdef SPDK_DRIVE_USE_URING
-        auto ret_bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-        if (ret_bdev == nullptr) {
-            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
-        }
+            auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+            if (bdev == nullptr) {
+                folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
+            }
 #else
-        int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-        if (ret != 0) {
-            folly::throwSystemError(
-                fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
-        }
+            int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+            if (ret != 0) {
+                folly::throwSystemError(
+                    fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
+            }
 #endif
+        }
         ctx->bdev_name = bdev_name;
         ctx->done = true;
     }
@@ -226,7 +229,12 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);
     m_opened_device.wlock()->erase(iodev->devname);
 
-    // TODO: Close the bdev device
+    assert(iodev->creator != nullptr);
+    iomanager.run_on(
+        iodev->creator,
+        [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev)](io_thread_addr_t taddr) { spdk_bdev_close(bdev_desc); },
+        true /* wait_for_completion */);
+
     iodev->clear();
 }
 

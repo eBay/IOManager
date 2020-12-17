@@ -55,7 +55,7 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...)->overloaded< Ts... >;
+overloaded(Ts...) -> overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
@@ -367,7 +367,7 @@ private:
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk = false;
-    bool m_is_spdk_inited_externally = false;
+    bool m_is_spdk_inited_already = false;
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
 };
 

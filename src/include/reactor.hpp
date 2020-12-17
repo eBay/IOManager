@@ -132,6 +132,7 @@ struct IODevice {
     std::string devname;
     backing_dev_t dev;
     int ev = 0;
+    io_thread_t creator;
     thread_specifier thread_scope = thread_regex::all_io;
     int pri = 1;
     void* cookie = nullptr;

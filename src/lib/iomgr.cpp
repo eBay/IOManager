@@ -107,7 +107,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
 
-    if (is_spdk) {
+    if (is_spdk && !m_is_spdk_inited_already) {
         LOGINFO("Initializing bdev subsystem");
         iomanager.run_on(
             thread_regex::least_busy_worker,
@@ -122,6 +122,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
             },
             false /* wait_for_completion */);
         wait_for_state(iomgr_state::running);
+        m_is_spdk_inited_already = true;
     } else {
         set_state(iomgr_state::running);
     }
@@ -178,8 +179,8 @@ void IOManager::start_spdk() {
     spdk_log_set_print_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
 
     // Initialize if spdk has still not been initialized
-    m_is_spdk_inited_externally = !spdk_env_dpdk_external_init();
-    if (!m_is_spdk_inited_externally) {
+    m_is_spdk_inited_already = !spdk_env_dpdk_external_init();
+    if (!m_is_spdk_inited_already) {
         struct spdk_env_opts opts;
         spdk_env_opts_init(&opts);
         opts.name = "hs_code";
@@ -262,7 +263,7 @@ void IOManager::stop() {
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 
-    //if (m_is_spdk) { hugetlbfs_umount(); }
+    // if (m_is_spdk) { hugetlbfs_umount(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
@@ -500,7 +501,10 @@ msg_handler_t& IOManager::get_msg_module(msg_module_id_t id) { return m_msg_hand
 const io_thread_t& IOManager::iothread_self() const { return this_reactor()->iothread_self(); };
 
 /****** IODevice related ********/
-IODevice::IODevice() { m_thread_local_ctx.reserve(IOManager::max_io_threads); }
+IODevice::IODevice() {
+    m_thread_local_ctx.reserve(IOManager::max_io_threads);
+    creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
+}
 
 std::string IODevice::dev_id() {
     if (std::holds_alternative< int >(dev)) {
@@ -568,8 +572,7 @@ void IOManager::mempool_metrics_populate() {
 }
 
 IOMempoolMetrics::IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp) :
-        sisl::MetricsGroup("IOMemoryPool", pool_name),
-        m_mp{mp} {
+        sisl::MetricsGroup("IOMemoryPool", pool_name), m_mp{mp} {
     REGISTER_GAUGE(iomempool_obj_size, "Size of the entry for this mempool");
     REGISTER_GAUGE(iomempool_free_count, "Total count of objects which are free in this pool");
     REGISTER_GAUGE(iomempool_alloced_count, "Total count of objects which are alloced in this pool");
