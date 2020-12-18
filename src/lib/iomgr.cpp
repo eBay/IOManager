@@ -171,6 +171,11 @@ void IOManager::start_spdk() {
             LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
             throw std::runtime_error("Hugetlbfs mount failed");
         }
+    } else {
+        /* Remove old/garbage hugepages from /mnt/huge */
+        std::filesystem::path dir = std::string(hugetlbfs_path).data();
+        std::uintmax_t n = std::filesystem::remove_all(dir);
+        LOGDEBUG("Deleted {} old hugepages", n);
     }
 
     // Set the spdk log level based on module spdk
@@ -262,8 +267,6 @@ void IOManager::stop() {
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
-
-    // if (m_is_spdk) { hugetlbfs_umount(); }
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
