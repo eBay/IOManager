@@ -311,6 +311,7 @@ private:
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
+    void stop_spdk();
 
     void hugetlbfs_umount();
 
@@ -331,6 +332,7 @@ private:
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
     [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
+    [[nodiscard]] bool is_spdk_inited() const;
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
@@ -366,8 +368,9 @@ private:
     sisl::IDReserver m_thread_idx_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
-    bool m_is_spdk = false;
-    bool m_is_spdk_inited_already = false;
+    bool m_is_spdk{false};
+    bool m_spdk_reinit_needed{false};
+
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
 };
 

@@ -128,19 +128,20 @@ using ev_callback = std::function< void(IODevice* iodev, void* cookie, int event
 using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 
 struct IODevice {
-    ev_callback cb = nullptr;
+    ev_callback cb{nullptr};
     std::string devname;
+    std::string alias_name;
     backing_dev_t dev;
-    int ev = 0;
+    int ev{0};
     io_thread_t creator;
-    thread_specifier thread_scope = thread_regex::all_io;
+    thread_specifier thread_scope{thread_regex::all_io};
     int pri = 1;
     void* cookie = nullptr;
     std::unique_ptr< timer_info > tinfo;
-    IOInterface* io_interface = nullptr;
+    IOInterface* io_interface{nullptr};
     sisl::sparse_vector< void* > m_thread_local_ctx;
-    bool ready = false;
-    std::atomic< int32_t > thread_op_pending_count = 0; // Number of add/remove of iodev to thread pending
+    bool ready{false};
+    std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
 
     IODevice();
     ~IODevice() = default;
