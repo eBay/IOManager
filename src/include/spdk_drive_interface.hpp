@@ -63,7 +63,7 @@ public:
     void close_dev(const io_device_ptr& iodev) override;
 
     size_t get_size(IODevice* iodev) override;
-    virtual void submit_batch(){};
+    virtual void submit_batch();
 
     ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
@@ -94,8 +94,8 @@ private:
     void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    io_device_ptr _real_open_dev(const std::string& devname, iomgr_drive_type drive_type);
-    io_device_ptr _open_dev_in_worker(const std::string& devname);
+    io_device_ptr _real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type);
+    void _open_dev_in_worker(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
@@ -147,12 +147,7 @@ struct SpdkIocb {
 #endif
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
              void* cookie) :
-            iodev(iodev),
-            iface(iface),
-            op_type(op_type),
-            size(size),
-            offset(offset),
-            user_cookie(cookie) {
+            iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;

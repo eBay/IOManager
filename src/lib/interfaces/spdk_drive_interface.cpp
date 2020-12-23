@@ -52,9 +52,10 @@ static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
                 ctx->address);
         auto const bdev_name = ctx->address + std::string("_bdev");
 
+        assert(spdk_bdev_get_by_name(bdev_name.c_str()) == nullptr);
 #ifdef SPDK_DRIVE_USE_URING
-        auto ret_bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-        if (ret_bdev == nullptr) {
+        auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+        if (bdev == nullptr) {
             folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
         }
 #else
@@ -163,21 +164,27 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_drive_type drive_type,
                                            [[maybe_unused]] int oflags) {
-    io_device_ptr ret{nullptr};
-    m_opened_device.withWLock([this, &devname, &ret, &drive_type](auto& m) {
+    io_device_ptr iodev{nullptr};
+    m_opened_device.withWLock([this, &devname, &iodev, &drive_type](auto& m) {
         auto it = m.find(devname);
         if ((it == m.end()) || (it->second == nullptr)) {
-            ret = _real_open_dev(devname, drive_type);
-            m.insert(std::make_pair<>(devname, ret));
+            iodev = _real_create_open_dev(devname, drive_type);
+            m.insert(std::make_pair<>(devname, iodev));
         } else {
-            ret = it->second;
+            iodev = it->second;
+            if (!iodev->ready) { // Closed before, reopen it
+                iomanager.run_on(
+                    thread_regex::least_busy_worker,
+                    [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
+                    true /* wait_for_completion */);
+            }
         }
     });
-    return ret;
+    return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::_real_open_dev(const std::string& devname, iomgr_drive_type drive_type) {
-    io_device_ptr ret{nullptr};
+io_device_ptr SpdkDriveInterface::_real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type) {
+    io_device_ptr iodev{nullptr};
     RELEASE_ASSERT(!iomanager.am_i_worker_reactor(),
                    "We cannot open the device from a worker reactor thread unless its a bdev");
 
@@ -194,39 +201,43 @@ io_device_ptr SpdkDriveInterface::_real_open_dev(const std::string& devname, iom
     }
 
     if (!create_ctx->bdev_name.empty() && !create_ctx->err) {
+        iodev = std::make_shared< IODevice >();
+        iodev->thread_scope = thread_regex::all_io;
+        iodev->pri = 9;
+        iodev->io_interface = this;
+        iodev->devname = devname;
+        iodev->alias_name = create_ctx->bdev_name;
+
         // Issue the opendev on any one of the tight loop reactor
         iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this, &ret, bdev_name = create_ctx->bdev_name](io_thread_addr_t taddr) {
-                ret = _open_dev_in_worker(bdev_name);
-            },
+            thread_regex::least_busy_worker, [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
             true /* wait_for_completion */);
     }
-    return ret;
+    return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::_open_dev_in_worker(const std::string& bdev_name) {
+void SpdkDriveInterface::_open_dev_in_worker(const io_device_ptr& iodev) {
     struct spdk_bdev_desc* desc = NULL;
-    auto rc = spdk_bdev_open_ext(bdev_name.c_str(), true, bdev_event_cb, NULL, &desc);
-    if (rc != 0) { folly::throwSystemError(fmt::format("Unable to open the device={} error={}", bdev_name, rc)); }
-
-    auto iodev = std::make_shared< IODevice >();
+    auto rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, NULL, &desc);
+    if (rc != 0) {
+        folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
+    }
     iodev->dev = backing_dev_t(desc);
-    iodev->thread_scope = thread_regex::all_io;
-    iodev->pri = 9;
-    iodev->io_interface = this;
-    iodev->devname = bdev_name;
+    iodev->creator = iomanager.iothread_self();
 
     add_io_device(iodev, true /* wait_to_add */);
-    LOGINFOMOD(iomgr, "Device {} opened successfully", bdev_name);
-    return iodev;
+    LOGINFOMOD(iomgr, "Device {} bdev_name={} opened successfully", iodev->devname, iodev->alias_name);
 }
 
 void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);
-    m_opened_device.wlock()->erase(iodev->devname);
 
-    // TODO: Close the bdev device
+    assert(iodev->creator != nullptr);
+    iomanager.run_on(
+        iodev->creator,
+        [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev)](io_thread_addr_t taddr) { spdk_bdev_close(bdev_desc); },
+        true /* wait_for_completion */);
+
     iodev->clear();
 }
 
@@ -557,10 +568,32 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
 
-void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
-    static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
+static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 
+void SpdkDriveInterface::submit_batch() {
+    // s_batch_info_ptr could be nullptr when client calls submit_batch
+    if (s_batch_info_ptr) {
+        auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
+                                     sizeof(SpdkBatchIocb*));
+        auto sent_to = iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
+
+        if (sent_to == 0) {
+            // if message is not delivered, release memory here;
+            delete s_batch_info_ptr;
+
+            // assert in debug and log a message in release;
+            LOGMSG_ASSERT(0, "multicast_msg returned failure");
+        }
+
+        // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
+        s_batch_info_ptr = nullptr;
+    }
+    // it will be null operation if client calls this function without anything in s_batch_info_ptr
+}
+
+void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
+
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
@@ -602,14 +635,9 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         iocb->batch_info_ptr = s_batch_info_ptr;
         s_batch_info_ptr->batch_io->push_back(iocb);
 
-        // send this batch
         if (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM) {
-            auto msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid, (uint8_t*)s_batch_info_ptr,
-                                         sizeof(SpdkBatchIocb*));
-            iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
-
-            // reset batch info ptr, memory will be freed by spdk thread after batch io completes;
-            s_batch_info_ptr = nullptr;
+            // this batch is ready to be processed;
+            submit_batch();
         }
     }
 }
@@ -703,4 +731,5 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
 drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
     return get_attributes(open_dev(devname, drive_type, 0));
 }
+
 } // namespace iomgr
