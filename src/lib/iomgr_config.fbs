@@ -1,0 +1,17 @@
+native_include "utility/non_null_ptr.hpp";
+
+namespace iomgrcfg;
+
+attribute "hotswap";
+attribute "deprecated";
+
+table SpdkDriveInterface {
+    /* Number of batched io limit for SPDK request */
+    num_batch_io_limit: uint32 = 2 (hotswap); 
+}
+
+table IomgrSettings {
+    spdk: SpdkDriveInterface;
+}
+
+root_type IomgrSettings;
