@@ -74,7 +74,11 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_internal_msg_module_id = register_msg_module([this](iomgr_msg* msg) { this_reactor()->handle_msg(msg); });
 
     // Start the SPDK
-    if (is_spdk) { start_spdk(); }
+    bool init_bdev{false};
+    if (is_spdk) {
+        init_bdev = !is_spdk_inited();
+        start_spdk();
+    }
 
     // Create all in-built interfaces here
     set_state(iomgr_state::interface_init);
@@ -107,7 +111,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
 
-    if (is_spdk && !m_is_spdk_inited_already) {
+    if (is_spdk && init_bdev) {
         LOGINFO("Initializing bdev subsystem");
         iomanager.run_on(
             thread_regex::least_busy_worker,
@@ -122,7 +126,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
             },
             false /* wait_for_completion */);
         wait_for_state(iomgr_state::running);
-        m_is_spdk_inited_already = true;
+        m_spdk_reinit_needed = false;
     } else {
         set_state(iomgr_state::running);
     }
@@ -184,23 +188,26 @@ void IOManager::start_spdk() {
     spdk_log_set_print_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
 
     // Initialize if spdk has still not been initialized
-    m_is_spdk_inited_already = !spdk_env_dpdk_external_init();
-    if (!m_is_spdk_inited_already) {
+    if (!is_spdk_inited()) {
         struct spdk_env_opts opts;
-        spdk_env_opts_init(&opts);
-        opts.name = "hs_code";
-        opts.shm_id = -1;
+        struct spdk_env_opts* p_opts{nullptr};
+        if (!m_spdk_reinit_needed) {
+            spdk_env_opts_init(&opts);
+            opts.name = "hs_code";
+            opts.shm_id = -1;
 
-        // Set VA mode if given
-        auto va_mode = std::string("pa");
-        try {
-            va_mode = SDS_OPTIONS["iova-mode"].as< std::string >();
-            LOGDEBUG("Using IOVA = {} mode", va_mode);
-        } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
-        opts.iova_mode = va_mode.c_str();
-        //    opts.mem_size = 512;
+            // Set VA mode if given
+            auto va_mode = std::string("pa");
+            try {
+                va_mode = SDS_OPTIONS["iova-mode"].as< std::string >();
+                LOGDEBUG("Using IOVA = {} mode", va_mode);
+            } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
+            opts.iova_mode = va_mode.c_str();
+            //    opts.mem_size = 512;
+            p_opts = &opts;
+        }
 
-        int rc = spdk_env_init(&opts);
+        int rc = spdk_env_init(p_opts);
         if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
 
         spdk_unaffinitize_thread();
@@ -226,7 +233,23 @@ void IOManager::hugetlbfs_umount() {
 
 void IOManager::stop() {
     LOGINFO("Stopping IOManager");
-    set_state(iomgr_state::stopping);
+
+    if (m_is_spdk) {
+        iomanager.run_on(
+            thread_regex::least_busy_worker,
+            [this](io_thread_addr_t taddr) {
+                spdk_bdev_finish(
+                    [](void* cb_arg) {
+                        IOManager* pthis = (IOManager*)cb_arg;
+                        pthis->set_state_and_notify(iomgr_state::stopping);
+                    },
+                    (void*)this);
+            },
+            false /* wait_for_completion */);
+        wait_for_state(iomgr_state::stopping);
+    } else {
+        set_state(iomgr_state::stopping);
+    }
 
     // Increment stopping threads by 1 and then decrement after sending message to prevent case where there are no
     // IO threads, which hangs the iomanager stop
@@ -267,6 +290,14 @@ void IOManager::stop() {
     assert(get_state() == iomgr_state::stopped);
 
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
+
+    if (m_is_spdk) { stop_spdk(); }
+}
+
+void IOManager::stop_spdk() {
+    spdk_thread_lib_fini();
+    spdk_env_fini();
+    m_spdk_reinit_needed = true;
 }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
@@ -503,6 +534,10 @@ msg_handler_t& IOManager::get_msg_module(msg_module_id_t id) { return m_msg_hand
 
 const io_thread_t& IOManager::iothread_self() const { return this_reactor()->iothread_self(); };
 
+bool IOManager::is_spdk_inited() const {
+    return (m_is_spdk && !m_spdk_reinit_needed && !spdk_env_dpdk_external_init());
+}
+
 /****** IODevice related ********/
 IODevice::IODevice() {
     m_thread_local_ctx.reserve(IOManager::max_io_threads);
@@ -530,10 +565,10 @@ bool IODevice::is_my_thread_scope() const {
 
 void IODevice::clear() {
     dev = -1;
-    io_interface = nullptr;
     tinfo = nullptr;
     cookie = nullptr;
     m_thread_local_ctx.clear();
+    creator = nullptr;
 }
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {

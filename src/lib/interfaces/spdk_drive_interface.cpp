@@ -52,21 +52,19 @@ static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
                 ctx->address);
         auto const bdev_name = ctx->address + std::string("_bdev");
 
-        auto bdev = spdk_bdev_get_by_name(bdev_name.c_str());
-        if (bdev == nullptr) {
+        assert(spdk_bdev_get_by_name(bdev_name.c_str()) == nullptr);
 #ifdef SPDK_DRIVE_USE_URING
-            auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-            if (bdev == nullptr) {
-                folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
-            }
-#else
-            int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-            if (ret != 0) {
-                folly::throwSystemError(
-                    fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
-            }
-#endif
+        auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+        if (bdev == nullptr) {
+            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
         }
+#else
+        int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+        if (ret != 0) {
+            folly::throwSystemError(
+                fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
+        }
+#endif
         ctx->bdev_name = bdev_name;
         ctx->done = true;
     }
@@ -166,21 +164,27 @@ static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_drive_type drive_type,
                                            [[maybe_unused]] int oflags) {
-    io_device_ptr ret{nullptr};
-    m_opened_device.withWLock([this, &devname, &ret, &drive_type](auto& m) {
+    io_device_ptr iodev{nullptr};
+    m_opened_device.withWLock([this, &devname, &iodev, &drive_type](auto& m) {
         auto it = m.find(devname);
         if ((it == m.end()) || (it->second == nullptr)) {
-            ret = _real_open_dev(devname, drive_type);
-            m.insert(std::make_pair<>(devname, ret));
+            iodev = _real_create_open_dev(devname, drive_type);
+            m.insert(std::make_pair<>(devname, iodev));
         } else {
-            ret = it->second;
+            iodev = it->second;
+            if (!iodev->ready) { // Closed before, reopen it
+                iomanager.run_on(
+                    thread_regex::least_busy_worker,
+                    [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
+                    true /* wait_for_completion */);
+            }
         }
     });
-    return ret;
+    return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::_real_open_dev(const std::string& devname, iomgr_drive_type drive_type) {
-    io_device_ptr ret{nullptr};
+io_device_ptr SpdkDriveInterface::_real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type) {
+    io_device_ptr iodev{nullptr};
     RELEASE_ASSERT(!iomanager.am_i_worker_reactor(),
                    "We cannot open the device from a worker reactor thread unless its a bdev");
 
@@ -197,37 +201,36 @@ io_device_ptr SpdkDriveInterface::_real_open_dev(const std::string& devname, iom
     }
 
     if (!create_ctx->bdev_name.empty() && !create_ctx->err) {
+        iodev = std::make_shared< IODevice >();
+        iodev->thread_scope = thread_regex::all_io;
+        iodev->pri = 9;
+        iodev->io_interface = this;
+        iodev->devname = devname;
+        iodev->alias_name = create_ctx->bdev_name;
+
         // Issue the opendev on any one of the tight loop reactor
         iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this, &ret, bdev_name = create_ctx->bdev_name](io_thread_addr_t taddr) {
-                ret = _open_dev_in_worker(bdev_name);
-            },
+            thread_regex::least_busy_worker, [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
             true /* wait_for_completion */);
     }
-    return ret;
+    return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::_open_dev_in_worker(const std::string& bdev_name) {
+void SpdkDriveInterface::_open_dev_in_worker(const io_device_ptr& iodev) {
     struct spdk_bdev_desc* desc = NULL;
-    auto rc = spdk_bdev_open_ext(bdev_name.c_str(), true, bdev_event_cb, NULL, &desc);
-    if (rc != 0) { folly::throwSystemError(fmt::format("Unable to open the device={} error={}", bdev_name, rc)); }
-
-    auto iodev = std::make_shared< IODevice >();
+    auto rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, NULL, &desc);
+    if (rc != 0) {
+        folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
+    }
     iodev->dev = backing_dev_t(desc);
-    iodev->thread_scope = thread_regex::all_io;
-    iodev->pri = 9;
-    iodev->io_interface = this;
-    iodev->devname = bdev_name;
+    iodev->creator = iomanager.iothread_self();
 
     add_io_device(iodev, true /* wait_to_add */);
-    LOGINFOMOD(iomgr, "Device {} opened successfully", bdev_name);
-    return iodev;
+    LOGINFOMOD(iomgr, "Device {} bdev_name={} opened successfully", iodev->devname, iodev->alias_name);
 }
 
 void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);
-    m_opened_device.wlock()->erase(iodev->devname);
 
     assert(iodev->creator != nullptr);
     iomanager.run_on(

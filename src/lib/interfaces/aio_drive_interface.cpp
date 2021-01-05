@@ -65,6 +65,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
     iodev->pri = 9;
     iodev->io_interface = this;
     iodev->devname = devname;
+    iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
 
     LOGINFO("Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
     return iodev;
