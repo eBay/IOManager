@@ -228,6 +228,7 @@ void IOManager::start_spdk() {
                 LOGDEBUG("Read cpuset from {}", full_path);
                 auto cpuset = exec(full_path.c_str());
                 LOGDEBUG("CPU mask is {}", cpuset);
+                opts.core_mask = cpuset.c_str();
             } else {
                 LOGDEBUG("DPDK will set CPU mask since CPU pinning not done.");
             }
