@@ -158,6 +158,20 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     }
 }
 
+std::string exec(const char* cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
+    if (!pipe) {
+        LOGERROR("Failed to execute the command {}", cmd);
+        throw std::runtime_error("popen() failed");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get())) {
+        result += buffer.data();
+    }
+    return result;
+}
+
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
     /* mkdir -p /mnt/huge */
@@ -199,6 +213,25 @@ void IOManager::start_spdk() {
             } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
             opts.iova_mode = va_mode.c_str();
             //    opts.mem_size = 512;
+
+            // Set CPU mask (if CPU pinning is active)
+            constexpr std::string_view cpuset_path = "/hostfs/sys/fs/cgroup/cpuset";
+            if (std::filesystem::exists(std::string(cpuset_path))) {
+                constexpr std::string_view kube_cpuset_path =
+                                "grep cpuset /proc/self/cgroup|awk -F: '{print $3}'";
+                auto kube_path = exec(std::string(kube_cpuset_path).c_str());
+                auto full_path = std::string(cpuset_path) + kube_path;
+                if (!std::filesystem::exists(full_path)) {
+                    LOGERROR("Failed to find cpuset path {}", full_path);
+                    throw std::runtime_error("Failed to find file");
+                }
+                LOGDEBUG("Read cpuset from {}", full_path);
+                auto cpuset = exec(full_path.c_str());
+                LOGDEBUG("CPU mask is {}", cpuset);
+            } else {
+                LOGDEBUG("DPDK will set CPU mask since CPU pinning not done.");
+            }
+
             p_opts = &opts;
         }
 
