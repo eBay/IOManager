@@ -225,6 +225,11 @@ void SpdkDriveInterface::_open_dev_in_worker(const io_device_ptr& iodev) {
     iodev->dev = backing_dev_t(desc);
     iodev->creator = iomanager.iothread_self();
 
+    // Set the bdev to split on underlying device io boundary.
+    auto bdev = spdk_bdev_get_by_name(iodev->alias_name.c_str());
+    if (!bdev) { folly::throwSystemError(fmt::format("Unable to get opened device={}", iodev->alias_name)); }
+    bdev->split_on_optimal_io_boundary = true;
+
     add_io_device(iodev, true /* wait_to_add */);
     LOGINFOMOD(iomgr, "Device {} bdev_name={} opened successfully", iodev->devname, iodev->alias_name);
 }
