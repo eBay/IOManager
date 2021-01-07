@@ -220,13 +220,14 @@ void IOManager::start_spdk() {
                 constexpr std::string_view kube_cpuset_path =
                                 "grep cpuset /proc/self/cgroup|awk -F: '{print $3}'";
                 auto kube_path = exec(std::string(kube_cpuset_path).c_str());
-                auto full_path = std::string(cpuset_path) + kube_path;
+                auto full_path = std::string(cpuset_path) + kube_path + "/cpuset.cpus";
                 if (!std::filesystem::exists(full_path)) {
                     LOGERROR("Failed to find cpuset path {}", full_path);
                     throw std::runtime_error("Failed to find file");
                 }
                 LOGDEBUG("Read cpuset from {}", full_path);
-                auto cpuset = exec(full_path.c_str());
+                auto cmd = "cat " + full_path;
+                auto cpuset = exec(cmd.c_str());
                 LOGDEBUG("CPU mask is {}", cpuset);
                 opts.core_mask = cpuset.c_str();
             } else {
