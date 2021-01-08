@@ -1,7 +1,8 @@
 #pragma once
 #include <settings/settings.hpp>
 #include <sds_options/options.h>
-#include "src/lib/generated/iomgr_config_generated.h"
+//#include "lib/generated/iomgr_config_generated.h"
+#include "iomgr_config_generated.h"
 
 SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config,
               SDS_OPTIONS.count("config_path") ? SDS_OPTIONS["config_path"].as< std::string >() : "");

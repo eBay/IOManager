@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "4.1.7"
+    version = "4.1.8"
     revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
@@ -55,7 +55,7 @@ class IOMgrConan(ConanFile):
 
         if self.options.sanitize:
             definitions['MEMORY_SANITIZER_ON'] = 'ON'
-                
+
         if self.options.coverage:
             definitions['CONAN_BUILD_COVERAGE'] = 'ON'
             test_target = 'coverage'
