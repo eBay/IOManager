@@ -1,7 +1,6 @@
 #pragma once
 #include <settings/settings.hpp>
 #include <sds_options/options.h>
-//#include "lib/generated/iomgr_config_generated.h"
 #include "iomgr_config_generated.h"
 
 SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config,
