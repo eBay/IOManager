@@ -17,3 +17,5 @@ set (IOMGR_SRC
       interfaces/spdk_nvmf_interface.cpp)
 
 add_library (iomgr STATIC ${IOMGR_SRC})
+
+settings_gen_cpp(${CONAN_BIN_DIRS_FLATBUFFERS} ${CMAKE_CURRENT_BINARY_DIR}/generated/ iomgr iomgr_config.fbs)
