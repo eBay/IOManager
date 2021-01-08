@@ -10,7 +10,7 @@
 #include <utility/enum.hpp>
 #include <chrono>
 
-#include "include/iomgr_config.hpp"
+#include "iomgr_config.hpp"
 
 struct spdk_io_channel;
 struct spdk_thread;

@@ -4,7 +4,7 @@ project(iomgr)
 enable_testing()
 set(CMAKE_CXX_STANDARD 17)
 
-include_directories(${CMAKE_BINARY_DIR})
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/lib/generated)
 
 if(EXISTS ${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
