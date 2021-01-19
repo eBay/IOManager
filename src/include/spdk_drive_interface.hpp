@@ -10,6 +10,8 @@
 #include <utility/enum.hpp>
 #include <chrono>
 
+#include "iomgr_config.hpp"
+
 struct spdk_io_channel;
 struct spdk_thread;
 
@@ -44,9 +46,9 @@ public:
 
 struct SpdkIocb;
 
-static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
+// static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
 
-static_assert(SPDK_BATCH_IO_NUM > 1);
+// static_assert(SPDK_BATCH_IO_NUM > 1);
 
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;

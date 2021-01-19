@@ -640,7 +640,7 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         iocb->batch_info_ptr = s_batch_info_ptr;
         s_batch_info_ptr->batch_io->push_back(iocb);
 
-        if (s_batch_info_ptr->batch_io->size() == SPDK_BATCH_IO_NUM) {
+        if (s_batch_info_ptr->batch_io->size() == IM_DYNAMIC_CONFIG(spdk->num_batch_io_limit)) {
             // this batch is ready to be processed;
             submit_batch();
         }
