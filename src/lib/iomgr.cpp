@@ -215,25 +215,16 @@ void IOManager::start_spdk() {
             //    opts.mem_size = 512;
 
             // Set CPU mask (if CPU pinning is active)
-            constexpr std::string_view cpuset_path = "/hostfs/sys/fs/cgroup/cpuset";
-            if (std::filesystem::exists(std::string(cpuset_path))) {
-                constexpr std::string_view kube_cpuset_path =
-                                "grep cpuset /proc/self/cgroup|awk -F: '{print $3}'";
-                auto kube_path = exec(std::string(kube_cpuset_path).c_str());
-                auto full_path = std::string(cpuset_path) + kube_path + "/cpuset.cpus";
-                if (!std::filesystem::exists(full_path)) {
-                    LOGERROR("Failed to find cpuset path {}", full_path);
-                    throw std::runtime_error("Failed to find file");
-                }
-                LOGDEBUG("Read cpuset from {}", full_path);
-                auto cmd = "cat " + full_path;
+            constexpr std::string_view cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
+            if (std::filesystem::exists(cpuset_path)) {
+                LOGDEBUG("Read cpuset from {}", cpuset_path);
+                auto cmd = "cat " + cpuset_path;
                 auto cpuset = exec(cmd.c_str());
                 LOGDEBUG("CPU mask is {}", cpuset);
                 opts.core_mask = cpuset.c_str();
             } else {
                 LOGDEBUG("DPDK will set CPU mask since CPU pinning not done.");
             }
-
             p_opts = &opts;
         }
 
