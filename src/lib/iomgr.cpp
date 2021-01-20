@@ -215,7 +215,7 @@ void IOManager::start_spdk() {
             //    opts.mem_size = 512;
 
             // Set CPU mask (if CPU pinning is active)
-            constexpr std::string_view cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
+            std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 auto cmd = "cat " + cpuset_path;
