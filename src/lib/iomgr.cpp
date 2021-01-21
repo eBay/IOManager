@@ -215,13 +215,17 @@ void IOManager::start_spdk() {
             //    opts.mem_size = 512;
 
             // Set CPU mask (if CPU pinning is active)
-            std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
+            //std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
+            std::string cpuset_path = "/sys/fs/cgroup/cpuset/cpuset.cpus";
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 auto cmd = "cat " + cpuset_path;
-                auto cpuset = exec(cmd.c_str());
-                LOGDEBUG("CPU mask is {}", cpuset);
-                opts.core_mask = cpuset.c_str();
+                auto corelist = exec(cmd.c_str());
+                corelist.erase(
+                    std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
+                corelist = "[" + corelist + "]";
+                LOGDEBUG("Corelist is {}", corelist);
+                opts.core_mask = corelist.c_str();
             } else {
                 LOGDEBUG("DPDK will set CPU mask since CPU pinning not done.");
             }
