@@ -12,7 +12,7 @@ table SpdkDriveInterface {
 
 table IomgrSettings {
     spdk: SpdkDriveInterface;
-    /*cpuset_path: string = "/sys/fs/cgroup/cpuset/cpuset.cpus";*/
+    cpuset_path: string;
 }
 
 root_type IomgrSettings;

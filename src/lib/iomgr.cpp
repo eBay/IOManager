@@ -174,6 +174,8 @@ std::string exec(const char* cmd) {
 
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
+    IOMgrDynamicConfig::init_settings_default();
+
     /* mkdir -p /mnt/huge */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
@@ -215,8 +217,7 @@ void IOManager::start_spdk() {
             //    opts.mem_size = 512;
 
             // Set CPU mask (if CPU pinning is active)
-            //std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
-            std::string cpuset_path = "/sys/fs/cgroup/cpuset/cpuset.cpus";
+            std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 auto cmd = "cat " + cpuset_path;
