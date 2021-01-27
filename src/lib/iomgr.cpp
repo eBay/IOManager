@@ -186,7 +186,7 @@ void IOManager::start_spdk() {
     if (stat(std::string(hugetlbfs_path).data(), &buf)) {
         std::string cmd = "mount -t hugetlbfs nodev " + std::string(hugetlbfs_path);
         (void) exec(cmd.c_str());
-        LOGDEBUG("Deleted hugepages path");
+        LOGDEBUG("Mounted hugepages path");
     } else {
         /* Remove old/garbage hugepages from /mnt/huge */
         std::string cmd = "rm -f " + std::string(hugetlbfs_path) + "/*";
