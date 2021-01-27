@@ -4,6 +4,8 @@ project(iomgr)
 enable_testing()
 set(CMAKE_CXX_STANDARD 17)
 
+include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/lib/generated)
+
 if(EXISTS ${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
     conan_basic_setup()
@@ -20,6 +22,8 @@ endif ()
 if  (${MEMORY_SANITIZER_ON})
   include (cmake/mem_sanitizer.cmake)
 endif ()
+
+include(${CONAN_SISL_ROOT}/cmake/settings_gen.cmake)
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
