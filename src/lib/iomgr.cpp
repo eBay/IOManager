@@ -158,37 +158,29 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     }
 }
 
-std::string exec(const char* cmd) {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (!pipe) {
-        LOGERROR("Failed to execute the command {}", cmd);
-        throw std::runtime_error("popen() failed");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get())) {
-        result += buffer.data();
-    }
-    return result;
-}
-
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
-    /* mkdir -p /mnt/huge; mount -t hugetlbfs nodev /mnt/huge */
+    /* Check if /mnt/huge already exists. Create otherwise */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
         if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
-        std::string cmd = "mount -t hugetlbfs nodev " + std::string(hugetlbfs_path);
-        (void) exec(cmd.c_str());
+        /* mount -t hugetlbfs nodev /mnt/huge */
+        if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+            LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
+            throw std::runtime_error("Hugetlbfs mount failed");
+        }
         LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
-    } else {
-        /* Remove old/garbage hugepages from /mnt/huge */
-        std::string cmd = "rm -f " + std::string(hugetlbfs_path) + "/*";
-        (void) exec(cmd.c_str());
-        LOGINFO("Deleted old hugepages from {}", std::string(hugetlbfs_path));
+
+    } else { /* Remove old/garbage hugepages from /mnt/huge */
+        std::uintmax_t n = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(
+                                            std::string(hugetlbfs_path))) {
+            n += std::filesystem::remove_all(entry.path());
+        }
+        LOGINFO("Deleted {} old hugepages from {}", n, std::string(hugetlbfs_path));
     }
 
     // Set the spdk log level based on module spdk
