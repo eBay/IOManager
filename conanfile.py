@@ -34,7 +34,7 @@ class IOMgrConan(ConanFile):
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
-            "spdk/20.07.x",
+            "spdk/20.07.y",
             )
     build_requires = (
                 "gtest/1.10.0",
