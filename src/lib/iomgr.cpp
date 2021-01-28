@@ -174,24 +174,21 @@ std::string exec(const char* cmd) {
 
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
-    /* mkdir -p /mnt/huge */
+    /* mkdir -p /mnt/huge; mount -t hugetlbfs nodev /mnt/huge */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
         if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
             LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
             throw std::runtime_error("Failed to create /mnt/huge");
         }
-    }
-    struct stat buf;
-    if (stat(std::string(hugetlbfs_path).data(), &buf)) {
         std::string cmd = "mount -t hugetlbfs nodev " + std::string(hugetlbfs_path);
         (void) exec(cmd.c_str());
-        LOGDEBUG("Mounted hugepages path");
+        LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
     } else {
         /* Remove old/garbage hugepages from /mnt/huge */
         std::string cmd = "rm -f " + std::string(hugetlbfs_path) + "/*";
         (void) exec(cmd.c_str());
-        LOGDEBUG("Deleted old hugepages");
+        LOGINFO("Deleted old hugepages from {}", std::string(hugetlbfs_path));
     }
 
     // Set the spdk log level based on module spdk
