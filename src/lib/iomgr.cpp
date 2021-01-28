@@ -31,6 +31,7 @@ extern "C" {
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <fstream>
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
@@ -158,20 +159,6 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     }
 }
 
-std::string exec(const char* cmd) {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (!pipe) {
-        LOGERROR("Failed to execute the command {}", cmd);
-        throw std::runtime_error("popen() failed");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get())) {
-        result += buffer.data();
-    }
-    return result;
-}
-
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
     IOMgrDynamicConfig::init_settings_default();
@@ -220,15 +207,16 @@ void IOManager::start_spdk() {
             std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
-                auto cmd = "cat " + cpuset_path;
-                auto corelist = exec(cmd.c_str());
+                std::ifstream ifs(cpuset_path);
+                std::string corelist( (std::istreambuf_iterator<char>(ifs)),
+                                        (std::istreambuf_iterator<char>()) );
                 corelist.erase(
                     std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
                 corelist = "[" + corelist + "]";
-                LOGDEBUG("Corelist is {}", corelist);
+                LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
                 opts.core_mask = corelist.c_str();
             } else {
-                LOGDEBUG("DPDK will set CPU mask since CPU pinning not done.");
+                LOGINFO("DPDK will set CPU mask since CPU pinning not done.");
             }
             p_opts = &opts;
         }
