@@ -57,6 +57,9 @@ IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
+
+    IOMgrDynamicConfig::init_settings_default();
+
     if (get_state() == iomgr_state::running) {
         LOGWARN("WARNING: IOManager is asked to start, but it is already in running state. Ignoring the start request");
         return;
@@ -161,8 +164,6 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
 
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
 void IOManager::start_spdk() {
-    IOMgrDynamicConfig::init_settings_default();
-
     /* Check if /mnt/huge already exists. Create otherwise */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
