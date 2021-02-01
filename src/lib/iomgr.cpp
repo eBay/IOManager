@@ -31,6 +31,7 @@ extern "C" {
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <fstream>
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
@@ -56,10 +57,13 @@ IOManager::~IOManager() = default;
 
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
+
     if (get_state() == iomgr_state::running) {
         LOGWARN("WARNING: IOManager is asked to start, but it is already in running state. Ignoring the start request");
         return;
     }
+
+    IOMgrDynamicConfig::init_settings_default();
 
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
@@ -205,6 +209,22 @@ void IOManager::start_spdk() {
             } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
             opts.iova_mode = va_mode.c_str();
             //    opts.mem_size = 512;
+
+            // Set CPU mask (if CPU pinning is active)
+            std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
+            if (std::filesystem::exists(cpuset_path)) {
+                LOGDEBUG("Read cpuset from {}", cpuset_path);
+                std::ifstream ifs(cpuset_path);
+                std::string corelist( (std::istreambuf_iterator<char>(ifs)),
+                                        (std::istreambuf_iterator<char>()) );
+                corelist.erase(
+                    std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
+                corelist = "[" + corelist + "]";
+                LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
+                opts.core_mask = corelist.c_str();
+            } else {
+                LOGINFO("DPDK will set CPU mask since CPU pinning not done.");
+            }
             p_opts = &opts;
         }
 
