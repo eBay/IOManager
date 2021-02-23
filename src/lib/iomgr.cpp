@@ -168,16 +168,18 @@ void IOManager::start_spdk() {
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
         if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
-            LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
-            throw std::runtime_error("Failed to create /mnt/huge");
+            if (ec.value()) {
+                LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
+                throw std::runtime_error("Failed to create /mnt/huge");
+            }
+        } else {
+            /* mount -t hugetlbfs nodev /mnt/huge */
+            if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+                LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
+                throw std::runtime_error("Hugetlbfs mount failed");
+            }
+            LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
         }
-        /* mount -t hugetlbfs nodev /mnt/huge */
-        if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
-            LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
-            throw std::runtime_error("Hugetlbfs mount failed");
-        }
-        LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
-
     } else { /* Remove old/garbage hugepages from /mnt/huge */
         std::uintmax_t n = 0;
         for (const auto& entry : std::filesystem::directory_iterator(
