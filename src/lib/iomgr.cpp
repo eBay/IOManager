@@ -172,6 +172,7 @@ void IOManager::start_spdk() {
                 LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
                 throw std::runtime_error("Failed to create /mnt/huge");
             }
+            LOGINFO("{} already exists.", std::string(hugetlbfs_path));
         } else {
             /* mount -t hugetlbfs nodev /mnt/huge */
             if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
