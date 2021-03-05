@@ -267,6 +267,7 @@ void AioDriveInterface::handle_io_failure(struct iocb* iocb) {
 
     if (errno == EAGAIN) {
         COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
+        LOGINFO("adding io into retry list: {}", info->to_string());
         _aio_ctx->push_retry_list(iocb);
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
