@@ -142,6 +142,7 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
 
         auto user_cookie = (uint8_t*)iocb->data;
         _aio_ctx->free_iocb(iocb);
+        retry_io();
         if (m_comp_cb) m_comp_cb(e.res2, user_cookie);
     }
 
@@ -154,14 +155,6 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
 
 void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                     bool part_of_batch) {
-    if (!_aio_ctx || !_aio_ctx->can_submit_aio()) {
-        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async write: size {}, offset {}, doing sync write instead",
-                size, offset);
-        sync_write(iodev, data, size, offset);
-        if (m_comp_cb) m_comp_cb(0, cookie);
-        return;
-    }
 
     if (part_of_batch && _aio_ctx->can_be_batched(0)) {
         _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
@@ -171,8 +164,6 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
         if (ret != 1) {
             handle_io_failure(iocb);
-            _aio_ctx->free_iocb(iocb);
-            if (m_comp_cb) m_comp_cb(errno, cookie);
             return;
         }
     }
@@ -180,14 +171,6 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
-    if (!_aio_ctx || !_aio_ctx->can_submit_aio()) {
-        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async read: size {}, offset {}, doing sync read instead",
-                size, offset);
-        sync_read(iodev, data, size, offset);
-        if (m_comp_cb) m_comp_cb(0, cookie);
-        return;
-    }
 
     if (part_of_batch && _aio_ctx->can_be_batched(0)) {
         _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
@@ -197,8 +180,6 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
         if (ret != 1) {
             handle_io_failure(iocb);
-            _aio_ctx->free_iocb(iocb);
-            if (m_comp_cb) m_comp_cb(errno, cookie);
             return;
         }
     }
@@ -206,18 +187,6 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
 
 void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie, bool part_of_batch) {
-    if (!_aio_ctx || !_aio_ctx->can_submit_aio()
-#ifdef _PRERELEASE
-        || Flip::instance().test_flip("io_write_iocb_empty_flip")
-#endif
-    ) {
-        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async writev: size {}, offset {}, doing sync writev instead",
-                size, offset);
-        sync_writev(iodev, iov, iovcnt, size, offset);
-        if (m_comp_cb) m_comp_cb(0, cookie);
-        return;
-    }
 
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_write_error_flip")) {
@@ -234,8 +203,6 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
         if (ret != 1) {
             handle_io_failure(iocb);
-            _aio_ctx->free_iocb(iocb);
-            if (m_comp_cb) m_comp_cb(errno, cookie);
             return;
         }
     }
@@ -243,19 +210,6 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 
 void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie, bool part_of_batch) {
-
-    if (!_aio_ctx || !_aio_ctx->can_submit_aio()
-#ifdef _PRERELEASE
-        || Flip::instance().test_flip("io_read_iocb_empty_flip")
-#endif
-    ) {
-        COUNTER_INCREMENT(m_metrics, force_sync_io_empty_iocb, 1);
-        LOGWARN("Not enough available iocbs to schedule an async readv: size {}, offset {}, doing sync readv instead",
-                size, offset);
-        sync_readv(iodev, iov, iovcnt, size, offset);
-        if (m_comp_cb) m_comp_cb(0, cookie);
-        return;
-    }
 
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
@@ -272,8 +226,6 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
         if (ret != 1) {
             handle_io_failure(iocb);
-            _aio_ctx->free_iocb(iocb);
-            if (m_comp_cb) m_comp_cb(errno, cookie);
             return;
         }
     }
@@ -297,8 +249,16 @@ void AioDriveInterface::submit_batch() {
         auto info = ibatch.iocb_info[i];
         auto iocb = (struct iocb*)info;
         handle_io_failure(iocb);
-        _aio_ctx->free_iocb(iocb);
-        if (m_comp_cb) m_comp_cb(errno, (uint8_t*)iocb->data);
+    }
+}
+
+void AioDriveInterface::retry_io() {
+    while (auto iocb = _aio_ctx->pop_retry_list()) {
+        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        if (ret != 1) {
+            handle_io_failure(iocb);
+            break;
+        }
     }
 }
 
@@ -306,19 +266,18 @@ void AioDriveInterface::handle_io_failure(struct iocb* iocb) {
     auto info = (iocb_info_t*)iocb;
 
     if (errno == EAGAIN) {
-        COUNTER_INCREMENT(m_metrics, force_sync_io_eagain_error, 1);
-        if (info->is_read) {
-            info->user_data
-                ? _sync_read(info->fd, info->user_data, info->size, info->offset)
-                : _sync_readv(info->fd, (const iovec*)&info->iovs[0], info->iovcnt, info->size, info->offset);
-        } else {
-            info->user_data
-                ? _sync_write(info->fd, info->user_data, info->size, info->offset)
-                : _sync_writev(info->fd, (const iovec*)&info->iovs[0], info->iovcnt, info->size, info->offset);
-        }
+        COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
+        _aio_ctx->push_retry_list(iocb);
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
         COUNTER_INCREMENT_IF_ELSE(m_metrics, info->is_read, read_io_submission_errors, write_io_submission_errors, 1);
+    }
+    if (!_aio_ctx->timer_set) {
+        _aio_ctx->timer_set = true;
+        iomanager.schedule_thread_timer(1000, false, nullptr, [this](void* cookie) {
+            _aio_ctx->timer_set = false;
+            retry_io();
+        });
     }
 }
 

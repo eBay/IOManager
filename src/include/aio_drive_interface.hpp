@@ -88,7 +88,10 @@ struct aio_thread_context {
     int ev_fd = 0;
     io_context_t ioctx = 0;
     std::stack< iocb_info_t* > iocb_free_list;
+    std::stack< iocb_info_t* > iocb_retry_list;
     iocb_batch_t cur_iocb_batch;
+    bool timer_set = false;
+    uint64_t post_alloc_iocb = 0;
     std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
@@ -115,14 +118,37 @@ struct aio_thread_context {
     bool can_submit_aio() { return (!iocb_free_list.empty()); }
 
     iocb_info_t* alloc_iocb() {
-        auto info = iocb_free_list.top();
-        iocb_free_list.pop();
+        iocb_info_t* info;
+        if (can_submit_aio()) {
+            info = iocb_free_list.top();
+            iocb_free_list.pop();
+            return info;
+        } else {
+            info = new iocb_info_t();
+            ++post_alloc_iocb;
+        }
         return info;
+    }
+
+    void push_retry_list(struct iocb* iocb) { iocb_retry_list.push(static_cast< iocb_info_t* >(iocb)); }
+
+    struct iocb* pop_retry_list() {
+        if (!iocb_retry_list.empty()) {
+            auto info = iocb_retry_list.top();
+            iocb_retry_list.pop();
+            return (static_cast< iocb* >(info));
+        }
+        return nullptr;
     }
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        iocb_free_list.push(info);
+        if (post_alloc_iocb == 0) {
+            iocb_free_list.push(info);
+        } else {
+            --post_alloc_iocb;
+            delete info;
+        }
     }
 
     struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
@@ -246,6 +272,7 @@ private:
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 
     void handle_io_failure(struct iocb* iocb);
+    void retry_io();
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
