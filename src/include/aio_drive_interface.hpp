@@ -93,8 +93,8 @@ struct aio_thread_context {
     iocb_batch_t cur_iocb_batch;
     bool timer_set = false;
     uint64_t post_alloc_iocb = 0;
-    uint64_t outstanding_aio = 0;
-    uint64_t max_outstanding_aio;
+    uint64_t submitted_aio = 0;
+    uint64_t max_submitted_aio;
     std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
@@ -112,18 +112,17 @@ struct aio_thread_context {
         for (auto i = 0u; i < count; ++i) {
             iocb_free_list.push(new iocb_info_t());
         }
-        max_outstanding_aio = count;
+        max_submitted_aio = count;
     }
 
     bool can_be_batched(int iovcnt) {
         return ((iovcnt <= max_batch_iov_cnt) && (cur_iocb_batch.n_iocbs < max_batch_iocb_count));
     }
 
-    bool can_submit_aio() { return outstanding_aio < max_outstanding_aio ? true : false; }
+    bool can_submit_aio() { return submitted_aio < max_submitted_aio ? true : false; }
 
     iocb_info_t* alloc_iocb() {
         iocb_info_t* info;
-        ++outstanding_aio;
         if (can_submit_aio()) {
             info = iocb_free_list.top();
             iocb_free_list.pop();
@@ -135,7 +134,16 @@ struct aio_thread_context {
         return info;
     }
 
-    void push_retry_list(struct iocb* iocb) { iocb_retry_list.push(static_cast< iocb_info_t* >(iocb)); }
+    void dec_submitted_aio() { --submitted_aio; }
+
+    void inc_submitted_aio(int count) {
+        if (count < 0) { return; }
+        submitted_aio += count;
+    }
+
+    void push_retry_list(struct iocb* iocb) {
+        iocb_retry_list.push(static_cast< iocb_info_t* >(iocb));
+    }
 
     struct iocb* pop_retry_list() {
         if (!iocb_retry_list.empty()) {
@@ -148,7 +156,6 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        --outstanding_aio;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
         } else {

@@ -142,6 +142,7 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
         }
 
         auto user_cookie = (uint8_t*)iocb->data;
+        _aio_ctx->dec_submitted_aio();
         _aio_ctx->free_iocb(iocb);
         retry_io();
         if (m_comp_cb) m_comp_cb(e.res2, user_cookie);
@@ -168,6 +169,7 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
         auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
         COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        _aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -189,6 +191,7 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
         auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
         COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        _aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -220,6 +223,7 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
         auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
         COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        _aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -252,6 +256,7 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
         auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
         COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        _aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -270,6 +275,7 @@ void AioDriveInterface::submit_batch() {
     COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
     auto n_issued = io_submit(_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
     if (n_issued < 0) { n_issued = 0; }
+    _aio_ctx->inc_submitted_aio(n_issued);
 
     // For those which we are not able to issue, convert that to sync io
     auto n_iocbs = ibatch.n_iocbs;
@@ -284,6 +290,7 @@ void AioDriveInterface::retry_io() {
     struct iocb* iocb = nullptr;
     while ((_aio_ctx->can_submit_aio()) && (iocb = _aio_ctx->pop_retry_list()) != nullptr) {
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+        _aio_ctx->inc_submitted_aio(ret);
         if (ret != 1 && handle_io_failure(iocb)) { break; }
     }
 }
