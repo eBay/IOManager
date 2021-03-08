@@ -14,6 +14,7 @@
 #include <sys/epoll.h>
 #include <fmt/format.h>
 #include <filesystem>
+#include "iomgr_config.hpp"
 
 #ifdef __linux__
 #include <linux/fs.h>
