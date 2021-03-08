@@ -255,15 +255,13 @@ void AioDriveInterface::submit_batch() {
 void AioDriveInterface::retry_io() {
     while (auto iocb = _aio_ctx->pop_retry_list()) {
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        if (ret != 1) {
-            handle_io_failure(iocb);
-            break;
-        }
+        if (ret != 1 && handle_io_failure(iocb)) { break; }
     }
 }
 
-void AioDriveInterface::handle_io_failure(struct iocb* iocb) {
+bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
     auto info = (iocb_info_t*)iocb;
+    bool ret = true;
 
     if (errno == EAGAIN) {
         COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
@@ -272,14 +270,16 @@ void AioDriveInterface::handle_io_failure(struct iocb* iocb) {
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
         COUNTER_INCREMENT_IF_ELSE(m_metrics, info->is_read, read_io_submission_errors, write_io_submission_errors, 1);
+        ret = false;
     }
     if (!_aio_ctx->timer_set) {
         _aio_ctx->timer_set = true;
-        iomanager.schedule_thread_timer(1000, false, nullptr, [this](void* cookie) {
+        iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(aio->retry_timeout), false, nullptr, [this](void* cookie) {
             _aio_ctx->timer_set = false;
             retry_io();
         });
     }
+    return ret;
 }
 
 ssize_t AioDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {

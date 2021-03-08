@@ -10,9 +10,14 @@ table SpdkDriveInterface {
     num_batch_io_limit: uint32 = 2 (hotswap); 
 }
 
+table AioDriveInterface {
+    retry_timeout: uint32 = 1000 (hotswap);
+}
+
 table IomgrSettings {
     spdk: SpdkDriveInterface;
     cpuset_path: string;
+    aio : AioDriveInterface;
 }
 
 root_type IomgrSettings;

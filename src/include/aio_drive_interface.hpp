@@ -225,7 +225,7 @@ public:
         REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
                          {"io_direction", "read"});
         REGISTER_COUNTER(force_sync_io_empty_iocb, "Forced sync io because of empty iocb");
-        REGISTER_COUNTER(force_sync_io_eagain_error, "Forced sync io because of EAGAIN error");
+        REGISTER_COUNTER(retry_io_eagain_error, "retrying sending IOs");
 
         REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
@@ -271,7 +271,10 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 
-    void handle_io_failure(struct iocb* iocb);
+    /* return true if it queues io.
+     * return false if it do completion callback for error.
+     */
+    bool handle_io_failure(struct iocb* iocb);
     void retry_io();
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
