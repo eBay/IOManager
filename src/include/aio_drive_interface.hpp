@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <string>
 #include <stack>
+#include <queue>
 #include <atomic>
 #include <mutex>
 #include "drive_interface.hpp"
@@ -88,10 +89,12 @@ struct aio_thread_context {
     int ev_fd = 0;
     io_context_t ioctx = 0;
     std::stack< iocb_info_t* > iocb_free_list;
-    std::stack< iocb_info_t* > iocb_retry_list;
+    std::queue< iocb_info_t* > iocb_retry_list;
     iocb_batch_t cur_iocb_batch;
     bool timer_set = false;
     uint64_t post_alloc_iocb = 0;
+    uint64_t outstanding_aio = 0;
+    uint64_t max_outstanding_aio;
     std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
@@ -109,16 +112,18 @@ struct aio_thread_context {
         for (auto i = 0u; i < count; ++i) {
             iocb_free_list.push(new iocb_info_t());
         }
+        max_outstanding_aio = count;
     }
 
     bool can_be_batched(int iovcnt) {
         return ((iovcnt <= max_batch_iov_cnt) && (cur_iocb_batch.n_iocbs < max_batch_iocb_count));
     }
 
-    bool can_submit_aio() { return (!iocb_free_list.empty()); }
+    bool can_submit_aio() { return outstanding_aio < max_outstanding_aio ? true : false; }
 
     iocb_info_t* alloc_iocb() {
         iocb_info_t* info;
+        ++outstanding_aio;
         if (can_submit_aio()) {
             info = iocb_free_list.top();
             iocb_free_list.pop();
@@ -134,7 +139,7 @@ struct aio_thread_context {
 
     struct iocb* pop_retry_list() {
         if (!iocb_retry_list.empty()) {
-            auto info = iocb_retry_list.top();
+            auto info = iocb_retry_list.front();
             iocb_retry_list.pop();
             return (static_cast< iocb* >(info));
         }
@@ -143,6 +148,7 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
+        --outstanding_aio;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
         } else {
@@ -276,6 +282,7 @@ private:
      */
     bool handle_io_failure(struct iocb* iocb);
     void retry_io();
+    void push_retry_list(struct iocb* iocb);
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);

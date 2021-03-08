@@ -156,6 +156,11 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
 
 void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                     bool part_of_batch) {
+    if (!_aio_ctx->can_submit_aio()) {
+        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
+        push_retry_list(iocb);
+        return;
+    }
 
     if (part_of_batch && _aio_ctx->can_be_batched(0)) {
         _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
@@ -173,6 +178,11 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
 
+    if (!_aio_ctx->can_submit_aio()) {
+        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
+        push_retry_list(iocb);
+        return;
+    }
     if (part_of_batch && _aio_ctx->can_be_batched(0)) {
         _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
     } else {
@@ -189,13 +199,21 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
 void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie, bool part_of_batch) {
 
+    if (!_aio_ctx->can_submit_aio()
+#ifdef _PRERELEASE
+        || Flip::instance().test_flip("io_write_iocb_empty_flip")
+#endif
+    ) {
+        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
+        push_retry_list(iocb);
+        return;
+    }
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_write_error_flip")) {
         m_comp_cb(homestore::homestore_error::write_failed, cookie);
         return;
     }
 #endif
-
     if (part_of_batch && _aio_ctx->can_be_batched(iovcnt)) {
         _aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), false /* is_read */, iov, iovcnt, size, offset, cookie);
     } else {
@@ -212,6 +230,15 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie, bool part_of_batch) {
 
+    if (!_aio_ctx->can_submit_aio()
+#ifdef _PRERELEASE
+        || Flip::instance().test_flip("io_read_iocb_empty_flip")
+#endif
+    ) {
+        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
+        push_retry_list(iocb);
+        return;
+    }
 #ifdef _PRERELEASE
     if (Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
         m_comp_cb(homestore::homestore_error::read_failed, cookie);
@@ -254,9 +281,24 @@ void AioDriveInterface::submit_batch() {
 }
 
 void AioDriveInterface::retry_io() {
-    while (auto iocb = _aio_ctx->pop_retry_list()) {
+    struct iocb* iocb = nullptr;
+    while ((_aio_ctx->can_submit_aio()) && (iocb = _aio_ctx->pop_retry_list()) != nullptr) {
         auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
         if (ret != 1 && handle_io_failure(iocb)) { break; }
+    }
+}
+
+void AioDriveInterface::push_retry_list(struct iocb* iocb) {
+    auto info = (iocb_info_t*)iocb;
+    COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
+    LOGINFO("adding io into retry list: {}", info->to_string());
+    _aio_ctx->push_retry_list(iocb);
+    if (!_aio_ctx->timer_set) {
+        _aio_ctx->timer_set = true;
+        iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(aio->retry_timeout), false, nullptr, [this](void* cookie) {
+            _aio_ctx->timer_set = false;
+            retry_io();
+        });
     }
 }
 
@@ -267,18 +309,13 @@ bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
     if (errno == EAGAIN) {
         COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
         LOGINFO("adding io into retry list: {}", info->to_string());
-        _aio_ctx->push_retry_list(iocb);
+        push_retry_list(iocb);
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
         COUNTER_INCREMENT_IF_ELSE(m_metrics, info->is_read, read_io_submission_errors, write_io_submission_errors, 1);
         ret = false;
-    }
-    if (!_aio_ctx->timer_set) {
-        _aio_ctx->timer_set = true;
-        iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(aio->retry_timeout), false, nullptr, [this](void* cookie) {
-            _aio_ctx->timer_set = false;
-            retry_io();
-        });
+        _aio_ctx->free_iocb(iocb);
+        if (m_comp_cb) m_comp_cb(errno, (uint8_t*)iocb->data);
     }
     return ret;
 }
