@@ -37,7 +37,7 @@ struct iocb_info_t : public iocb {
     uint32_t size;
     uint64_t offset;
     int fd;
-    iovec* iov_ptr;
+    iovec* iov_ptr = nullptr;
     iovec iovs[max_batch_iov_cnt];
     int iovcnt;
 
