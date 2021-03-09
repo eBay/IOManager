@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <string>
 #include <stack>
+#include <queue>
 #include <atomic>
 #include <mutex>
 #include "drive_interface.hpp"
@@ -88,7 +89,12 @@ struct aio_thread_context {
     int ev_fd = 0;
     io_context_t ioctx = 0;
     std::stack< iocb_info_t* > iocb_free_list;
+    std::queue< iocb_info_t* > iocb_retry_list;
     iocb_batch_t cur_iocb_batch;
+    bool timer_set = false;
+    uint64_t post_alloc_iocb = 0;
+    uint64_t submitted_aio = 0;
+    uint64_t max_submitted_aio;
     std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
 
     ~aio_thread_context() {
@@ -106,23 +112,56 @@ struct aio_thread_context {
         for (auto i = 0u; i < count; ++i) {
             iocb_free_list.push(new iocb_info_t());
         }
+        max_submitted_aio = count;
     }
 
     bool can_be_batched(int iovcnt) {
         return ((iovcnt <= max_batch_iov_cnt) && (cur_iocb_batch.n_iocbs < max_batch_iocb_count));
     }
 
-    bool can_submit_aio() { return (!iocb_free_list.empty()); }
+    bool can_submit_aio() { return submitted_aio < max_submitted_aio ? true : false; }
 
     iocb_info_t* alloc_iocb() {
-        auto info = iocb_free_list.top();
-        iocb_free_list.pop();
+        iocb_info_t* info;
+        if (can_submit_aio()) {
+            info = iocb_free_list.top();
+            iocb_free_list.pop();
+            return info;
+        } else {
+            info = new iocb_info_t();
+            ++post_alloc_iocb;
+        }
         return info;
+    }
+
+    void dec_submitted_aio() { --submitted_aio; }
+
+    void inc_submitted_aio(int count) {
+        if (count < 0) { return; }
+        submitted_aio += count;
+    }
+
+    void push_retry_list(struct iocb* iocb) {
+        iocb_retry_list.push(static_cast< iocb_info_t* >(iocb));
+    }
+
+    struct iocb* pop_retry_list() {
+        if (!iocb_retry_list.empty()) {
+            auto info = iocb_retry_list.front();
+            iocb_retry_list.pop();
+            return (static_cast< iocb* >(info));
+        }
+        return nullptr;
     }
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        iocb_free_list.push(info);
+        if (post_alloc_iocb == 0) {
+            iocb_free_list.push(info);
+        } else {
+            --post_alloc_iocb;
+            delete info;
+        }
     }
 
     struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
@@ -158,14 +197,14 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
+        memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
+        iov = &i_info->iovs[0];
 
         struct iocb* iocb = static_cast< struct iocb* >(i_info);
         if (batch_io) {
             // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
             // corrupted data
             assert(iovcnt <= max_batch_iov_cnt);
-            memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
-            iov = &i_info->iovs[0];
             i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
             LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
@@ -199,7 +238,7 @@ public:
         REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
                          {"io_direction", "read"});
         REGISTER_COUNTER(force_sync_io_empty_iocb, "Forced sync io because of empty iocb");
-        REGISTER_COUNTER(force_sync_io_eagain_error, "Forced sync io because of EAGAIN error");
+        REGISTER_COUNTER(retry_io_eagain_error, "retrying sending IOs");
 
         REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
@@ -245,7 +284,12 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 
-    void handle_io_failure(struct iocb* iocb);
+    /* return true if it queues io.
+     * return false if it do completion callback for error.
+     */
+    bool handle_io_failure(struct iocb* iocb);
+    void retry_io();
+    void push_retry_list(struct iocb* iocb);
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
