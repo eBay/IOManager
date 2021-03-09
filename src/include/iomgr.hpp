@@ -10,6 +10,7 @@ extern "C" {
 }
 #include <atomic>
 #include <condition_variable>
+#include <mutex>
 #include <map>
 #include <memory>
 #include <vector>
@@ -26,6 +27,7 @@ extern "C" {
 #include <fds/utils.hpp>
 #include <fds/id_reserver.hpp>
 #include <utility/enum.hpp>
+#include <sds_logging/logging.h>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -74,6 +76,35 @@ public:
 
 private:
     const struct spdk_mempool* m_mp;
+};
+
+struct synchronized_async_method_ctx {
+public:
+    std::mutex m;
+    std::condition_variable cv;
+    int outstanding_count{0};
+    void* custom_ctx{nullptr};
+
+    ~synchronized_async_method_ctx() {
+        DEBUG_ASSERT_EQ(outstanding_count, 0, "Expecting no outstanding ref of method");
+    }
+
+private:
+    static void done(void* arg, [[maybe_unused]] int rc) {
+        synchronized_async_method_ctx* pmctx = static_cast< synchronized_async_method_ctx* >(arg);
+        {
+            std::unique_lock< std::mutex > lk{pmctx->m};
+            --pmctx->outstanding_count;
+        }
+        pmctx->cv.notify_one();
+    }
+
+public:
+    auto get_done_cb() {
+        std::unique_lock< std::mutex > lk{m};
+        ++outstanding_count;
+        return (synchronized_async_method_ctx::done);
+    }
 };
 
 class IOManager {
@@ -168,6 +199,14 @@ public:
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default,
                              thread_regex iface_scope = thread_regex::all_io);
 
+    /***
+     * @brief Remove the IOInterface from the iomanager. Once removed, it will remove all the devices added to that
+     * interface and cleanup their resources.
+     *
+     * @param iface: Shared pointer to the IOInterface to be removed.
+     */
+    void remove_interface(const std::shared_ptr< IOInterface >& iface);
+
     /**
      * @brief Reschedule the IO to a different device. This is used for SCST interfaces and given that it could be
      * depreacted, this API is not used actively anymore. One can do this with using run_on() APIs
@@ -209,6 +248,27 @@ public:
             sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
         }
         return ((int)sent);
+    }
+
+    void run_async_method_synchronized(thread_regex r, const auto& fn) {
+        static synchronized_async_method_ctx mctx;
+        int executed_on = run_on(
+            r,
+            [&fn]([[maybe_unused]] auto taddr) {
+                fn(mctx);
+                {
+                    std::unique_lock< std::mutex > lk{mctx.m};
+                    --mctx.outstanding_count;
+                }
+                mctx.cv.notify_one();
+            },
+            false);
+
+        {
+            std::unique_lock< std::mutex > lk{mctx.m};
+            mctx.outstanding_count += executed_on;
+            mctx.cv.wait(lk, [] { return (mctx.outstanding_count == 0); });
+        }
     }
 
     /********* Access related methods ***********/

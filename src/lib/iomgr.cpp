@@ -183,8 +183,7 @@ void IOManager::start_spdk() {
         }
     } else { /* Remove old/garbage hugepages from /mnt/huge */
         std::uintmax_t n = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(
-                                            std::string(hugetlbfs_path))) {
+        for (const auto& entry : std::filesystem::directory_iterator(std::string(hugetlbfs_path))) {
             n += std::filesystem::remove_all(entry.path());
         }
         LOGINFO("Deleted {} old hugepages from {}", n, std::string(hugetlbfs_path));
@@ -345,6 +344,18 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
 
     iface_list->push_back(iface);
     if (iface->is_spdk_interface()) { mempool_metrics_populate(); }
+}
+
+void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
+    auto iface_list = m_iface_list.wlock();
+
+    iomanager.run_on(
+        iface->scope(),
+        [this, iface](io_thread_addr_t taddr) {
+            iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
+        },
+        true /* wait_for_completion */);
+    iface_list->erase(std::remove(iface_list->begin(), iface_list->end(), iface), iface_list->end());
 }
 
 void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
