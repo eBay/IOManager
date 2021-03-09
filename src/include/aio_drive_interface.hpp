@@ -197,14 +197,14 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
+        memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
+        iov = &i_info->iovs[0];
 
         struct iocb* iocb = static_cast< struct iocb* >(i_info);
         if (batch_io) {
             // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
             // corrupted data
             assert(iovcnt <= max_batch_iov_cnt);
-            memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
-            iov = &i_info->iovs[0];
             i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
             LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
