@@ -131,7 +131,7 @@ struct aio_thread_context {
             info = new iocb_info_t();
             ++post_alloc_iocb;
         }
-        if (iovcnt >= max_batch_iov_cnt) {
+        if (iovcnt > max_batch_iov_cnt) {
             info->iov_ptr = new iovec[iovcnt];
         } else {
             info->iov_ptr = info->iovs;
