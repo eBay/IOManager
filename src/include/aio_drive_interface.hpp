@@ -28,7 +28,7 @@ namespace iomgr {
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
-static constexpr int max_batch_iov_cnt = 4;
+static constexpr int max_batch_iov_cnt = 1024;
 
 #ifdef linux
 struct iocb_info_t : public iocb {
@@ -37,6 +37,7 @@ struct iocb_info_t : public iocb {
     uint32_t size;
     uint64_t offset;
     int fd;
+    iovec* iov_ptr = nullptr;
     iovec iovs[max_batch_iov_cnt];
     int iovcnt;
 
@@ -121,15 +122,19 @@ struct aio_thread_context {
 
     bool can_submit_aio() { return submitted_aio < max_submitted_aio ? true : false; }
 
-    iocb_info_t* alloc_iocb() {
+    iocb_info_t* alloc_iocb(uint32_t iovcnt = 0) {
         iocb_info_t* info;
         if (can_submit_aio()) {
             info = iocb_free_list.top();
             iocb_free_list.pop();
-            return info;
         } else {
             info = new iocb_info_t();
             ++post_alloc_iocb;
+        }
+        if (iovcnt > max_batch_iov_cnt) {
+            info->iov_ptr = new iovec[iovcnt];
+        } else {
+            info->iov_ptr = info->iovs;
         }
         return info;
     }
@@ -156,6 +161,8 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
+        if (info->iov_ptr != info->iovs) { delete (info->iov_ptr); }
+        info->iov_ptr = nullptr;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
         } else {
@@ -190,21 +197,20 @@ struct aio_thread_context {
 
     struct iocb* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
                              uint64_t offset, uint8_t* cookie) {
-        auto i_info = alloc_iocb();
+        auto i_info = alloc_iocb(iovcnt);
 
         i_info->is_read = is_read;
         i_info->user_data = nullptr;
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
-        memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
-        iov = &i_info->iovs[0];
+        memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
+        iov = i_info->iov_ptr;
 
         struct iocb* iocb = static_cast< struct iocb* >(i_info);
         if (batch_io) {
             // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
             // corrupted data
-            assert(iovcnt <= max_batch_iov_cnt);
             i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
             LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
