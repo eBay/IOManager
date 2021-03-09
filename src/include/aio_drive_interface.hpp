@@ -28,7 +28,7 @@ namespace iomgr {
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
-static constexpr int max_batch_iov_cnt = 4;
+static constexpr int max_batch_iov_cnt = 1024;
 
 #ifdef linux
 struct iocb_info_t : public iocb {
@@ -37,7 +37,8 @@ struct iocb_info_t : public iocb {
     uint32_t size;
     uint64_t offset;
     int fd;
-    iovec* iovs;
+    iovec* iov_ptr;
+    iovec iovs[max_batch_iov_cnt];
     int iovcnt;
 
     std::string to_string() const {
@@ -130,7 +131,11 @@ struct aio_thread_context {
             info = new iocb_info_t();
             ++post_alloc_iocb;
         }
-        if (iovcnt) { info->iovs = (iovec*)malloc(sizeof(struct iovec) * iovcnt); }
+        if (iovcnt >= max_batch_iov_cnt) {
+            info->iov_ptr = new iovec[iovcnt];
+        } else {
+            info->iov_ptr = info->iovs;
+        }
         return info;
     }
 
@@ -156,8 +161,8 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        if (info->iovs) { free(info->iovs); }
-        info->iovs = nullptr;
+        if (info->iov_ptr != info->iovs) { delete (info->iov_ptr); }
+        info->iov_ptr = nullptr;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
         } else {
@@ -199,8 +204,8 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
-        memcpy(&i_info->iovs[0], iov, sizeof(iovec) * iovcnt);
-        iov = &i_info->iovs[0];
+        memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
+        iov = i_info->iov_ptr;
 
         struct iocb* iocb = static_cast< struct iocb* >(i_info);
         if (batch_io) {
