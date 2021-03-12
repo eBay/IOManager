@@ -169,9 +169,7 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        if (info->iov_ptr != info->iovs) {
-            delete (info->iov_ptr);
-        }
+        if (info->iov_ptr != info->iovs) { delete (info->iov_ptr); }
         info->iov_ptr = nullptr;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
