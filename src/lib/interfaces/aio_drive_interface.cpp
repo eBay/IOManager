@@ -181,7 +181,7 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
     if (zero_buf == nullptr) {
-        zero_buf = sisl::aligned_unique_ptr< uint8_t >::make_sized(disk_align_size, max_buf_size);
+        zero_buf = sisl::aligned_unique_ptr< uint8_t >::make_sized(get_attributes().align_size, max_buf_size);
         bzero(zero_buf.get(), max_buf_size);
     }
 
