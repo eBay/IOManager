@@ -43,6 +43,8 @@ using namespace std;
 
 thread_local aio_thread_context* AioDriveInterface::_aio_ctx;
 
+sisl::aligned_unique_ptr< uint8_t > AioDriveInterface::zero_buf;
+
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
@@ -174,6 +176,32 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
             handle_io_failure(iocb);
             return;
         }
+    }
+}
+
+void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    if (zero_buf == nullptr) {
+        zero_buf = sisl::aligned_unique_ptr< uint8_t >::make_sized(disk_align_size, max_buf_size);
+        bzero(zero_buf.get(), max_buf_size);
+    }
+
+    if (size > max_zero_write_size) {
+        LOGINFO("size {} exceed max write size {}", size, max_zero_write_size);
+        size = max_zero_write_size; // written size is returned in completion callback
+    }
+
+    auto iocb = _aio_ctx->prep_iocb_write_zero(iodev->fd(), size, offset, cookie, zero_buf.get());
+    if (!_aio_ctx->can_submit_aio()) {
+        push_retry_list(iocb);
+        return;
+    }
+
+    COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    _aio_ctx->inc_submitted_aio(ret);
+    if (ret != 1) {
+        handle_io_failure(iocb);
+        return;
     }
 }
 

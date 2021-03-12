@@ -29,12 +29,15 @@ namespace iomgr {
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = 1024;
+static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
+static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
+static constexpr size_t disk_align_size = 512;
 
 #ifdef linux
 struct iocb_info_t : public iocb {
     bool is_read;
     char* user_data;
-    uint32_t size;
+    uint64_t size;
     uint64_t offset;
     int fd;
     iovec* iov_ptr = nullptr;
@@ -102,6 +105,11 @@ struct aio_thread_context {
         if (ev_fd) { close(ev_fd); }
         io_destroy(ioctx);
 
+        while (!iocb_retry_list.empty()) {
+            auto info = iocb_retry_list.front();
+            free((struct iocb*)info);
+        }
+
         while (!iocb_free_list.empty()) {
             auto info = iocb_free_list.top();
             delete info;
@@ -161,7 +169,9 @@ struct aio_thread_context {
 
     void free_iocb(struct iocb* iocb) {
         auto info = static_cast< iocb_info_t* >(iocb);
-        if (info->iov_ptr != info->iovs) { delete (info->iov_ptr); }
+        if (info->iov_ptr != info->iovs) {
+            delete (info->iov_ptr);
+        }
         info->iov_ptr = nullptr;
         if (post_alloc_iocb == 0) {
             iocb_free_list.push(info);
@@ -195,6 +205,32 @@ struct aio_thread_context {
         return iocb;
     }
 
+    struct iocb* prep_iocb_write_zero(int fd, uint64_t size, uint64_t offset, uint8_t* cookie, uint8_t* zero_buf) {
+        uint32_t iovcnt = size / max_buf_size;
+        if (size % max_buf_size) { ++iovcnt; }
+        auto i_info = alloc_iocb(iovcnt);
+        i_info->is_read = false;
+        i_info->user_data = nullptr;
+        i_info->size = size;
+        i_info->offset = offset;
+        i_info->fd = fd;
+        i_info->iovcnt = iovcnt;
+        for (uint32_t i = 0; i < iovcnt; ++i) {
+            i_info->iov_ptr[i].iov_base = zero_buf;
+            i_info->iov_ptr[i].iov_len = max_buf_size;
+        }
+        i_info->iov_ptr[iovcnt - 1].iov_len = size - (max_buf_size * (iovcnt - 1)); // override the size of data iov
+        const iovec* iov = i_info->iov_ptr;
+        struct iocb* iocb = static_cast< struct iocb* >(i_info);
+
+        io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
+        io_set_eventfd(iocb, ev_fd);
+        iocb->data = cookie;
+
+        LOGTRACE("Issuing IO info: {}", i_info->to_string());
+        return iocb;
+    }
+
     struct iocb* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
                              uint64_t offset, uint8_t* cookie) {
         auto i_info = alloc_iocb(iovcnt);
@@ -204,6 +240,7 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
+        i_info->iovcnt = iovcnt;
         memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
         iov = i_info->iov_ptr;
 
@@ -211,13 +248,9 @@ struct aio_thread_context {
         if (batch_io) {
             // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
             // corrupted data
-            i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
             LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
-        } else {
-            i_info->iovcnt = iovcnt;
         }
-
         (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
         io_set_eventfd(iocb, ev_fd);
         iocb->data = cookie;
@@ -278,6 +311,7 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
     void process_completions(IODevice* iodev, void* cookie, int event);
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
@@ -303,6 +337,7 @@ private:
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
+    static sisl::aligned_unique_ptr< uint8_t > zero_buf;
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;

@@ -391,6 +391,9 @@ static void submit_io(void* b) {
     } else if (iocb->op_type == SpdkDriveOpType::UNMAP) {
         rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
                              process_completions, (void*)iocb);
+    } else if (iocb->op_type == SpdkDriveOpType::WRITE_ZERO) {
+        rc = spdk_bdev_write_zeroes(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
+                                    process_completions, (void*)iocb);
     } else {
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
         return;
@@ -472,6 +475,13 @@ void SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t of
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::UNMAP, size, offset, cookie);
     iocb->io_wait_entry.cb_fn = submit_io;
     if (!try_submit_io(iocb, part_of_batch)) { do_sync_io(iocb, m_comp_cb); }
+}
+
+void SpdkDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    SpdkIocb* iocb =
+        sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE_ZERO, size, offset, cookie);
+    iocb->io_wait_entry.cb_fn = submit_io;
+    if (!try_submit_io(iocb, false)) { do_sync_io(iocb, m_comp_cb); }
 }
 
 ssize_t SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
