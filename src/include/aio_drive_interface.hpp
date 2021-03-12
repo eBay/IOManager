@@ -238,7 +238,6 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
-        i_info->iovcnt = iovcnt;
         memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
         iov = i_info->iov_ptr;
 
