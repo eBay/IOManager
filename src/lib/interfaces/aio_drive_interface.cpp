@@ -180,30 +180,15 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (zero_buf == nullptr) {
-        auto buf_ptr =
-            sisl::aligned_unique_ptr< uint8_t >::make_sized(get_attributes(nullptr).align_size, max_buf_size);
-        bzero(buf_ptr.get(), max_buf_size);
-        zero_buf = std::move(buf_ptr);
-    }
 
-    if (size > max_zero_write_size) {
-        LOGINFO("size {} exceed max write size {}", size, max_zero_write_size);
-        size = max_zero_write_size; // written size is returned in completion callback
-    }
-
-    auto iocb = _aio_ctx->prep_iocb_write_zero(iodev->fd(), size, offset, cookie, zero_buf.get());
-    if (!_aio_ctx->can_submit_aio()) {
-        push_retry_list(iocb);
-        return;
-    }
-
-    COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-    _aio_ctx->inc_submitted_aio(ret);
-    if (ret != 1) {
-        handle_io_failure(iocb);
-        return;
+    uint64_t range[2];
+    range[0] = offset;
+    range[1] = size;
+    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
+    if (ret) {
+        if (m_comp_cb) m_comp_cb(errno, cookie);
+    } else {
+        if (m_comp_cb) m_comp_cb((int64_t)size, cookie);
     }
 }
 
