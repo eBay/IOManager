@@ -178,7 +178,6 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-
     uint64_t range[2];
     range[0] = offset;
     range[1] = size;
