@@ -28,15 +28,13 @@ namespace iomgr {
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
-static constexpr int max_batch_iov_cnt = 1024;
-static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
-static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
+static constexpr int max_batch_iov_cnt = IOV_MAX;
 
 #ifdef linux
 struct iocb_info_t : public iocb {
     bool is_read;
     char* user_data;
-    uint64_t size;
+    uint32_t size;
     uint64_t offset;
     int fd;
     iovec* iov_ptr = nullptr;
@@ -106,7 +104,7 @@ struct aio_thread_context {
 
         while (!iocb_retry_list.empty()) {
             auto info = iocb_retry_list.front();
-            free((struct iocb*)info);
+            free_iocb((struct iocb*)info);
         }
 
         while (!iocb_free_list.empty()) {
@@ -199,32 +197,6 @@ struct aio_thread_context {
             assert(can_be_batched(0));
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
         }
-        return iocb;
-    }
-
-    struct iocb* prep_iocb_write_zero(int fd, uint64_t size, uint64_t offset, uint8_t* cookie, uint8_t* zero_buf) {
-        uint32_t iovcnt = size / max_buf_size;
-        if (size % max_buf_size) { ++iovcnt; }
-        auto i_info = alloc_iocb(iovcnt);
-        i_info->is_read = false;
-        i_info->user_data = nullptr;
-        i_info->size = size;
-        i_info->offset = offset;
-        i_info->fd = fd;
-        i_info->iovcnt = iovcnt;
-        for (uint32_t i = 0; i < iovcnt; ++i) {
-            i_info->iov_ptr[i].iov_base = zero_buf;
-            i_info->iov_ptr[i].iov_len = max_buf_size;
-        }
-        i_info->iov_ptr[iovcnt - 1].iov_len = size - (max_buf_size * (iovcnt - 1)); // override the size of data iov
-        const iovec* iov = i_info->iov_ptr;
-        struct iocb* iocb = static_cast< struct iocb* >(i_info);
-
-        io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
-        io_set_eventfd(iocb, ev_fd);
-        iocb->data = cookie;
-
-        LOGTRACE("Issuing IO info: {}", i_info->to_string());
         return iocb;
     }
 
@@ -333,7 +305,6 @@ private:
 
 private:
     static thread_local aio_thread_context* _aio_ctx;
-    static sisl::aligned_unique_ptr< uint8_t > zero_buf;
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
