@@ -43,8 +43,6 @@ using namespace std;
 
 thread_local aio_thread_context* AioDriveInterface::_aio_ctx;
 
-sisl::aligned_unique_ptr< uint8_t > AioDriveInterface::zero_buf;
-
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
