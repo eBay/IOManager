@@ -104,6 +104,7 @@ struct aio_thread_context {
 
         while (!iocb_retry_list.empty()) {
             auto info = iocb_retry_list.front();
+            iocb_retry_list.pop();
             free_iocb((struct iocb*)info);
         }
 
