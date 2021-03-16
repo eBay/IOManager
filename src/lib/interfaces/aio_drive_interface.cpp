@@ -188,7 +188,7 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
     if (ret) {
         if (m_comp_cb) m_comp_cb(errno, cookie);
     } else {
-        if (m_comp_cb) m_comp_cb((int64_t)size, cookie);
+        if (m_comp_cb) m_comp_cb(0, cookie);
     }
 }
 
