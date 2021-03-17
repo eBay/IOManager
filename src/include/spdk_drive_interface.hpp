@@ -81,6 +81,7 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
     io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
@@ -125,7 +126,7 @@ private:
     static thread_local int s_num_user_sync_devs;
 };
 
-ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP)
+ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)
 
 struct SpdkBatchIocb {
     SpdkBatchIocb() {
@@ -147,7 +148,7 @@ struct SpdkIocb {
 #ifndef NDEBUG
     static std::atomic< uint64_t > _iocb_id_counter;
 #endif
-    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint32_t size, uint64_t offset,
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
             iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
@@ -184,7 +185,7 @@ struct SpdkIocb {
     IODevice* iodev;
     SpdkDriveInterface* iface;
     SpdkDriveOpType op_type;
-    uint32_t size;
+    uint64_t size;
     uint64_t offset;
     void* user_cookie = nullptr;
     char* user_data = nullptr;

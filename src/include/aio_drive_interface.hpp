@@ -28,7 +28,7 @@ namespace iomgr {
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
-static constexpr int max_batch_iov_cnt = 1024;
+static constexpr int max_batch_iov_cnt = IOV_MAX;
 
 #ifdef linux
 struct iocb_info_t : public iocb {
@@ -101,6 +101,12 @@ struct aio_thread_context {
     ~aio_thread_context() {
         if (ev_fd) { close(ev_fd); }
         io_destroy(ioctx);
+
+        while (!iocb_retry_list.empty()) {
+            auto info = iocb_retry_list.front();
+            iocb_retry_list.pop();
+            free_iocb((struct iocb*)info);
+        }
 
         while (!iocb_free_list.empty()) {
             auto info = iocb_free_list.top();
@@ -211,13 +217,9 @@ struct aio_thread_context {
         if (batch_io) {
             // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
             // corrupted data
-            i_info->iovcnt = iovcnt;
             cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
             LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
-        } else {
-            i_info->iovcnt = iovcnt;
         }
-
         (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
         io_set_eventfd(iocb, ev_fd);
         iocb->data = cookie;
@@ -278,6 +280,7 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
     void process_completions(IODevice* iodev, void* cookie, int event);
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;

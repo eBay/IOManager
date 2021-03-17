@@ -177,6 +177,18 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
     }
 }
 
+void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    uint64_t range[2];
+    range[0] = offset;
+    range[1] = size;
+    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
+    if (ret) {
+        if (m_comp_cb) m_comp_cb(errno, cookie);
+    } else {
+        if (m_comp_cb) m_comp_cb(0, cookie);
+    }
+}
+
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
 
