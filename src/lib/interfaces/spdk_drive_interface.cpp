@@ -373,20 +373,20 @@ static void submit_io(void* b) {
 
     LOGDEBUGMOD(iomgr, "iocb submit: mode=actual, {}", iocb->to_string());
     if (iocb->op_type == SpdkDriveOpType::READ) {
-        if (iocb->user_data) {
-            rc = spdk_bdev_read(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->user_data, iocb->offset,
-                                iocb->size, process_completions, (void*)iocb);
-        } else {
-            rc = spdk_bdev_readv(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->iovs, iocb->iovcnt,
+        if (iocb->has_iovs()) {
+            rc = spdk_bdev_readv(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_iovs(), iocb->iovcnt,
                                  iocb->offset, iocb->size, process_completions, (void*)iocb);
+        } else {
+            rc = spdk_bdev_read(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_data(), iocb->offset,
+                                iocb->size, process_completions, (void*)iocb);
         }
     } else if (iocb->op_type == SpdkDriveOpType::WRITE) {
-        if (iocb->user_data) {
-            rc = spdk_bdev_write(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->user_data, iocb->offset,
-                                 iocb->size, process_completions, (void*)iocb);
-        } else {
-            rc = spdk_bdev_writev(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->iovs, iocb->iovcnt,
+        if (iocb->has_iovs()) {
+            rc = spdk_bdev_writev(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_iovs(), iocb->iovcnt,
                                   iocb->offset, iocb->size, process_completions, (void*)iocb);
+        } else {
+            rc = spdk_bdev_write(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_data(), iocb->offset,
+                                 iocb->size, process_completions, (void*)iocb);
         }
     } else if (iocb->op_type == SpdkDriveOpType::UNMAP) {
         rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
@@ -403,7 +403,6 @@ static void submit_io(void* b) {
         if (rc == -ENOMEM) {
             LOGDEBUGMOD(iomgr, "Bdev is lacking memory to do IO right away, queueing iocb: {}", iocb->to_string());
             COUNTER_INCREMENT(iocb->iface->get_metrics(), queued_ios_for_memory_pressure, 1);
-            iocb->copy_iovs();
             spdk_bdev_queue_io_wait(iocb->iodev->bdev(), get_io_channel(iocb->iodev), &iocb->io_wait_entry);
         } else {
             LOGERRORMOD(iomgr, "iocb {} submission failed with rc={}", iocb->to_string(), rc);
@@ -434,7 +433,7 @@ void SpdkDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t
                                      bool part_of_batch) {
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, cookie);
-    iocb->user_data = (char*)data;
+    iocb->set_data(const_cast< char* >(data));
     iocb->io_wait_entry.cb_fn = submit_io;
     if (!try_submit_io(iocb, part_of_batch)) { do_sync_io(iocb, m_comp_cb); }
 }
@@ -443,7 +442,7 @@ void SpdkDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, 
                                     bool part_of_batch) {
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, cookie);
-    iocb->user_data = (char*)data;
+    iocb->set_data(data);
     iocb->io_wait_entry.cb_fn = submit_io;
     if (!try_submit_io(iocb, part_of_batch)) { do_sync_io(iocb, m_comp_cb); }
 }
@@ -452,9 +451,7 @@ void SpdkDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iov
                                       uint8_t* cookie, bool part_of_batch) {
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, cookie);
-
-    iocb->iovs = (iovec*)iov;
-    iocb->iovcnt = iovcnt;
+    iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
     if (!try_submit_io(iocb, part_of_batch)) { do_sync_io(iocb, m_comp_cb); }
 }
@@ -463,8 +460,7 @@ void SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovc
                                      uint8_t* cookie, bool part_of_batch) {
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, cookie);
-    iocb->iovs = (iovec*)iov;
-    iocb->iovcnt = iovcnt;
+    iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
     if (!try_submit_io(std::move(iocb), part_of_batch)) { do_sync_io(iocb, m_comp_cb); }
 }
@@ -490,7 +486,7 @@ ssize_t SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32
 
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, nullptr);
-    iocb->user_data = (char*)data;
+    iocb->set_data(const_cast< char* >(data));
     return do_sync_io(iocb, nullptr);
 }
 
@@ -500,8 +496,7 @@ ssize_t SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int i
 
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::WRITE, size, offset, nullptr);
-    iocb->iovs = (iovec*)iov;
-    iocb->iovcnt = iovcnt;
+    iocb->set_iovs(iov, iovcnt);
     return do_sync_io(iocb, nullptr);
 }
 
@@ -511,7 +506,7 @@ ssize_t SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size
 
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, nullptr);
-    iocb->user_data = (char*)data;
+    iocb->set_data(data);
     return do_sync_io(iocb, nullptr);
 }
 
@@ -521,8 +516,7 @@ ssize_t SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int io
 
     SpdkIocb* iocb =
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, SpdkDriveOpType::READ, size, offset, nullptr);
-    iocb->iovs = (iovec*)iov;
-    iocb->iovcnt = iovcnt;
+    iocb->set_iovs(iov, iovcnt);
     return do_sync_io(iocb, nullptr);
 }
 
@@ -545,7 +539,6 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 }
 
 void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
-    iocb->copy_iovs();
     iocb->comp_cb = [&](int64_t res, uint8_t* cookie) {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
         iocb->result = res;
@@ -608,7 +601,6 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
     assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
 
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
-    iocb->copy_iovs();
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
         iocb->result = res;
         if (!iocb->batch_info_ptr) {
