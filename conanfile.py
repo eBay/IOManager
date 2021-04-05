@@ -32,7 +32,7 @@ class IOMgrConan(ConanFile):
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
-            ("fmt/7.0.3", "override"),
+            ("fmt/7.1.3", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
