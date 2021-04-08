@@ -37,6 +37,7 @@ class IOMgrConan(ConanFile):
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
             "spdk/20.07.y",
+            "openssl/1.1.1k",
             )
     build_requires = (
                 "gtest/1.10.0",
