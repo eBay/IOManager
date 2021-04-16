@@ -16,8 +16,11 @@ table AioDriveInterface {
 
 table IomgrSettings {
     spdk: SpdkDriveInterface;
-    cpuset_path: string;
     aio : AioDriveInterface;
+    cpuset_path: string;
+
+    // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
+    max_msgs_before_yield: uint32 = 100 (hotswap);
 }
 
 root_type IomgrSettings;

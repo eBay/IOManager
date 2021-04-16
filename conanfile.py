@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "4.1.19"
+    version = "4.1.20"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -17,12 +17,14 @@ class IOMgrConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         }
     default_options = (
         'shared=False',
         'fPIC=True',
         'coverage=False',
         'sanitize=False',
+        'testing=full',
         )
 
     requires = (
@@ -52,13 +54,15 @@ class IOMgrConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+        definitions = {'CONAN_TEST_TARGET': 'off',
+                       'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
 
         if self.options.sanitize:
             definitions['MEMORY_SANITIZER_ON'] = 'ON'
 
+        definitions['CONAN_TEST_TARGET'] = self.options.testing
         if self.options.coverage:
             definitions['CONAN_BUILD_COVERAGE'] = 'ON'
             test_target = 'coverage'

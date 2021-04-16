@@ -12,6 +12,7 @@ extern "C" {
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
+#include "include/iomgr_config.hpp"
 #include <fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
@@ -187,11 +188,22 @@ void IOReactorEPoll::on_msg_fd_notification() {
     while (0 > read(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
         ;
 
+    uint32_t max_msg_batch_size{IM_DYNAMIC_CONFIG(max_msgs_before_yield)};
+    uint32_t msg_count{0};
+
     // Start pulling all the messages and handle them.
-    while (true) {
+    while (msg_count < max_msg_batch_size) {
         iomgr_msg* msg;
         if (!m_msg_q.try_dequeue(msg)) { break; }
         handle_msg(msg);
+        ++msg_count;
+    }
+
+    if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
+        REACTOR_LOG(DEBUG, iomgr, , "Reached max msg_count batch {}, yielding and will process again", msg_count);
+        temp = 1;
+        while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
+            ;
     }
 }
 

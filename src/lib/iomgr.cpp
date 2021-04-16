@@ -38,6 +38,8 @@ extern "C" {
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
 #include "include/reactor_spdk.hpp"
+#include "include/iomgr_config.hpp"
+
 #include <utility/thread_factory.hpp>
 #include <fds/obj_allocator.hpp>
 #include <experimental/random>
@@ -217,10 +219,8 @@ void IOManager::start_spdk() {
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 std::ifstream ifs(cpuset_path);
-                std::string corelist( (std::istreambuf_iterator<char>(ifs)),
-                                        (std::istreambuf_iterator<char>()) );
-                corelist.erase(
-                    std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
+                std::string corelist((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
+                corelist.erase(std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
                 corelist = "[" + corelist + "]";
                 LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
                 opts.core_mask = corelist.c_str();
@@ -431,7 +431,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
         auto& reactor = m_worker_reactors[std::experimental::randint(0, (int)m_worker_reactors.size() - 1)].second;
-        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_idx, msg, sender_reactor);
+        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
             if (reactor && reactor->is_io_reactor()) {
