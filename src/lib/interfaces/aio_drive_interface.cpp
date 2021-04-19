@@ -22,6 +22,7 @@
 #endif
 
 #include <sds_logging/logging.h>
+#include <flip/flip.hpp>
 #include "include/iomgr.hpp"
 #include "include/aio_drive_interface.hpp"
 
@@ -216,7 +217,7 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 
     if (!_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
-        || Flip::instance().test_flip("io_write_iocb_empty_flip")
+        || flip::Flip::instance().test_flip("io_write_iocb_empty_flip")
 #endif
     ) {
         auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
@@ -224,8 +225,8 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
         return;
     }
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_write_error_flip")) {
-        m_comp_cb(homestore::homestore_error::write_failed, cookie);
+    if (flip::Flip::instance().test_flip("io_write_error_flip")) {
+        m_comp_cb(EIO, cookie);
         return;
     }
 #endif
@@ -248,7 +249,7 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
 
     if (!_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
-        || Flip::instance().test_flip("io_read_iocb_empty_flip")
+        || flip::Flip::instance().test_flip("io_read_iocb_empty_flip")
 #endif
     ) {
         auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
@@ -256,8 +257,8 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
         return;
     }
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
-        m_comp_cb(homestore::homestore_error::read_failed, cookie);
+    if (flip::Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
+        m_comp_cb(EIO, cookie);
         return;
     }
 #endif
@@ -345,7 +346,7 @@ ssize_t AioDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_
 
 ssize_t AioDriveInterface::_sync_write(int fd, const char* data, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_sync_write_error_flip", size)) { folly::throwSystemError("flip error"); }
+    if (flip::Flip::instance().test_flip("io_sync_write_error_flip", size)) { folly::throwSystemError("flip error"); }
 #endif
 
     ssize_t written_size = pwrite(fd, data, (ssize_t)size, (off_t)offset);
@@ -363,7 +364,9 @@ ssize_t AioDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int io
 
 ssize_t AioDriveInterface::_sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_sync_write_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
+    if (flip::Flip::instance().test_flip("io_sync_write_error_flip", iovcnt, size)) {
+        folly::throwSystemError("flip error");
+    }
 #endif
     ssize_t written_size = pwritev(fd, iov, iovcnt, offset);
     if (written_size != size) {
@@ -381,7 +384,7 @@ ssize_t AioDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size,
 
 ssize_t AioDriveInterface::_sync_read(int fd, char* data, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_sync_read_error_flip", size)) { folly::throwSystemError("flip error"); }
+    if (flip::Flip::instance().test_flip("io_sync_read_error_flip", size)) { folly::throwSystemError("flip error"); }
 #endif
     ssize_t read_size = pread(fd, data, (ssize_t)size, (off_t)offset);
     if (read_size != size) {
@@ -398,7 +401,9 @@ ssize_t AioDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iov
 
 ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
 #ifdef _PRERELEASE
-    if (Flip::instance().test_flip("io_sync_read_error_flip", iovcnt, size)) { folly::throwSystemError("flip error"); }
+    if (flip::Flip::instance().test_flip("io_sync_read_error_flip", iovcnt, size)) {
+        folly::throwSystemError("flip error");
+    }
 #endif
     ssize_t read_size = preadv(fd, iov, iovcnt, (off_t)offset);
     if (read_size != size) {

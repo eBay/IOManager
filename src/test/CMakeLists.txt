@@ -11,7 +11,7 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
         ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
     set(TEST_IOMGR_FILES test_iomgr.cpp)
     add_executable(test_iomgr ${TEST_IOMGR_FILES})
-    target_link_libraries(test_iomgr ${CONAN_LIBS} iomgr sisl)
+    target_link_libraries(test_iomgr ${CONAN_LIBS} iomgr sisl flip)
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
@@ -27,7 +27,7 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
         ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
     set(TEST_MSG_FILES test_msg.cpp)
     add_executable(test_msg ${TEST_MSG_FILES})
-    target_link_libraries(test_msg ${CONAN_LIBS} iomgr sisl)
+    target_link_libraries(test_msg ${CONAN_LIBS} iomgr sisl flip)
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestMsg-Epoll COMMAND test_msg)

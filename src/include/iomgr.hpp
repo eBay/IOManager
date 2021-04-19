@@ -64,6 +64,20 @@ using interface_adder_t = std::function< void(void) >;
 using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
 typedef void (*spdk_msg_signature_t)(void*);
 
+class IOManagerMetrics : public sisl::MetricsGroup {
+public:
+    IOManagerMetrics() : sisl::MetricsGroup{"IOManager", "Singelton"} {
+#ifdef _PRERELEASE
+        REGISTER_COUNTER(iomem_retained, "IO Memory maintained", sisl::_publish_as::publish_as_gauge);
+#endif
+        register_me_to_farm();
+    }
+    IOManagerMetrics(const IOManagerMetrics&) = delete;
+    IOManagerMetrics(IOManagerMetrics&&) noexcept = delete;
+    IOManagerMetrics& operator=(const IOManagerMetrics&) = delete;
+    IOManagerMetrics& operator=(IOManagerMetrics&&) noexcept = delete;
+};
+
 class IOMempoolMetrics : public sisl::MetricsGroup {
 public:
     IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp);
@@ -291,6 +305,7 @@ public:
         auto r = this_reactor();
         return r && r->is_worker();
     }
+    IOManagerMetrics& metrics() { return m_iomgr_metrics; }
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -344,6 +359,7 @@ public:
     uint8_t* iobuf_alloc(size_t align, size_t size);
     void iobuf_free(uint8_t* buf);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
+    size_t iobuf_size(uint8_t* buf) const;
 
     /******** Timer related Operations ********/
     int64_t idle_timeout_interval_usec() const { return -1; };
@@ -431,6 +447,7 @@ private:
     bool m_is_spdk{false};
     bool m_spdk_reinit_needed{false};
 
+    IOManagerMetrics m_iomgr_metrics;
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
 };
 
@@ -438,7 +455,13 @@ struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz) override;
     void aligned_free(uint8_t* b) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+    size_t buf_size(uint8_t* buf) const override;
 };
 
+struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
+    uint8_t* aligned_alloc(size_t align, size_t sz) override;
+    void aligned_free(uint8_t* b) override;
+    uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+};
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr

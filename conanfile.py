@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "4.1.20"
+    version = "4.1.21"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -28,6 +28,7 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
+            "flip/[~=2, include_prerelease=True]@sds/master",
             "sds_logging/[~=9, include_prerelease=True]@sds/master",
             "sds_options/[~=1, include_prerelease=True]@sds/master",
             "sisl/[~=4, include_prerelease=True]@sisl/master",

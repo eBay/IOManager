@@ -182,6 +182,10 @@ int main(int argc, char* argv[]) {
     g_drive_iface->attach_completion_cb(on_io_completion);
     g_iodev = g_drive_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR);
 
+    uint8_t* buf = iomanager.iobuf_alloc(512, 8192);
+    LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
+    iomanager.iobuf_free(buf);
+
     iomanager.run_on(thread_regex::all_io, workload_on_thread, false);
 
     // Wait for IO to finish on all threads.

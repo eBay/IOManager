@@ -16,6 +16,7 @@ extern "C" {
 #include <spdk/env_dpdk.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
+#include <rte_malloc.h>
 }
 
 #include <sds_logging/logging.h>
@@ -84,6 +85,8 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     if (is_spdk) {
         init_bdev = !is_spdk_inited();
         start_spdk();
+    } else {
+        sisl::AlignedAllocator::instance().set_allocator(std::move(new IOMgrAlignedAllocImpl()));
     }
 
     // Create all in-built interfaces here
@@ -607,26 +610,64 @@ void IODevice::clear() {
 }
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
-    size = sisl::round_up(size, align);
-    return m_is_spdk ? (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA)
-                     : (uint8_t*)std::aligned_alloc(align, size);
+    return sisl::AlignedAllocator::allocator().aligned_alloc(align, size);
 }
 
-void IOManager::iobuf_free(uint8_t* buf) { m_is_spdk ? spdk_free((void*)buf) : std::free(buf); }
+void IOManager::iobuf_free(uint8_t* buf) { sisl::AlignedAllocator::allocator().aligned_free(buf); }
 
-uint8_t* IOManager::iobuf_realloc(uint8_t* buf, size_t align, size_t new_size) {
-    return m_is_spdk ? (uint8_t*)spdk_realloc((void*)buf, new_size, align) : sisl_aligned_realloc(buf, align, new_size);
-}
+size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
 /************* Spdk Memory Allocator section ************************/
 uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
-    return (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+    auto buf = (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+#ifdef _PRERELEASE
+    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, buf_size(buf));
+#endif
+    return buf;
 }
 
-void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) { spdk_free((void*)b); }
+void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) {
+#ifdef _PRERELEASE
+    COUNTER_DECREMENT(iomanager.metrics(), iomem_retained, buf_size(b));
+#endif
+    spdk_free((void*)b);
+}
 
 uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
+#ifdef _PRERELEASE
+    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, new_sz - old_sz);
+#endif
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+}
+
+size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
+    size_t sz;
+    [[maybe_unused]] auto ret = rte_malloc_validate(buf, &sz);
+    assert(ret != -1);
+    return sz;
+}
+
+/************* Conventional Memory Allocator section ************************/
+uint8_t* IOMgrAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
+    auto buf = sisl::AlignedAllocatorImpl::aligned_alloc(align, size);
+#ifdef _PRERELEASE
+    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, buf_size(buf));
+#endif
+    return buf;
+}
+
+void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b) {
+#ifdef _PRERELEASE
+    COUNTER_DECREMENT(iomanager.metrics(), iomem_retained, buf_size(b));
+#endif
+    sisl::AlignedAllocatorImpl::aligned_free(b);
+}
+
+uint8_t* IOMgrAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
+#ifdef _PRERELEASE
+    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, new_sz - old_sz);
+#endif
+    return sisl::AlignedAllocatorImpl::aligned_realloc(old_buf, align, new_sz, old_sz);
 }
 
 /************* Mempool Metrics section ************************/
