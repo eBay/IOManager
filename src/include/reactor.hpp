@@ -11,7 +11,7 @@
 #include <utility/enum.hpp>
 #include <chrono>
 
-#define IOMGR_LOG_MODS iomgr, spdk, flip
+#define IOMGR_LOG_MODS iomgr, spdk
 SDS_LOGGING_DECL(IOMGR_LOG_MODS);
 
 struct spdk_thread;

@@ -13,7 +13,7 @@ using namespace iomgr;
 using namespace std::chrono_literals;
 
 THREAD_BUFFER_INIT;
-SDS_LOGGING_INIT(IOMGR_LOG_MODS)
+SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SDS_OPTION_GROUP(test_msg,
                  (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
