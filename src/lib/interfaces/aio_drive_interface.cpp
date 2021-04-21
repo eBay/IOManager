@@ -132,6 +132,10 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
         auto info = (iocb_info_t*)iocb;
 
         LOGTRACEMOD(iomgr, "Event[{}]: Result {} res2={}", i, e.res, e.res2);
+#ifdef _PRERELEASE
+        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_write_resubmit_io");
+        if (flip_resubmit_cnt != boost::none && info->resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { e.res = 0; }
+#endif
         if (ret < 0) {
             COUNTER_INCREMENT(m_metrics, completion_errors, 1);
             LOGDFATAL("Error in completion of aio, result: {} info: {}", ret, info->to_string());
@@ -140,13 +144,14 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
             LOGERROR("io is not completed properly. size read/written {} info {} error {}", e.res, info->to_string(),
                      e.res2);
             if (e.res2 == 0) { e.res2 = EIO; }
+            if (resubmit_iocb_on_err(iocb)) { continue; }
         }
 
         auto user_cookie = (uint8_t*)iocb->data;
         _aio_ctx->dec_submitted_aio();
         _aio_ctx->free_iocb(iocb);
         retry_io();
-        if (m_comp_cb) m_comp_cb(e.res2, user_cookie);
+        if (m_comp_cb) { m_comp_cb(e.res2, user_cookie); }
     }
 
     // Call any batch completion hints
@@ -154,6 +159,17 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
         LOGTRACEMOD(iomgr, "Making end of batch cb list callback with nevents={}", nevents);
         m_io_end_of_batch_cb(nevents);
     }
+}
+
+bool AioDriveInterface::resubmit_iocb_on_err(struct iocb* iocb) {
+    auto info = (iocb_info_t*)iocb;
+    if (info->resubmit_cnt > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) { return false; }
+    ++info->resubmit_cnt;
+    _aio_ctx->prep_iocb_for_resubmit(iocb);
+    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    COUNTER_INCREMENT(m_metrics, resubmit_io_on_err, 1);
+    if (ret != 1) { handle_io_failure(iocb); }
+    return true;
 }
 
 void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -224,12 +240,6 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
         push_retry_list(iocb);
         return;
     }
-#ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_write_error_flip")) {
-        m_comp_cb(EIO, cookie);
-        return;
-    }
-#endif
     if (part_of_batch && _aio_ctx->can_be_batched(iovcnt)) {
         _aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), false /* is_read */, iov, iovcnt, size, offset, cookie);
     } else {
@@ -256,12 +266,6 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
         push_retry_list(iocb);
         return;
     }
-#ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_read_error_flip", iovcnt, size)) {
-        m_comp_cb(EIO, cookie);
-        return;
-    }
-#endif
 
     if (part_of_batch && _aio_ctx->can_be_batched(iovcnt)) {
         _aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), true /* is_read */, iov, iovcnt, size, offset, cookie);
@@ -345,11 +349,16 @@ ssize_t AioDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_
 }
 
 ssize_t AioDriveInterface::_sync_write(int fd, const char* data, uint32_t size, uint64_t offset) {
+    ssize_t written_size = 0;
+    uint32_t resubmit_cnt = 0;
+    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+        written_size = pwrite(fd, data, (ssize_t)size, (off_t)offset);
 #ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_sync_write_error_flip", size)) { folly::throwSystemError("flip error"); }
+        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
+        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { written_size = 0; }
 #endif
-
-    ssize_t written_size = pwrite(fd, data, (ssize_t)size, (off_t)offset);
+        ++resubmit_cnt;
+    }
     if (written_size != size) {
         folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
                                             offset, size, written_size, errno, fd));
@@ -363,12 +372,16 @@ ssize_t AioDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int io
 }
 
 ssize_t AioDriveInterface::_sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+    ssize_t written_size = 0;
+    uint32_t resubmit_cnt = 0;
+    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+        written_size = pwritev(fd, iov, iovcnt, offset);
 #ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_sync_write_error_flip", iovcnt, size)) {
-        folly::throwSystemError("flip error");
-    }
+        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
+        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { written_size = 0; }
 #endif
-    ssize_t written_size = pwritev(fd, iov, iovcnt, offset);
+        ++resubmit_cnt;
+    }
     if (written_size != size) {
         folly::throwSystemError(
             fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
@@ -383,10 +396,16 @@ ssize_t AioDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size,
 }
 
 ssize_t AioDriveInterface::_sync_read(int fd, char* data, uint32_t size, uint64_t offset) {
+    ssize_t read_size = 0;
+    uint32_t resubmit_cnt = 0;
+    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+        read_size = pread(fd, data, (ssize_t)size, (off_t)offset);
 #ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_sync_read_error_flip", size)) { folly::throwSystemError("flip error"); }
+        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
+        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { read_size = 0; }
 #endif
-    ssize_t read_size = pread(fd, data, (ssize_t)size, (off_t)offset);
+        ++resubmit_cnt;
+    }
     if (read_size != size) {
         folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
                                             offset, size, read_size, errno, fd));
@@ -400,12 +419,16 @@ ssize_t AioDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iov
 }
 
 ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+    ssize_t read_size = 0;
+    uint32_t resubmit_cnt = 0;
+    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+        read_size = preadv(fd, iov, iovcnt, (off_t)offset);
 #ifdef _PRERELEASE
-    if (flip::Flip::instance().test_flip("io_sync_read_error_flip", iovcnt, size)) {
-        folly::throwSystemError("flip error");
-    }
+        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
+        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { read_size = 0; }
 #endif
-    ssize_t read_size = preadv(fd, iov, iovcnt, (off_t)offset);
+        ++resubmit_cnt;
+    }
     if (read_size != size) {
         folly::throwSystemError(
             fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,

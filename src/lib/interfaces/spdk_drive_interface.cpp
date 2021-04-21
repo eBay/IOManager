@@ -6,6 +6,7 @@
 #include <fds/utils.hpp>
 #include <filesystem>
 #include <thread>
+#include <flip/flip.hpp>
 extern "C" {
 #include <spdk/env.h>
 #include <spdk/thread.h>
@@ -319,6 +320,16 @@ static spdk_io_channel* get_io_channel(IODevice* iodev) {
     return dctx->channel;
 }
 
+static void submit_io(void* b);
+static bool resubmit_io_on_err(void* b) {
+    SpdkIocb* iocb = (SpdkIocb*)b;
+    if (iocb->resubmit_cnt > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) { return false; }
+    ++iocb->resubmit_cnt;
+    COUNTER_INCREMENT(iocb->iface->get_metrics(), resubmit_io_on_err, 1);
+    submit_io(b);
+    return true;
+}
+
 static void complete_io(SpdkIocb* iocb) {
     // As of now we complete the batch as soon as 1 io is completed. We can potentially do batching based on if
     // async thread is completed or not
@@ -334,13 +345,19 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
     // LOGDEBUGMOD(iomgr, "Received completion on bdev = {}", (void*)iocb->iodev->bdev_desc());
     spdk_bdev_free_io(bdev_io);
 
+#ifdef _PRERELEASE
+    auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io");
+    if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { success = false; }
+#endif
+
     if (success) {
         iocb->result = 0;
         LOGDEBUGMOD(iomgr, "(bdev_io={}) iocb complete: mode=actual, {}", (void*)bdev_io, iocb->to_string());
     } else {
+        LOGERRORMOD(iomgr, "(bdev_io={}) iocb failed: mode=actual, {}", (void*)bdev_io, iocb->to_string());
         COUNTER_INCREMENT(iocb->iface->get_metrics(), completion_errors, 1);
+        if (resubmit_io_on_err(iocb)) { return; }
         iocb->result = -1;
-        LOGDEBUGMOD(iomgr, "(bdev_io={}) iocb failed: mode=actual, {}", (void*)bdev_io, iocb->to_string());
     }
 
 #ifndef NDEBUG

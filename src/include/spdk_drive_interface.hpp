@@ -37,6 +37,7 @@ public:
                          "Count of async ios converted to sync ios because of non-spdk threads");
         REGISTER_COUNTER(queued_ios_for_memory_pressure, "Count of times drive queued ios because of lack of memory");
         REGISTER_COUNTER(completion_errors, "Spdk Drive Completion errors");
+        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
 
         register_me_to_farm();
     }
@@ -193,9 +194,10 @@ struct SpdkIocb {
 #ifndef NDEBUG
         str = fmt::format("id={} ", iocb_id);
 #endif
-        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, ",
-                           (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
-                           batch_info_ptr ? batch_info_ptr->batch_io->size() : 0);
+        str += fmt::format(
+            "addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, resubmit_cnt={} ",
+            (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
+            batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt);
 
         if (has_iovs()) {
             auto ivs = get_iovs();
@@ -220,6 +222,7 @@ struct SpdkIocb {
     io_interface_comp_cb_t comp_cb = nullptr;
     spdk_bdev_io_wait_entry io_wait_entry;
     SpdkBatchIocb* batch_info_ptr = nullptr;
+    uint32_t resubmit_cnt = 0;
 #ifndef NDEBUG
     uint64_t iocb_id;
     bool owns_by_spdk{false};

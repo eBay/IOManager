@@ -40,6 +40,7 @@ struct iocb_info_t : public iocb {
     iovec* iov_ptr = nullptr;
     iovec iovs[max_batch_iov_cnt];
     int iovcnt;
+    uint32_t resubmit_cnt = 0;
 
     std::string to_string() const {
         return fmt::format("is_read={}, size={}, offset={}, fd={}, iovcnt={}", is_read, size, offset, fd, iovcnt);
@@ -130,7 +131,7 @@ struct aio_thread_context {
 
     iocb_info_t* alloc_iocb(uint32_t iovcnt = 0) {
         iocb_info_t* info;
-        if (can_submit_aio()) {
+        if (!iocb_free_list.empty()) {
             info = iocb_free_list.top();
             iocb_free_list.pop();
         } else {
@@ -177,6 +178,26 @@ struct aio_thread_context {
         }
     }
 
+    void prep_iocb_for_resubmit(struct iocb* iocb) {
+        auto info = static_cast< iocb_info_t* >(iocb);
+        auto cookie = iocb->data;
+        if (info->is_read) {
+            if (info->user_data) {
+                io_prep_pread(iocb, info->fd, info->user_data, info->size, info->offset);
+            } else {
+                io_prep_preadv(iocb, info->fd, info->iov_ptr, info->iovcnt, info->offset);
+            }
+        } else {
+            if (info->user_data) {
+                io_prep_pwrite(iocb, info->fd, info->user_data, info->size, info->offset);
+            } else {
+                io_prep_pwritev(iocb, info->fd, info->iov_ptr, info->iovcnt, info->offset);
+            }
+        }
+        io_set_eventfd(iocb, ev_fd);
+        iocb->data = cookie;
+    }
+
     struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
                            void* cookie) {
         auto i_info = alloc_iocb();
@@ -210,6 +231,7 @@ struct aio_thread_context {
         i_info->size = size;
         i_info->offset = offset;
         i_info->fd = fd;
+        i_info->iovcnt = iovcnt;
         memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
         iov = i_info->iov_ptr;
 
@@ -250,6 +272,7 @@ public:
 
         REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
+        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         register_me_to_farm();
     }
 
@@ -299,6 +322,7 @@ private:
     bool handle_io_failure(struct iocb* iocb);
     void retry_io();
     void push_retry_list(struct iocb* iocb);
+    bool resubmit_iocb_on_err(struct iocb* iocb);
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
