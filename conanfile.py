@@ -4,7 +4,8 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "4.0.6"
+    version = "4.1.23"
+
     revision_mode = "scm"
     license = "Proprietary"
     url = "https://github.corp.ebay.com/SDS/iomgr"
@@ -16,25 +17,30 @@ class IOMgrConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         }
     default_options = (
         'shared=False',
         'fPIC=True',
         'coverage=False',
         'sanitize=False',
+        'testing=full',
         )
 
     requires = (
-            "sds_logging/[~=8, include_prerelease=True]@sds/master",
+            "flip/[~=2, include_prerelease=True]@sds/master",
+            "sds_logging/[~=9, include_prerelease=True]@sds/master",
             "sds_options/[~=1, include_prerelease=True]@sds/master",
             "sisl/[~=4, include_prerelease=True]@sisl/master",
+            "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
-            ("fmt/7.0.3", "override"),
+            ("fmt/7.1.3", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
-            "spdk/20.07.x",
+            "spdk/20.07.y",
+            "openssl/1.1.1k",
             )
     build_requires = (
                 "gtest/1.10.0",
@@ -49,13 +55,15 @@ class IOMgrConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        definitions = {'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+        definitions = {'CONAN_TEST_TARGET': 'off',
+                       'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
 
         if self.options.sanitize:
             definitions['MEMORY_SANITIZER_ON'] = 'ON'
-                
+
+        definitions['CONAN_TEST_TARGET'] = self.options.testing
         if self.options.coverage:
             definitions['CONAN_BUILD_COVERAGE'] = 'ON'
             test_target = 'coverage'

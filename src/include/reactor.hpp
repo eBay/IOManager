@@ -128,18 +128,20 @@ using ev_callback = std::function< void(IODevice* iodev, void* cookie, int event
 using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 
 struct IODevice {
-    ev_callback cb = nullptr;
+    ev_callback cb{nullptr};
     std::string devname;
+    std::string alias_name;
     backing_dev_t dev;
-    int ev = 0;
-    thread_specifier thread_scope = thread_regex::all_io;
+    int ev{0};
+    io_thread_t creator;
+    thread_specifier thread_scope{thread_regex::all_io};
     int pri = 1;
     void* cookie = nullptr;
     std::unique_ptr< timer_info > tinfo;
-    IOInterface* io_interface = nullptr;
+    IOInterface* io_interface{nullptr};
     sisl::sparse_vector< void* > m_thread_local_ctx;
-    bool ready = false;
-    std::atomic< int32_t > thread_op_pending_count = 0; // Number of add/remove of iodev to thread pending
+    bool ready{false};
+    std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
 
     IODevice();
     ~IODevice() = default;
@@ -194,8 +196,8 @@ public:
     void stop_io_thread(const io_thread_t& thr);
 
     const io_thread_t& addr_to_thread(io_thread_addr_t addr);
-    int add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
-    int remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    int add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
+    int remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
 
     const std::vector< io_thread_t >& io_threads() const { return m_io_threads; }
 
@@ -212,8 +214,8 @@ public:
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
     virtual void reactor_specific_exit_thread(const io_thread_t& thr) = 0;
-    virtual int _add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
-    virtual int _remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int _add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int _remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
 
     void notify_thread_state(bool is_started);
     // const io_thread_t& sthread_from_addr(io_thread_addr_t addr);

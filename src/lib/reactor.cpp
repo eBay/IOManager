@@ -126,7 +126,7 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
     {
         auto iface_list = iomanager.iface_rlock();
         for (auto& iface : *iface_list) {
-            iface->on_io_thread_stopped(thr);
+            if (can_add_iface(iface)) { iface->on_io_thread_stopped(thr); }
         }
         m_io_thread_count.decrement();
     }
@@ -138,14 +138,14 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
     m_io_threads[thr->thread_addr] = nullptr;
 }
 
-int IOReactor::add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
-    auto ret = _add_iodev_to_thread(iodev, thr);
+int IOReactor::add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
+    auto ret = _add_iodev_to_reactor(iodev, thr);
     if (ret == 0) { ++m_n_iodevices; }
     return ret;
 }
 
-int IOReactor::remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
-    auto ret = _remove_iodev_from_thread(iodev, thr);
+int IOReactor::remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
+    auto ret = _remove_iodev_from_reactor(iodev, thr);
     if (ret == 0) { --m_n_iodevices; }
     return ret;
 }

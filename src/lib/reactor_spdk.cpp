@@ -43,8 +43,8 @@ void IOReactorSPDK::reactor_specific_exit_thread(const io_thread_t& thr) {
     }
 }
 
-int IOReactorSPDK::_add_iodev_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
-int IOReactorSPDK::_remove_iodev_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
+int IOReactorSPDK::_add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
+int IOReactorSPDK::_remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
 
 bool IOReactorSPDK::put_msg(iomgr_msg* msg) {
     spdk_thread_send_msg(addr_to_thread(msg->m_dest_thread)->spdk_thread_impl(), _handle_thread_msg, msg);

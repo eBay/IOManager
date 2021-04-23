@@ -10,6 +10,7 @@ extern "C" {
 }
 #include <atomic>
 #include <condition_variable>
+#include <mutex>
 #include <map>
 #include <memory>
 #include <vector>
@@ -26,6 +27,7 @@ extern "C" {
 #include <fds/utils.hpp>
 #include <fds/id_reserver.hpp>
 #include <utility/enum.hpp>
+#include <sds_logging/logging.h>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -55,12 +57,26 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...)->overloaded< Ts... >;
+overloaded(Ts...) -> overloaded< Ts... >;
 
 using msg_handler_t = std::function< void(iomgr_msg*) >;
 using interface_adder_t = std::function< void(void) >;
 using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
 typedef void (*spdk_msg_signature_t)(void*);
+
+class IOManagerMetrics : public sisl::MetricsGroup {
+public:
+    IOManagerMetrics() : sisl::MetricsGroup{"IOManager", "Singelton"} {
+#ifdef _PRERELEASE
+        REGISTER_COUNTER(iomem_retained, "IO Memory maintained", sisl::_publish_as::publish_as_gauge);
+#endif
+        register_me_to_farm();
+    }
+    IOManagerMetrics(const IOManagerMetrics&) = delete;
+    IOManagerMetrics(IOManagerMetrics&&) noexcept = delete;
+    IOManagerMetrics& operator=(const IOManagerMetrics&) = delete;
+    IOManagerMetrics& operator=(IOManagerMetrics&&) noexcept = delete;
+};
 
 class IOMempoolMetrics : public sisl::MetricsGroup {
 public:
@@ -74,6 +90,35 @@ public:
 
 private:
     const struct spdk_mempool* m_mp;
+};
+
+struct synchronized_async_method_ctx {
+public:
+    std::mutex m;
+    std::condition_variable cv;
+    int outstanding_count{0};
+    void* custom_ctx{nullptr};
+
+    ~synchronized_async_method_ctx() {
+        DEBUG_ASSERT_EQ(outstanding_count, 0, "Expecting no outstanding ref of method");
+    }
+
+private:
+    static void done(void* arg, [[maybe_unused]] int rc) {
+        synchronized_async_method_ctx* pmctx = static_cast< synchronized_async_method_ctx* >(arg);
+        {
+            std::unique_lock< std::mutex > lk{pmctx->m};
+            --pmctx->outstanding_count;
+        }
+        pmctx->cv.notify_one();
+    }
+
+public:
+    auto get_done_cb() {
+        std::unique_lock< std::mutex > lk{m};
+        ++outstanding_count;
+        return (synchronized_async_method_ctx::done);
+    }
 };
 
 class IOManager {
@@ -168,6 +213,14 @@ public:
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default,
                              thread_regex iface_scope = thread_regex::all_io);
 
+    /***
+     * @brief Remove the IOInterface from the iomanager. Once removed, it will remove all the devices added to that
+     * interface and cleanup their resources.
+     *
+     * @param iface: Shared pointer to the IOInterface to be removed.
+     */
+    void remove_interface(const std::shared_ptr< IOInterface >& iface);
+
     /**
      * @brief Reschedule the IO to a different device. This is used for SCST interfaces and given that it could be
      * depreacted, this API is not used actively anymore. One can do this with using run_on() APIs
@@ -211,6 +264,27 @@ public:
         return ((int)sent);
     }
 
+    void run_async_method_synchronized(thread_regex r, const auto& fn) {
+        static synchronized_async_method_ctx mctx;
+        int executed_on = run_on(
+            r,
+            [&fn]([[maybe_unused]] auto taddr) {
+                fn(mctx);
+                {
+                    std::unique_lock< std::mutex > lk{mctx.m};
+                    --mctx.outstanding_count;
+                }
+                mctx.cv.notify_one();
+            },
+            false);
+
+        {
+            std::unique_lock< std::mutex > lk{mctx.m};
+            mctx.outstanding_count += executed_on;
+            mctx.cv.wait(lk, [] { return (mctx.outstanding_count == 0); });
+        }
+    }
+
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
     IOReactor* this_reactor() const;
@@ -231,6 +305,7 @@ public:
         auto r = this_reactor();
         return r && r->is_worker();
     }
+    IOManagerMetrics& metrics() { return m_iomgr_metrics; }
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -284,6 +359,7 @@ public:
     uint8_t* iobuf_alloc(size_t align, size_t size);
     void iobuf_free(uint8_t* buf);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
+    size_t iobuf_size(uint8_t* buf) const;
 
     /******** Timer related Operations ********/
     int64_t idle_timeout_interval_usec() const { return -1; };
@@ -311,6 +387,10 @@ private:
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
     void start_spdk();
+    void stop_spdk();
+
+    void hugetlbfs_umount();
+
     void mempool_metrics_populate();
     void register_mempool_metrics(struct rte_mempool* mp);
 
@@ -328,6 +408,7 @@ private:
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
     [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
+    [[nodiscard]] bool is_spdk_inited() const;
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
@@ -363,8 +444,10 @@ private:
     sisl::IDReserver m_thread_idx_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
-    bool m_is_spdk = false;
-    bool m_is_spdk_inited_externally = false;
+    bool m_is_spdk{false};
+    bool m_spdk_reinit_needed{false};
+
+    IOManagerMetrics m_iomgr_metrics;
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
 };
 
@@ -372,7 +455,13 @@ struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz) override;
     void aligned_free(uint8_t* b) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+    size_t buf_size(uint8_t* buf) const override;
 };
 
+struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
+    uint8_t* aligned_alloc(size_t align, size_t sz) override;
+    void aligned_free(uint8_t* b) override;
+    uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+};
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr

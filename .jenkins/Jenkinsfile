@@ -7,6 +7,13 @@ pipeline {
         MASTER_BRANCH = 'master'
         TESTING_BRANCH = 'testing/v*'
         STABLE_BRANCH = 'stable/v*'
+        LAST_COMMITS = ''
+        built_chain = ''
+        failed_pkg = ""
+    }
+
+    parameters {
+        string(defaultValue: "", description: 'UpstreamTriggered', name: 'upstream_triggered')
     }
 
     stages {
@@ -19,6 +26,7 @@ pipeline {
                 script {
                     sh(script: "sed -Ei 's,version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
                     BUILD_MISSING = "--build cascade --build missing"
+                    LAST_COMMITS = sh(script: "git log -n 2 --pretty=short", returnStdout: true)
                 }
             }
         }
@@ -42,6 +50,7 @@ pipeline {
                     CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
                     TAG = "${VER}@${CONAN_USER}/${CONAN_CHANNEL}"
                     slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* is building."
+                    env.pkg_version = "${PROJECT}/${TAG}"
                 }
             }
         }
@@ -62,7 +71,7 @@ pipeline {
                 axes {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'debug', 'release', 'test'
+                        values 'debug', 'test'
                     }
                     axis {
                         name 'COVERAGE'
@@ -71,7 +80,7 @@ pipeline {
                 excludes { exclude {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'release', 'test'
+                        values 'test'
                     }
                     axis {
                         name 'COVERAGE'
@@ -98,16 +107,18 @@ pipeline {
                             sh "conan create ${BUILD_MISSING} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
                         }
                     }
+
                     stage("Deploy") {
                         when { allOf {
                             expression { "${COVERAGE}" == 'False' }
-                            expression { not { branch "PR_*" } }
+                            expression { !(env.BRANCH_NAME =~ /PR-/) }
                         } }
                         steps {
                             sh "conan user -r ebay-local -p ${ARTIFACTORY_PASS} _service_sds"
                             sh "conan upload ${PROJECT}/${TAG} -c --all -r ebay-local"
                         }
                     }
+
                     stage('Coverage') {
                         when { not { anyOf {
                             branch "${STABLE_BRANCH}"
@@ -149,14 +160,86 @@ pipeline {
                 }
             }
         }
+
+        stage("Downstream Build") {
+            when { allOf {
+               expression { (env.BRANCH_NAME == "${MASTER_BRANCH}") }
+               expression { (!"${upstream_triggered}") || ("${upstream_triggered}" == "") }
+            } }
+        
+            stages {
+                stage('Homestore') {
+                    steps {
+                        script {
+                            built_chain = env.pkg_version
+                            def hs_res = build job: "Homestore/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "$hs_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "Homestore" } }
+                    }
+                }
+                stage('SCST Connector') {
+                    steps {
+                        script {
+                            built_chain = env.pkg_version
+                            def scst_res = build job: "SCST Connector/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "scst_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "SCST Connector" } }
+                    }
+                }
+                stage('NuBlox Logstore') {
+                    steps {
+                        script {
+                            def nls_res = build job: "Nublox Logstore/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "nls_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "Nublox Logstore" } }
+                    }
+                }
+                stage('Homestore BDev') {
+                    steps {
+                        script {
+                            def hsbdev_res = build job: "Homestore Bdev/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "$hsbdev_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "Homestore BDev" } }
+                    }
+                }
+                stage('SPDK Connector') {
+                    steps {
+                        script {
+                            def spdk_res = build job: "SPDK Connector/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "$spdk_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "SPDK Connector" } }
+                    }
+                }
+            }
+        }
     }
 
     post {
         failure {
+            script {
+                if ("${failed_pkg}" != "") {
+                    slackSend color: '#E43237', channel: '#homestore-build', message: "@here IOManager's downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\n*Last 2 commits:* ```${LAST_COMMITS}```\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
+                }
+            }
             slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
         }
         success {
-            slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has completed."
+            slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has completed successfully."
         }
     }
 }

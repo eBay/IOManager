@@ -6,6 +6,7 @@
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
+#include <utility/thread_factory.hpp>
 
 extern "C" {
 #include <spdk/env.h>
@@ -16,8 +17,13 @@ using log_level = spdlog::level::level_enum;
 
 THREAD_BUFFER_INIT;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS)
-SDS_OPTIONS_ENABLE(logging, iomgr)
+SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
+
+SDS_OPTION_GROUP(test_iomgr,
+                 (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+
+#define ENABLED_OPTIONS logging, iomgr, test_iomgr
+SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 using namespace iomgr;
 
@@ -30,10 +36,8 @@ static constexpr size_t each_thread_size = total_dev_size / nthreads;
 // static constexpr size_t max_ios_per_thread = 10000000;
 static constexpr size_t max_ios_per_thread = 10000;
 
-#define g_aio_iface iomanager.default_drive_interface()
+#define g_drive_iface iomanager.default_drive_interface()
 
-// std::shared_ptr< AioDriveInterface > g_aio_iface;
-// std::shared_ptr< SpdkDriveInterface > g_aio_iface;
 io_device_ptr g_iodev = nullptr;
 
 std::atomic< size_t > next_available_range = 0;
@@ -75,21 +79,17 @@ static void do_write_io(size_t offset) {
     wbuf.fill(offset);
 
     // memset(wbuf, offset, io_size);
-    g_aio_iface->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_drive_iface->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Write on Offset {}", offset);
 }
 
 static void do_read_io(size_t offset) {
     std::array< size_t, io_size / sizeof(size_t) > rbuf;
-    g_aio_iface->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_drive_iface->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Read on Offset {}", offset);
 }
 
 static void issue_preload() {
-    static std::once_flag flag1;
-    std::call_once(flag1,
-                   [&]() { g_iodev = g_aio_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR); });
-
     if (work.next_io_offset >= work.offset_end) {
         work.is_preload_phase = false;
         LOGINFO("We are done with the preload");
@@ -114,15 +114,22 @@ static void issue_rw_io() {
 
 static void do_verify() {
     LOGINFO("All IOs completed for this thread, running verification");
-    std::array< size_t, io_size / sizeof(size_t) > rbuf;
-    for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
-        g_aio_iface->sync_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset);
-        for (auto i = 0u; i < rbuf.size(); ++i) {
-            assert(rbuf[i] == offset);
-        }
-    }
-    LOGINFO("Verification successful for this thread");
-    runner.job_done();
+    auto sthread = sisl::named_thread("verify_thread", []() mutable {
+        iomanager.run_io_loop(false, nullptr, [](bool is_started) {
+            if (is_started) {
+                std::array< size_t, io_size / sizeof(size_t) > rbuf;
+                for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
+                    g_drive_iface->sync_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset);
+                    for (auto i = 0u; i < rbuf.size(); ++i) {
+                        assert(rbuf[i] == offset);
+                    }
+                }
+                LOGINFO("Verification successful for this thread");
+                runner.job_done();
+            }
+        });
+    });
+    sthread.detach();
 }
 
 static void on_io_completion(int64_t res, uint8_t* cookie) {
@@ -150,35 +157,36 @@ static void init_workload() {
 
 static void on_timeout(void* cookie) {
     uint64_t timeout_id = (uint64_t)cookie;
-    LOGINFO("Received timeout for id = {}", timeout_id);
+    LOGDEBUG("Received timeout for id = {}", timeout_id);
 }
 
-static void on_io_thread_state_change(bool started) {
+static void workload_on_thread([[maybe_unused]] io_thread_addr_t taddr) {
     static std::atomic< uint64_t > _id = 0;
 
-    if (started) {
-        // sleep(2); // Wait for a second for fd to be opened and added before starting IO
-        LOGINFO("New thread created, start workload on that thread");
-        auto hdl1 = iomanager.schedule_thread_timer(1000000, false, (void*)_id.fetch_add(1), on_timeout);
-        auto hdl2 = iomanager.schedule_thread_timer(1000001, false, (void*)_id.fetch_add(1), on_timeout);
-        iomanager.cancel_timer(hdl2);
-        auto hdl3 = iomanager.schedule_thread_timer(50000000, true, (void*)_id.fetch_add(1), on_timeout);
-        init_workload();
-        issue_preload();
-    } else {
-        LOGINFO("This thread is about to exit");
-    }
+    LOGINFO("New thread created, start workload on that thread");
+    auto hdl1 = iomanager.schedule_thread_timer(1000000, false, (void*)_id.fetch_add(1), on_timeout);
+    auto hdl2 = iomanager.schedule_thread_timer(1000001, false, (void*)_id.fetch_add(1), on_timeout);
+    iomanager.cancel_timer(hdl2);
+    auto hdl3 = iomanager.schedule_thread_timer(50000000, true, (void*)_id.fetch_add(1), on_timeout);
+    init_workload();
+    issue_preload();
 }
 
 int main(int argc, char* argv[]) {
-    SDS_OPTIONS_LOAD(argc, argv, logging, iomgr);
-    sds_logging::SetLogger("example");
+    SDS_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
+    sds_logging::SetLogger("test_iomgr");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    // iomanager.start(1, nthreads, false, on_io_thread_state_change);
-    iomanager.start(nthreads, false, on_io_thread_state_change);
-    iomanager.default_drive_interface()->attach_completion_cb(on_io_completion);
+    iomanager.start(nthreads, SDS_OPTIONS["spdk"].as< bool >());
+    g_drive_iface->attach_completion_cb(on_io_completion);
+    g_iodev = g_drive_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR);
+
+    uint8_t* buf = iomanager.iobuf_alloc(512, 8192);
+    LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
+    iomanager.iobuf_free(buf);
+
+    iomanager.run_on(thread_regex::all_io, workload_on_thread, false);
 
     // Wait for IO to finish on all threads.
     runner.wait();

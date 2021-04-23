@@ -1,0 +1,27 @@
+native_include "utility/non_null_ptr.hpp";
+
+namespace iomgrcfg;
+
+attribute "hotswap";
+attribute "deprecated";
+
+table SpdkDriveInterface {
+    /* Number of batched io limit for SPDK request */
+    num_batch_io_limit: uint32 = 2 (hotswap); 
+}
+
+table AioDriveInterface {
+    retry_timeout: uint32 = 1000 (hotswap);
+}
+
+table IomgrSettings {
+    spdk: SpdkDriveInterface;
+    aio : AioDriveInterface;
+    cpuset_path: string;
+
+    // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
+    max_msgs_before_yield: uint32 = 100 (hotswap);
+    max_resubmit_cnt: uint32 = 3 (hotswap); // it is max resubmit cnt of io in case of error
+}
+
+root_type IomgrSettings;
