@@ -94,12 +94,15 @@ public:
     iomgr_drive_type get_drive_type(const std::string& devname) const override;
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
+    static constexpr auto max_wait_sync_io_us = 5us;
+    static constexpr auto min_wait_sync_io_us = 0us;
+
 private:
     void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
     void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
-    io_device_ptr _real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type);
-    void _open_dev_in_worker(const io_device_ptr& iodev);
+    io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
+    void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
@@ -121,10 +124,6 @@ private:
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
-
-    static constexpr auto max_wait_sync_io_us = 5us;
-    static constexpr auto min_wait_sync_io_us = 0us;
-    static thread_local int s_num_user_sync_devs;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)

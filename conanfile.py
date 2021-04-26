@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "4.1.23"
+    version = "4.1.24"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -23,7 +23,7 @@ class IOMgrConan(ConanFile):
         'shared=False',
         'fPIC=True',
         'coverage=False',
-        'sanitize=False',
+        'sanitize=True',
         'testing=full',
         )
 
@@ -41,6 +41,7 @@ class IOMgrConan(ConanFile):
             "libevent/2.1.11",
             "spdk/20.07.y",
             "openssl/1.1.1k",
+            "isa-l/2.21.0",
             )
     build_requires = (
                 "gtest/1.10.0",
@@ -50,6 +51,8 @@ class IOMgrConan(ConanFile):
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
 
     def configure(self):
+        if not self.settings.build_type == "Debug":
+            self.options.sanitize = False
         if self.settings.compiler != "gcc" or self.options.sanitize:
             self.options.coverage = False
 

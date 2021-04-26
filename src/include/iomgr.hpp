@@ -17,7 +17,16 @@ extern "C" {
 #include <utility/thread_buffer.hpp>
 #include <utility/atomic_counter.hpp>
 #include <fds/sparse_vector.hpp>
+
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
 #include <folly/Synchronized.h>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "iomgr_msg.hpp"
 #include "reactor.hpp"
 #include "iomgr_timer.hpp"
@@ -373,6 +382,7 @@ public:
                                          timer_callback_t&& timer_fn);
 
     void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
+    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
 
 private:
     IOManager();
@@ -407,7 +417,6 @@ private:
 
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
-    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
     [[nodiscard]] bool is_spdk_inited() const;
 
 private:

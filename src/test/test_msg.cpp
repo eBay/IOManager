@@ -109,7 +109,7 @@ public:
     }
 
     static const uint64_t early_tolerance_ns = 500 * 1000;
-    static const uint64_t late_tolerance_ns = 2 * 1000 * 1000;
+    static const uint64_t late_tolerance_ns = 3 * 1000 * 1000;
 
     static void validate_timeout(void* arg) {
         timer_test_info* ti = reinterpret_cast< timer_test_info* >(arg);
