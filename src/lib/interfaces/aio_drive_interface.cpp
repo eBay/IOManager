@@ -30,7 +30,17 @@
 #endif
 
 #include <sds_logging/logging.h>
+
+// TODO: Remove this once the problem is fixed in flip
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 #include <flip/flip.hpp>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "include/iomgr.hpp"
 #include "include/aio_drive_interface.hpp"
 

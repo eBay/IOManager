@@ -6,7 +6,16 @@
 #include <fds/utils.hpp>
 #include <filesystem>
 #include <thread>
+// TODO: Remove this once the problem is fixed in flip
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 #include <flip/flip.hpp>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 extern "C" {
 #include <spdk/env.h>
 #include <spdk/thread.h>
