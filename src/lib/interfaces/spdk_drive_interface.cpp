@@ -150,7 +150,6 @@ static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
         if (cur_wait_us > SpdkDriveInterface::min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
     } while (!ctx->done);
     destroy_temp_spdk_thread();
-    ctx->done = true;
 }
 
 static void create_dev_internal(std::shared_ptr< creat_ctx > ctx) {
