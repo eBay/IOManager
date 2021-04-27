@@ -23,7 +23,7 @@ class IOMgrConan(ConanFile):
         'shared=False',
         'fPIC=True',
         'coverage=False',
-        'sanitize=True',
+        'sanitize=False',
         'testing=full',
         )
 
