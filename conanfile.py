@@ -52,9 +52,9 @@ class IOMgrConan(ConanFile):
 
     def configure(self):
         if not self.settings.build_type == "Debug":
-            self.options.sanitize = False
-        if self.settings.compiler != "gcc" or self.options.sanitize:
             self.options.coverage = False
+        if not self.options.coverage and self.settings.build_type == "Debug":
+            self.options.sanitize = True
 
     def build(self):
         cmake = CMake(self)
