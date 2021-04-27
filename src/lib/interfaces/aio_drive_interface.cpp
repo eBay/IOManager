@@ -1,7 +1,6 @@
 //
 // Created by Kadayam, Hari on 02/04/18.
 //
-#include <folly/Exception.h>
 #include <string>
 #include <iostream>
 #include <sys/types.h>
@@ -14,7 +13,16 @@
 #include <sys/epoll.h>
 #include <fmt/format.h>
 #include <filesystem>
+
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
+#include <folly/Exception.h>
 #include "iomgr_config.hpp"
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef __linux__
 #include <linux/fs.h>
@@ -22,7 +30,17 @@
 #endif
 
 #include <sds_logging/logging.h>
+
+// TODO: Remove this once the problem is fixed in flip
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 #include <flip/flip.hpp>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "include/iomgr.hpp"
 #include "include/aio_drive_interface.hpp"
 
@@ -315,7 +333,7 @@ void AioDriveInterface::retry_io() {
 void AioDriveInterface::push_retry_list(struct iocb* iocb) {
     auto info = (iocb_info_t*)iocb;
     COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
-    LOGINFO("adding io into retry list: {}", info->to_string());
+    LOGDEBUGMOD(iomgr, "adding io into retry list: {}", info->to_string());
     _aio_ctx->push_retry_list(iocb);
     if (!_aio_ctx->timer_set) {
         _aio_ctx->timer_set = true;
@@ -332,7 +350,6 @@ bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
 
     if (errno == EAGAIN) {
         COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
-        LOGINFO("adding io into retry list: {}", info->to_string());
         push_retry_list(iocb);
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);

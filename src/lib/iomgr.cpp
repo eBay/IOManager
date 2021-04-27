@@ -203,13 +203,15 @@ void IOManager::start_spdk() {
     if (!is_spdk_inited()) {
         struct spdk_env_opts opts;
         struct spdk_env_opts* p_opts{nullptr};
+        std::string corelist;
+        std::string va_mode;
         if (!m_spdk_reinit_needed) {
             spdk_env_opts_init(&opts);
             opts.name = "hs_code";
             opts.shm_id = -1;
 
             // Set VA mode if given
-            auto va_mode = std::string("pa");
+            va_mode = std::string("pa");
             try {
                 va_mode = SDS_OPTIONS["iova-mode"].as< std::string >();
                 LOGDEBUG("Using IOVA = {} mode", va_mode);
@@ -222,7 +224,7 @@ void IOManager::start_spdk() {
             if (std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 std::ifstream ifs(cpuset_path);
-                std::string corelist((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
+                corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
                 corelist.erase(std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
                 corelist = "[" + corelist + "]";
                 LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
