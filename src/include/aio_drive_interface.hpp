@@ -24,7 +24,7 @@ using namespace std;
 using Clock = std::chrono::steady_clock;
 
 namespace iomgr {
-#define MAX_OUTSTANDING_IO 200               // if max outstanding IO is more than 200 then io_submit will fail.
+#define MAX_OUTSTANDING_IO 200 // if max outstanding IO is more than 200 then io_submit will fail.
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
@@ -153,9 +153,7 @@ struct aio_thread_context {
         submitted_aio += count;
     }
 
-    void push_retry_list(struct iocb* iocb) {
-        iocb_retry_list.push(static_cast< iocb_info_t* >(iocb));
-    }
+    void push_retry_list(struct iocb* iocb) { iocb_retry_list.push(static_cast< iocb_info_t* >(iocb)); }
 
     struct iocb* pop_retry_list() {
         if (!iocb_retry_list.empty()) {
@@ -329,7 +327,7 @@ private:
     ssize_t _sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
 
 private:
-    static thread_local aio_thread_context* _aio_ctx;
+    static thread_local aio_thread_context* t_aio_ctx;
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
