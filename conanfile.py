@@ -67,18 +67,20 @@ class IOMgrConan(ConanFile):
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
 
+        run_tests = True
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
-
-            if self.options.coverage:
+            elif self.options.coverage:
                 definitions['CONAN_BUILD_COVERAGE'] = 'ON'
                 test_target = 'coverage'
+            else:
+                run_tests = False
 
         cmake.configure(defs=definitions)
         cmake.build()
         # Only test in Sanitizer mode, Coverage mode or Release mode
-        if self.options.sanitize or self.settings.build_type != "Debug":
+        if run_tests:
             cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
