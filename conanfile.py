@@ -50,30 +50,36 @@ class IOMgrConan(ConanFile):
     generators = "cmake"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
 
+    def config_options(self):
+        if self.settings.build_type != "Debug":
+            del self.options.sanitize
+            del self.options.coverage
+
     def configure(self):
-        if not self.settings.build_type == "Debug":
-            self.options.coverage = False
-        if not self.options.coverage and self.settings.build_type == "Debug":
-            self.options.sanitize = True
+        if self.settings.build_type == "Debug":
+            if self.options.coverage and self.options.sanitize:
+                raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
 
     def build(self):
         cmake = CMake(self)
-        definitions = {'CONAN_TEST_TARGET': 'off',
+        definitions = {'CONAN_TEST_TARGET': self.options.testing,
                        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
 
-        if self.options.sanitize:
-            definitions['MEMORY_SANITIZER_ON'] = 'ON'
+        if self.settings.build_type == "Debug":
+            if self.options.sanitize:
+                definitions['MEMORY_SANITIZER_ON'] = 'ON'
 
-        definitions['CONAN_TEST_TARGET'] = self.options.testing
-        if self.options.coverage:
-            definitions['CONAN_BUILD_COVERAGE'] = 'ON'
-            test_target = 'coverage'
+            if self.options.coverage:
+                definitions['CONAN_BUILD_COVERAGE'] = 'ON'
+                test_target = 'coverage'
 
         cmake.configure(defs=definitions)
         cmake.build()
-        cmake.test(target=test_target, output_on_failure=True)
+        # Only test in Sanitizer mode, Coverage mode or Release mode
+        if self.options.sanitize or self.settings.build_type != "Debug":
+            cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
@@ -86,10 +92,11 @@ class IOMgrConan(ConanFile):
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
         self.cpp_info.cxxflags.append("-fconcepts")
-        if self.options.sanitize:
-            self.cpp_info.sharedlinkflags.append("-fsanitize=address")
-            self.cpp_info.exelinkflags.append("-fsanitize=address")
-            self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
-            self.cpp_info.exelinkflags.append("-fsanitize=undefined")
-        elif self.options.coverage == 'True':
-            self.cpp_info.libs.append('gcov')
+        if self.settings.build_type == "Debug":
+            if  self.options.sanitize:
+                self.cpp_info.sharedlinkflags.append("-fsanitize=address")
+                self.cpp_info.exelinkflags.append("-fsanitize=address")
+                self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
+                self.cpp_info.exelinkflags.append("-fsanitize=undefined")
+            elif self.options.coverage == 'True':
+                self.cpp_info.libs.append('gcov')
