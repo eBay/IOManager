@@ -30,17 +30,19 @@ uint64_t get_elapsed_time_ns(Clock::time_point startTime) {
 #define MAX_EVENTS 20
 
 static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
-    IODevice* iodev1 = (IODevice*)ev1.data.ptr;
-    IODevice* iodev2 = (IODevice*)ev2.data.ptr;
+    const IODevice* iodev1 = (const IODevice*)ev1.data.ptr;
+    const IODevice* iodev2 = (const IODevice*)ev2.data.ptr;
 
     // In case of equal priority, pick global fd which could get rescheduled
-    if (iodev1->pri == iodev2->pri) { return iodev1->is_global(); }
-    return (iodev1->pri > iodev2->pri);
+    if (iodev1->priority() == iodev2->priority()) { return iodev1->is_global(); }
+    return (iodev1->priority() > iodev2->priority());
 }
 
 IOReactorEPoll::IOReactorEPoll() : m_msg_q() {}
 
 bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
+    int evfd{-1};
+
     // Create a epollset for one per thread
     m_epollfd = epoll_create1(0);
     if (m_epollfd < 1) {
@@ -54,18 +56,14 @@ bool IOReactorEPoll::reactor_specific_init_thread(const io_thread_t& thr) {
     REACTOR_LOG(TRACE, iomgr, thr->thread_addr, "EPoll created: {}", m_epollfd);
 
     // Create a message fd and add it to tht epollset
-    m_msg_iodev = std::make_shared< IODevice >();
-    m_msg_iodev->dev = backing_dev_t(eventfd(0, EFD_NONBLOCK));
-    if (m_msg_iodev->fd() == -1) {
+    evfd = eventfd(0, EFD_NONBLOCK);
+    if (evfd == -1) {
         assert(0);
         REACTOR_LOG(ERROR, base, thr->thread_addr, "Unable to open the eventfd, marking this as non-io reactor");
         goto error;
     }
-    m_msg_iodev->ev = EPOLLIN;
-    m_msg_iodev->pri = 1; // Set message fd as high priority. TODO: Make multiple messages fd for various priority
-    REACTOR_LOG(INFO, base, thr->thread_addr, "Creating a message event fd {} and add to this thread epoll fd {}",
-                m_msg_iodev->fd(), m_epollfd)
-    if (add_iodev_to_reactor(m_msg_iodev, thr) == -1) { goto error; }
+    m_msg_iodev = iomanager.generic_interface()->make_io_device(backing_dev_t{evfd}, EPOLLIN, 1 /* pri */, nullptr,
+                                                                true /* thread_dev */, nullptr);
 
     // Create a per thread timer
     m_thread_timer = std::make_unique< timer_epoll >(iothread_self());
@@ -86,7 +84,7 @@ error:
 
 void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
     if (m_msg_iodev && (m_msg_iodev->fd() != -1)) {
-        remove_iodev_from_reactor(m_msg_iodev, thr);
+        remove_iodev(m_msg_iodev, thr);
         close(m_msg_iodev->fd());
     }
 
@@ -144,7 +142,7 @@ void IOReactorEPoll::listen() {
     }
 }
 
-int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
+int IOReactorEPoll::add_iodev_internal(const io_device_const_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     struct epoll_event ev;
     ev.events = EPOLLET | EPOLLEXCLUSIVE | iodev->ev;
     ev.data.ptr = (void*)iodev.get();
@@ -158,7 +156,7 @@ int IOReactorEPoll::_add_iodev_to_reactor(const io_device_ptr& iodev, [[maybe_un
     return 0;
 }
 
-int IOReactorEPoll::_remove_iodev_from_reactor(const io_device_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
+int IOReactorEPoll::remove_iodev_internal(const io_device_const_ptr& iodev, [[maybe_unused]] const io_thread_t& thr) {
     if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
         LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
@@ -217,7 +215,7 @@ void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
     --m_io_threads[0]->m_metrics->outstanding_ops;
 }
 
-bool IOReactorEPoll::is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const {
+bool IOReactorEPoll::is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const {
     return (!iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev, thread));
 }
 } // namespace iomgr

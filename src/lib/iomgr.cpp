@@ -579,12 +579,12 @@ bool IOManager::is_spdk_inited() const {
 }
 
 /****** IODevice related ********/
-IODevice::IODevice() {
+IODevice::IODevice(const int p, const thread_specifier scope) : thread_scope{scope}, pri{p} {
     m_thread_local_ctx.reserve(IOManager::max_io_threads);
     creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
 }
 
-std::string IODevice::dev_id() {
+std::string IODevice::dev_id() const {
     if (std::holds_alternative< int >(dev)) {
         return std::to_string(fd());
     } else if (std::holds_alternative< spdk_bdev_desc* >(dev)) {
@@ -594,8 +594,8 @@ std::string IODevice::dev_id() {
     }
 }
 
-spdk_bdev_desc* IODevice::bdev_desc() { return std::get< spdk_bdev_desc* >(dev); }
-spdk_bdev* IODevice::bdev() { return spdk_bdev_desc_get_bdev(bdev_desc()); }
+spdk_bdev_desc* IODevice::bdev_desc() const { return std::get< spdk_bdev_desc* >(dev); }
+spdk_bdev* IODevice::bdev() const { return spdk_bdev_desc_get_bdev(bdev_desc()); }
 spdk_nvmf_qpair* IODevice::nvmf_qp() const { return std::get< spdk_nvmf_qpair* >(dev); }
 
 bool IODevice::is_global() const { return (!std::holds_alternative< io_thread_t >(thread_scope)); }

@@ -71,7 +71,6 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
                   "Unexpected dev type to open {}", dev_type);
 #endif
 
-    /* it doesn't need to keep track of any fds */
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
         folly::throwSystemError(fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
@@ -79,14 +78,12 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
         return nullptr;
     }
 
-    auto iodev = std::make_shared< IODevice >();
-    iodev->dev = backing_dev_t(fd);
-    iodev->thread_scope = thread_regex::all_io;
-    iodev->pri = 9;
-    iodev->io_interface = this;
+    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
 
+    // We don't need to add the device to each thread, because each AioInterface thread context add an
+    // event fd and read/write use this device fd to control with iocb.
     LOGINFO("Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
     return iodev;
 }

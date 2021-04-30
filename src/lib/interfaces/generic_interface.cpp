@@ -21,7 +21,7 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
         if (r) {
             // Select one thread among reactor in possible round robin fashion and add it there.
             auto& thr = r->select_thread();
-            _add_to_thread(iodev, thr);
+            add_to_my_reactor(iodev, thr);
             iodev->ready = true;
         } else {
             LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
@@ -37,7 +37,7 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
                 [this, iodev, add_comp_cb](io_thread_addr_t taddr) {
                     LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
                                 iomanager.this_reactor()->reactor_idx(), taddr);
-                    _add_to_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
+                    add_to_my_reactor(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
 
                     // If this thread is the last one to finish adding to reactors, then mark it ready and call the cb
                     if (iodev->thread_op_pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
@@ -75,7 +75,7 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remo
     if (iodev->is_my_thread_scope()) {
         auto r = iomanager.this_reactor();
         if (r) {
-            _remove_from_thread(iodev, std::get< io_thread_t >(iodev->thread_scope));
+            remove_from_my_reactor(iodev, iodev->per_thread_scope());
         } else {
             LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
                       "message to an io thread");
@@ -90,7 +90,7 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remo
                 [this, iodev, remove_comp_cb](io_thread_addr_t taddr) {
                     LOGDEBUGMOD(iomgr, "IODev {} is being removed from thread {}.{}", iodev->dev_id(),
                                 iomanager.this_reactor()->reactor_idx(), taddr);
-                    _remove_from_thread(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
+                    remove_from_my_reactor(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
                     if (iodev->thread_op_pending_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
                         LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
                         iodev->ready = false;
@@ -116,54 +116,56 @@ void IOInterface::on_io_thread_start(const io_thread_t& thr) {
 
     // Add all devices part of this interface to this thread
     for (auto& iodev : m_iodev_map) {
-        _add_to_thread(iodev.second, thr);
+        add_to_my_reactor(iodev.second, thr);
     }
 }
 
 /* This method is expected to be called with interface lock held always */
 void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
     for (auto& iodev : m_iodev_map) {
-        _remove_from_thread(iodev.second, thr);
+        remove_from_my_reactor(iodev.second, thr);
     }
 
     clear_iface_thread_ctx(thr);
 }
 
-void IOInterface::_add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
+void IOInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
-        thr->reactor->add_iodev_to_reactor(iodev, thr);
+        thr->reactor->add_iodev(iodev, thr);
         init_iodev_thread_ctx(iodev, thr);
-        if (!iodev->is_global()) iodev->thread_scope = thr;
     }
 }
 
-void IOInterface::_remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
+void IOInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
         clear_iodev_thread_ctx(iodev, thr);
-        thr->reactor->remove_iodev_from_reactor(iodev, thr);
+        thr->reactor->remove_iodev(iodev, thr);
     }
 }
 
-/*************************** GenericIOInterface ******************************/
-io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                                 bool is_per_thread_dev, const ev_callback& cb) {
+io_device_ptr IOInterface::alloc_io_device(const backing_dev_t dev, const int events_interested, const int pri,
+                                           void* cookie, const thread_specifier& scope, const ev_callback& cb) {
+    auto iodev = std::make_shared< IODevice >(pri, scope);
+    iodev->dev = dev;
+    iodev->cb = cb;
+    iodev->cookie = cookie;
+    iodev->ev = events_interested;
+    iodev->io_interface = this;
+
+    return iodev;
+}
+
+io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const int events_interested, const int pri,
+                                                 void* cookie, const bool is_per_thread_dev, const ev_callback& cb) {
     return make_io_device(dev, events_interested, pri, cookie,
                           is_per_thread_dev ? thread_specifier{iomanager.iothread_self()}
                                             : thread_specifier{thread_regex::all_io},
                           std::move(cb));
 }
 
-io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                                 thread_specifier scope, const ev_callback& cb) {
-    auto iodev = std::make_shared< IODevice >();
-    iodev->dev = dev;
-    iodev->cb = cb;
-    iodev->thread_scope = scope;
-    iodev->pri = pri;
-    iodev->cookie = cookie;
-    iodev->ev = events_interested;
-    iodev->io_interface = this;
-
+io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const int events_interested, const int pri,
+                                                 void* cookie, const thread_specifier& scope, const ev_callback& cb) {
+    auto iodev = alloc_io_device(dev, events_interested, pri, cookie, scope, cb);
     add_io_device(iodev);
     return iodev;
 }

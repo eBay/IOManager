@@ -311,8 +311,8 @@ public:
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
     void clear_iface_thread_ctx(const io_thread_t& thr) override;
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
+    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
 
     /* return true if it queues io.
      * return false if it do completion callback for error.

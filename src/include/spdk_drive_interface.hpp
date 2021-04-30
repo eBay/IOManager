@@ -98,16 +98,16 @@ public:
     static constexpr auto min_wait_sync_io_us = 0us;
 
 private:
-    void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 
     io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);

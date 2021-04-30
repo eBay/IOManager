@@ -24,8 +24,8 @@ private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
     void clear_iface_thread_ctx(const io_thread_t& thr) override;
 
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 
 private:
     spdk_nvmf_tgt* m_nvmf_tgt; // TODO: Make this support a vector of targets which can be added dynamically.

@@ -12,7 +12,7 @@ class IOReactorSPDK : public IOReactor {
 public:
     IOReactorSPDK() = default;
 
-    bool is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const override;
+    bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const override;
     static void deliver_msg_direct(spdk_thread* to_thread, iomgr_msg* msg);
 
 private:
@@ -20,8 +20,8 @@ private:
     bool reactor_specific_init_thread(const io_thread_t& thr) override;
     void reactor_specific_exit_thread(const io_thread_t& thr) override;
     void listen() override;
-    int _add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    int _remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    int add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    int remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
     bool put_msg(iomgr_msg* msg) override;
     bool is_tight_loop_reactor() const override { return true; };
 };

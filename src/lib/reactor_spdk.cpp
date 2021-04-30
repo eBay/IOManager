@@ -43,15 +43,15 @@ void IOReactorSPDK::reactor_specific_exit_thread(const io_thread_t& thr) {
     }
 }
 
-int IOReactorSPDK::_add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
-int IOReactorSPDK::_remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) { return 0; }
+int IOReactorSPDK::add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) { return 0; }
+int IOReactorSPDK::remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) { return 0; }
 
 bool IOReactorSPDK::put_msg(iomgr_msg* msg) {
     spdk_thread_send_msg(addr_to_thread(msg->m_dest_thread)->spdk_thread_impl(), _handle_thread_msg, msg);
     return true;
 }
 
-bool IOReactorSPDK::is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const {
+bool IOReactorSPDK::is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const {
     return (iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev, thread));
 }
 
