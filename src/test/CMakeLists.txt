@@ -30,6 +30,8 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode"))
         # TODO: Disabled till we get the spdk test_iomgr failure is fixed
         # add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
-        add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
+
+        # TODO: Disabled till we fix SDSTOR-4468
+        # add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
     endif()
 endif()
