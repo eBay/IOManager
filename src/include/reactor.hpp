@@ -23,11 +23,12 @@ namespace iomgr {
 #define REACTOR_LOG(level, mod, thr_addr, __l, ...)                                                                    \
     {                                                                                                                  \
         LOG##level##MOD_FMT(BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                            \
-                            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) {                           \
+                            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                   \
                                 fmt::format_to(buf, "[{}:{}] ", file_name(__FILE__), __LINE__);                        \
                                 fmt::format_to(buf, "[IOThread {}.{}] ", m_reactor_num,                                \
                                                (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr)));             \
                                 fmt::format_to(buf, __m, args...);                                                     \
+                                return true;                                                                           \
                             }),                                                                                        \
                             __l, ##__VA_ARGS__);                                                                       \
     }
