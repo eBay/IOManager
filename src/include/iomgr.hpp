@@ -17,6 +17,7 @@ extern "C" {
 #include <utility/thread_buffer.hpp>
 #include <utility/atomic_counter.hpp>
 #include <fds/sparse_vector.hpp>
+#include <fds/malloc_helper.hpp>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -369,6 +370,9 @@ public:
     void iobuf_free(uint8_t* buf);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
+    void set_io_memory_limit(size_t limit);
+    [[nodiscard]] size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
+    [[nodiscard]] size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
 
     /******** Timer related Operations ********/
     int64_t idle_timeout_interval_usec() const { return -1; };
@@ -458,6 +462,9 @@ private:
 
     IOManagerMetrics m_iomgr_metrics;
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
+    size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};
+    size_t m_mem_soft_threshold_size{m_mem_size_limit};
+    size_t m_mem_aggressive_threshold_size{m_mem_size_limit};
 };
 
 struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {

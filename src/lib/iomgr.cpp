@@ -619,6 +619,14 @@ void IOManager::iobuf_free(uint8_t* buf) { sisl::AlignedAllocator::allocator().a
 
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
+void IOManager::set_io_memory_limit(const size_t limit) {
+    m_mem_size_limit = limit;
+    m_mem_soft_threshold_size = IM_DYNAMIC_CONFIG(iomem.soft_mem_release_threshold) * limit / 100;
+    m_mem_aggressive_threshold_size = IM_DYNAMIC_CONFIG(iomem.aggressive_mem_release_threshold) * limit / 100;
+
+    sisl::set_memory_release_rate(IM_DYNAMIC_CONFIG(iomem.mem_release_rate));
+}
+
 /************* Spdk Memory Allocator section ************************/
 uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
     auto buf = (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
@@ -663,6 +671,11 @@ void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b) {
     COUNTER_DECREMENT(iomanager.metrics(), iomem_retained, buf_size(b));
 #endif
     sisl::AlignedAllocatorImpl::aligned_free(b);
+
+    static std::atomic< uint64_t > num_frees{0};
+    if (((num_frees.fetch_add(1, std::memory_order_relaxed) + 1) % IM_DYNAMIC_CONFIG(iomem.limit_check_freq)) == 0) {
+        sisl::release_mem_if_needed(iomanager.soft_mem_threshold(), iomanager.aggressive_mem_threshold());
+    }
 }
 
 uint8_t* IOMgrAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
