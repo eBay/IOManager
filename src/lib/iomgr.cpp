@@ -322,7 +322,7 @@ void IOManager::stop() {
     if (m_is_spdk) { stop_spdk(); }
 }
 
-std::string IOManager::get_version() {
+const std::string IOManager::get_version() {
     return std::string("IOManager v") + PACKAGE_VERSION;
 }
 
