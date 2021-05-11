@@ -173,7 +173,7 @@ public:
     /**
      * @brief Get the IOManager version
      */
-    const std::string& get_version() const;
+    std::string get_version() const;
 
     /**
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
