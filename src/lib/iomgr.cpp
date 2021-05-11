@@ -323,7 +323,7 @@ void IOManager::stop() {
 }
 
 std::string IOManager::get_version() {
-    return "IO-Manager " + std::to_string(PACKAGE_VERSION);
+    return std::string("IOManager v") + PACKAGE_VERSION;
 }
 
 void IOManager::stop_spdk() {
