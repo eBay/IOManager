@@ -179,6 +179,9 @@ int main(int argc, char* argv[]) {
 
     // Start the IOManager
     iomanager.start(nthreads, SDS_OPTIONS["spdk"].as< bool >());
+    std::stringstream ss;
+    ss << iomgr::get_version();
+    LOGINFO("IOManager ver. {}", ss.str());
     g_drive_iface->attach_completion_cb(on_io_completion);
     g_iodev = g_drive_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR);
 

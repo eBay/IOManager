@@ -38,6 +38,7 @@ extern "C" {
 #include <fds/id_reserver.hpp>
 #include <utility/enum.hpp>
 #include <sds_logging/logging.h>
+#include <semver/semver200.h>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -130,6 +131,11 @@ public:
         return (synchronized_async_method_ctx::done);
     }
 };
+
+/**
+ * @brief Get the IOManager version
+ */
+extern const version::Semver200_version get_version();
 
 class IOManager {
 public:
