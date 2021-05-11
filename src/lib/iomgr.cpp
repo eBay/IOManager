@@ -328,6 +328,10 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
+version::Semver200_version IOManager::get_version() {
+    return version::Semver200_version(PACKAGE_VERSION);
+}
+
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
                                     thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);

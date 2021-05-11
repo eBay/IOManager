@@ -174,9 +174,7 @@ public:
     /**
      * @brief Get the IOManager version
      */
-    static version::Semver200_version get_version() {
-        return version::Semver200_version(BOOST_PP_STRINGIZE(PACKAGE_VERSION));
-    }
+    static version::Semver200_version get_version();
 
     /**
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
