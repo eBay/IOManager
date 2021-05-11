@@ -38,6 +38,7 @@ extern "C" {
 #include <fds/id_reserver.hpp>
 #include <utility/enum.hpp>
 #include <sds_logging/logging.h>
+#include <semver/semver200.h>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -173,7 +174,7 @@ public:
     /**
      * @brief Get the IOManager version
      */
-    std::string get_version() const;
+    version::semver200_version get_version() const;
 
     /**
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop

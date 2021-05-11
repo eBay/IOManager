@@ -322,7 +322,9 @@ void IOManager::stop() {
     if (m_is_spdk) { stop_spdk(); }
 }
 
-std::string IOManager::get_version() const { return PACKAGE_VERSION; }
+version::semver200_version IOManager::get_version() const {
+    return version::semver200_version(BOOST_PP_STRINGIZE(PACKAGE_VERSION));
+}
 
 void IOManager::stop_spdk() {
     spdk_thread_lib_fini();
