@@ -171,6 +171,11 @@ public:
     void stop();
 
     /**
+     * @brief Get the IOManager version
+     */
+    std::string get_version();
+
+    /**
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
      * and thus will return only after the loop is exited
      *
