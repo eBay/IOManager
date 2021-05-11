@@ -132,6 +132,11 @@ public:
     }
 };
 
+/**
+ * @brief Get the IOManager version
+ */
+extern const version::Semver200_version get_version();
+
 class IOManager {
 public:
     friend class IOReactor;
@@ -170,11 +175,6 @@ public:
      * condition problems could happen.
      */
     void stop();
-
-    /**
-     * @brief Get the IOManager version
-     */
-    static version::Semver200_version get_version();
 
     /**
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop

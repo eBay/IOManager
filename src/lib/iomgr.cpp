@@ -328,7 +328,7 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
-version::Semver200_version IOManager::get_version() {
+extern const version::Semver200_version get_version() {
     return version::Semver200_version(PACKAGE_VERSION);
 }
 
