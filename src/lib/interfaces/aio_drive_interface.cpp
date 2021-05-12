@@ -62,7 +62,22 @@ using namespace std;
 
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {}
+
+void AioDriveInterface::start() {
+    if (m_zero_buf == nullptr) {
+        m_zero_buf =
+            sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
+        bzero(m_zero_buf, max_buf_size);
+    }
+}
+
+void AioDriveInterface::stop() {
+    if (m_zero_buf) {
+        sisl::AlignedAllocator::allocator().aligned_free(m_zero_buf);
+        m_zero_buf = nullptr;
+    }
+}
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
 #ifndef NDEBUG
@@ -211,15 +226,17 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+#if 0
     uint8_t* zero_buf{nullptr};
     zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
     bzero(zero_buf, max_buf_size);
+#endif
 
     size_t total_sz_written{0};
     while (total_sz_written < size) {
         auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
         auto size_written =
-            sync_write(iodev, reinterpret_cast< const char* >(zero_buf), sz_to_wrt, offset + total_sz_written);
+            sync_write(iodev, reinterpret_cast< const char* >(m_zero_buf), sz_to_wrt, offset + total_sz_written);
         assert((size_written > 0) && static_cast< size_t >(size_written) == sz_to_wrt);
         total_sz_written += size_written;
     }
@@ -228,7 +245,7 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
 
     if (m_comp_cb) { m_comp_cb(errno, cookie); }
 
-    sisl::AlignedAllocator::allocator().aligned_free(zero_buf);
+    // sisl::AlignedAllocator::allocator().aligned_free(zero_buf);
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,

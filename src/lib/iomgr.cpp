@@ -104,6 +104,8 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
             true);
     }
 
+    m_default_drive_iface->start();
+
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
     for (auto i = 0u; i < num_threads; i++) {
@@ -279,6 +281,8 @@ void IOManager::stop() {
         set_state(iomgr_state::stopping);
     }
 
+    m_default_drive_iface->stop();
+
     // Increment stopping threads by 1 and then decrement after sending message to prevent case where there are no
     // IO threads, which hangs the iomanager stop
     m_yet_to_stop_nreactors.increment();
@@ -328,9 +332,7 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
-extern const version::Semver200_version get_version() {
-    return version::Semver200_version(PACKAGE_VERSION);
-}
+extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
                                     thread_regex iface_scope) {

@@ -308,6 +308,8 @@ public:
     virtual void submit_batch() override;
     drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
+    virtual void start() override;
+    virtual void stop() override;
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
@@ -329,6 +331,7 @@ private:
 
 private:
     static thread_local aio_thread_context* t_aio_ctx;
+    uint8_t* m_zero_buf{nullptr};
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
     io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
