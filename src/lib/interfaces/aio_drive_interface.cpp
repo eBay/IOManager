@@ -211,15 +211,27 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    uint64_t range[2];
-    range[0] = offset;
-    range[1] = size;
-    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-    if (ret) {
-        if (m_comp_cb) m_comp_cb(errno, cookie);
-    } else {
-        if (m_comp_cb) m_comp_cb(0, cookie);
+    uint8_t* zero_buf{nullptr};
+    zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
+    bzero(zero_buf, max_buf_size);
+
+    if (size > max_zero_write_size) {
+        LOGINFO("size {} exceed max write size {}", size, max_zero_write_size);
+        size = max_zero_write_size; // written size is returned in completion callback
     }
+
+    size_t total_sz_written{0};
+    while (total_sz_written < size) {
+        auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
+        auto size_written =
+            sync_write(iodev, reinterpret_cast< const char* >(zero_buf), sz_to_wrt, offset + total_sz_written);
+        assert((size_written > 0) && static_cast< size_t >(size_written) == sz_to_wrt);
+        total_sz_written += size_written;
+    }
+
+    if (m_comp_cb) { m_comp_cb(errno, cookie); }
+
+    sisl::AlignedAllocator::allocator().aligned_free(zero_buf);
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
