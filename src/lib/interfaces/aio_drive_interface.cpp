@@ -1,18 +1,20 @@
 //
 // Created by Kadayam, Hari on 02/04/18.
 //
-#include <string>
-#include <iostream>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <assert.h>
-#include <unistd.h>
-#include <sys/uio.h>
-#include <fstream>
-#include <sys/epoll.h>
-#include <fmt/format.h>
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+#include <assert.h>
+#include <fcntl.h>
+#include <fmt/format.h>
+#include <sys/epoll.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -68,7 +70,7 @@ void AioDriveInterface::start() {
     if (m_zero_buf == nullptr) {
         m_zero_buf =
             sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
-        bzero(m_zero_buf, max_buf_size);
+        std::memset(m_zero_buf, 0, max_buf_size);
     }
 }
 
@@ -228,7 +230,7 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
     size_t total_sz_written{0};
     while (total_sz_written < size) {
-        auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
+        const auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
         auto size_written =
             sync_write(iodev, reinterpret_cast< const char* >(m_zero_buf), sz_to_wrt, offset + total_sz_written);
         assert((size_written > 0) && static_cast< size_t >(size_written) == sz_to_wrt);
