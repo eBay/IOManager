@@ -229,10 +229,10 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
 
     uint64_t total_sz_written = 0;
     while (total_sz_written < size) {
-        uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
-                                                                             : (size - total_sz_written)};
+        const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
+                                                                                   : (size - total_sz_written)};
 
-        auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
+        const auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
 
         std::vector< iovec > iov(iovcnt);
         for (uint32_t i = 0; i < iovcnt; ++i) {
