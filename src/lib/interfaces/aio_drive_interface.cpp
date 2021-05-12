@@ -6,15 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-
-#include <assert.h>
-#include <fcntl.h>
-#include <fmt/format.h>
-#include <sys/epoll.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/uio.h>
-#include <unistd.h>
+#include <cassert>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -27,8 +19,15 @@
 #endif
 
 #ifdef __linux__
+#include <fcntl.h>
+#include <fmt/format.h>
 #include <linux/fs.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
 #endif
 
 #include <sds_logging/logging.h>
@@ -65,11 +64,8 @@ using namespace std;
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
-    if (m_zero_buf == nullptr) {
-        m_zero_buf =
-            sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
-        std::memset(m_zero_buf, 0, max_buf_size);
-    }
+    m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
+    std::memset(m_zero_buf, 0, max_buf_size);
 }
 
 AioDriveInterface::~AioDriveInterface() {
@@ -242,29 +238,11 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
 
     iov[iovcnt - 1].iov_len = size - (max_buf_size * (iovcnt - 1));
 
-    auto size_written = sync_writev(iodev, iov, iovcnt, size, offset);
-
-    assert(static_cast< uint64_t >(size_written) == size);
-
-    if (m_comp_cb) { m_comp_cb(errno, cookie); }
-}
-
-#if 0
-void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    size_t total_sz_written{0};
-    while (total_sz_written < size) {
-        const auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
-        auto size_written =
-            sync_write(iodev, reinterpret_cast< const char* >(m_zero_buf), sz_to_wrt, offset + total_sz_written);
-        assert((size_written > 0) && static_cast< size_t >(size_written) == sz_to_wrt);
-        total_sz_written += size_written;
-    }
-
-    assert(static_cast< uint64_t >(total_sz_written) == size);
+    // returned written size is already asserted inside this function;
+    sync_writev(iodev, iov, iovcnt, size, offset);
 
     if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
-#endif
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
