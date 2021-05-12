@@ -29,7 +29,8 @@ namespace iomgr {
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
-static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul; // 1 MB
+static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
+static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
 
 #ifdef linux
 struct iocb_info_t : public iocb {
@@ -281,6 +282,7 @@ public:
 class AioDriveInterface : public DriveInterface {
 public:
     AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
+    ~AioDriveInterface();
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
@@ -308,8 +310,6 @@ public:
     virtual void submit_batch() override;
     drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
-    virtual void start() override;
-    virtual void stop() override;
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;

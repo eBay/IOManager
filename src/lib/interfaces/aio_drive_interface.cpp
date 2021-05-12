@@ -64,9 +64,7 @@ using namespace std;
 
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {}
-
-void AioDriveInterface::start() {
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
     if (m_zero_buf == nullptr) {
         m_zero_buf =
             sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
@@ -74,7 +72,7 @@ void AioDriveInterface::start() {
     }
 }
 
-void AioDriveInterface::stop() {
+AioDriveInterface::~AioDriveInterface() {
     if (m_zero_buf) {
         sisl::AlignedAllocator::allocator().aligned_free(m_zero_buf);
         m_zero_buf = nullptr;
@@ -228,6 +226,31 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    if (size > max_zero_write_size) {
+        LOGINFO("size {} exceed max write size {}, max_iov_cnt: {}", size, max_zero_write_size, IOV_MAX);
+        size = max_zero_write_size;
+    }
+
+    uint32_t iovcnt = size / max_buf_size;
+    if (size % max_buf_size) { ++iovcnt; }
+
+    struct iovec iov[iovcnt];
+    for (uint32_t i = 0; i < iovcnt; ++i) {
+        iov[i].iov_base = m_zero_buf;
+        iov[i].iov_len = max_buf_size;
+    }
+
+    iov[iovcnt - 1].iov_len = size - (max_buf_size * (iovcnt - 1));
+
+    auto size_written = sync_writev(iodev, iov, iovcnt, size, offset);
+
+    assert(static_cast< uint64_t >(size_written) == size);
+
+    if (m_comp_cb) { m_comp_cb(errno, cookie); }
+}
+
+#if 0
+void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
     size_t total_sz_written{0};
     while (total_sz_written < size) {
         const auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
@@ -241,6 +264,7 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
 
     if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
+#endif
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {

@@ -104,8 +104,6 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
             true);
     }
 
-    m_default_drive_iface->start();
-
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
     for (auto i = 0u; i < num_threads; i++) {
@@ -281,8 +279,6 @@ void IOManager::stop() {
         set_state(iomgr_state::stopping);
     }
 
-    m_default_drive_iface->stop();
-
     // Increment stopping threads by 1 and then decrement after sending message to prevent case where there are no
     // IO threads, which hangs the iomanager stop
     m_yet_to_stop_nreactors.increment();
@@ -316,6 +312,7 @@ void IOManager::stop() {
         m_worker_reactors.clear();
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
+        m_default_drive_iface.reset();
         m_drive_ifaces.wlock()->clear();
         m_iface_list.wlock()->clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }

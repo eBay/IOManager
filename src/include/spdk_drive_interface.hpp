@@ -84,9 +84,6 @@ public:
                      bool part_of_batch = false) override;
     void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
 
-    virtual void start() override {}
-    virtual void stop() override {}
-
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
     io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
 
