@@ -24,11 +24,13 @@ using namespace std;
 using Clock = std::chrono::steady_clock;
 
 namespace iomgr {
-#define MAX_OUTSTANDING_IO 200 // if max outstanding IO is more than 200 then io_submit will fail.
+#define MAX_OUTSTANDING_IO 200               // if max outstanding IO is more than 200 then io_submit will fail.
 #define MAX_COMPLETIONS (MAX_OUTSTANDING_IO) // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
+static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
+static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
 
 #ifdef linux
 struct iocb_info_t : public iocb {
