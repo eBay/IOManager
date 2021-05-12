@@ -226,12 +226,6 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-#if 0
-    uint8_t* zero_buf{nullptr};
-    zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
-    bzero(zero_buf, max_buf_size);
-#endif
-
     size_t total_sz_written{0};
     while (total_sz_written < size) {
         auto sz_to_wrt = std::min(size - total_sz_written, static_cast< size_t >(max_buf_size));
@@ -244,8 +238,6 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
     assert(static_cast< uint64_t >(total_sz_written) == size);
 
     if (m_comp_cb) { m_comp_cb(errno, cookie); }
-
-    // sisl::AlignedAllocator::allocator().aligned_free(zero_buf);
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
