@@ -19,12 +19,12 @@ private:
     void listen() override;
     void on_msg_fd_notification();
     void on_user_iodev_notification(IODevice* iodev, int event);
-    int _add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    int _remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    int add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    int remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
     bool put_msg(iomgr_msg* msg) override;
 
     bool is_tight_loop_reactor() const override { return false; };
-    bool is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const override;
+    bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const override;
 
 private:
     int m_epollfd = -1;                             // Parent epoll context for this thread

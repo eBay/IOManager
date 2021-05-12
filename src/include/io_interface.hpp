@@ -8,7 +8,14 @@
 #include <functional>
 #include <variant>
 #include <memory>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
 #include <folly/Synchronized.h>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
 #include "reactor.hpp"
 
 namespace iomgr {
@@ -34,6 +41,12 @@ public:
     void on_io_thread_start(const io_thread_t& thr);
     void on_io_thread_stopped(const io_thread_t& thr);
 
+    io_device_ptr alloc_io_device(const backing_dev_t dev, const int events_interested, const int pri, void* cookie,
+                                  const thread_specifier& scope, const ev_callback& cb);
+    inline io_device_ptr alloc_io_device(const backing_dev_t dev, const int pri, const thread_specifier& scope) {
+        return alloc_io_device(dev, 0, pri, nullptr, scope, nullptr);
+    }
+
     thread_regex scope() const { return m_thread_scope; }
     void set_scope(thread_regex t) { m_thread_scope = t; }
     [[nodiscard]] virtual bool is_spdk_interface() const { return false; }
@@ -41,11 +54,11 @@ public:
 protected:
     virtual void init_iface_thread_ctx(const io_thread_t& thr) = 0;
     virtual void clear_iface_thread_ctx(const io_thread_t& thr) = 0;
-    virtual void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
-    virtual void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
 
-    virtual void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr);
-    virtual void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr);
+    virtual void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
+    virtual void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
 
 protected:
     // std::shared_mutex m_mtx;
@@ -56,16 +69,16 @@ protected:
 
 class GenericIOInterface : public IOInterface {
 public:
-    io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                 thread_specifier scope, const ev_callback& cb);
-    io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                 bool is_per_thread_dev, const ev_callback& cb);
+    io_device_ptr make_io_device(const backing_dev_t dev, const int events_interested, const int pri, void* cookie,
+                                 const thread_specifier& scope, const ev_callback& cb);
+    io_device_ptr make_io_device(const backing_dev_t dev, const int events_interested, const int pri, void* cookie,
+                                 const bool is_per_thread_dev, const ev_callback& cb);
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
+    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
 };
 } // namespace iomgr
 #endif // IOMGR_INTERFACE_HPP

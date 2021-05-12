@@ -23,11 +23,12 @@ namespace iomgr {
 #define REACTOR_LOG(level, mod, thr_addr, __l, ...)                                                                    \
     {                                                                                                                  \
         LOG##level##MOD_FMT(BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                            \
-                            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) {                           \
+                            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                   \
                                 fmt::format_to(buf, "[{}:{}] ", file_name(__FILE__), __LINE__);                        \
                                 fmt::format_to(buf, "[IOThread {}.{}] ", m_reactor_num,                                \
                                                (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr)));             \
                                 fmt::format_to(buf, __m, args...);                                                     \
+                                return true;                                                                           \
                             }),                                                                                        \
                             __l, ##__VA_ARGS__);                                                                       \
     }
@@ -94,20 +95,6 @@ struct io_thread {
 };
 using io_thread_t = std::shared_ptr< io_thread >;
 
-#if 0
-enum class thread_regex {
-    least_busy_io,         // Represents least busy io (could be iloop or tloop thread)
-    all_io,                // Represents all io threads
-    least_busy_tloop,      // Represents one tight loop thread which least busy at present
-    all_tloop,             // Represents all tight loop threads
-    least_busy_iloop,      // Represents one interrupt/epoll loop thread which least busy at present
-    all_iloop,             // Represents all interrupt loop threads
-    all_iomgr_created_io,  // Represents all IO threads created by iomgr (could be iloop or tloop)
-    all_user_created_io,   // Represents all user created threads (could be iloop or tloop)
-    rand_iomgr_created_io, // Represents any one random IO thread created by iomgr
-};
-#endif
-
 ENUM(thread_regex, uint8_t,
      all_io,            // Represents all io threads
      least_busy_io,     // Represents least busy io thread (including worker + user)
@@ -127,28 +114,35 @@ struct timer_info;
 using ev_callback = std::function< void(IODevice* iodev, void* cookie, int events) >;
 using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 
-struct IODevice {
+inline backing_dev_t null_backing_dev() { return backing_dev_t{std::in_place_type< spdk_bdev_desc* >, nullptr}; }
+
+class IODevice {
+public:
+    IODevice(const int pri, const thread_specifier scope);
+    ~IODevice() = default;
+
+public:
     ev_callback cb{nullptr};
     std::string devname;
     std::string alias_name;
     backing_dev_t dev;
     int ev{0};
     io_thread_t creator;
-    thread_specifier thread_scope{thread_regex::all_io};
-    int pri = 1;
-    void* cookie = nullptr;
+    void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
     sisl::sparse_vector< void* > m_thread_local_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
 
-    IODevice();
-    ~IODevice() = default;
+private:
+    thread_specifier thread_scope{thread_regex::all_io};
+    int pri{1};
 
-    int fd() { return std::get< int >(dev); }
-    spdk_bdev_desc* bdev_desc();
-    spdk_bdev* bdev();
+public:
+    int fd() const { return std::get< int >(dev); }
+    spdk_bdev_desc* bdev_desc() const;
+    spdk_bdev* bdev() const;
     bool is_spdk_dev() const {
         return (std::holds_alternative< spdk_bdev_desc* >(dev) || std::holds_alternative< spdk_nvmf_qpair* >(dev));
     }
@@ -157,16 +151,15 @@ struct IODevice {
     bool is_global() const;
     bool is_my_thread_scope() const;
     const io_thread_t& per_thread_scope() const { return std::get< io_thread_t >(thread_scope); }
-    thread_regex global_scope() { return std::get< thread_regex >(thread_scope); }
+    thread_regex global_scope() const { return std::get< thread_regex >(thread_scope); }
 
-    std::string dev_id();
+    inline int priority() const { return pri; }
+    std::string dev_id() const;
     void clear();
-    /*bool is_initialized() const {
-        return (valid_for_nthreads.load(std::memory_order_acquire) == added_to_threads.load(std::memory_order_acquire));
-    }*/
 };
 using io_device_ptr = std::shared_ptr< IODevice >;
-using iodev_selector_t = std::function< bool(const io_device_ptr&) >;
+using io_device_const_ptr = std::shared_ptr< const IODevice >;
+using iodev_selector_t = std::function< bool(const io_device_const_ptr&) >;
 
 /****************** Reactor related ************************/
 struct iomgr_msg;
@@ -196,15 +189,15 @@ public:
     void stop_io_thread(const io_thread_t& thr);
 
     const io_thread_t& addr_to_thread(io_thread_addr_t addr);
-    int add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
-    int remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr);
+    int add_iodev(const io_device_const_ptr& iodev, const io_thread_t& thr);
+    int remove_iodev(const io_device_const_ptr& iodev, const io_thread_t& thr);
 
     const std::vector< io_thread_t >& io_threads() const { return m_io_threads; }
 
     virtual bool put_msg(iomgr_msg* msg) = 0;
     virtual void init();
     virtual void stop();
-    virtual bool is_iodev_addable(const io_device_ptr& iodev, const io_thread_t& thread) const;
+    virtual bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const;
     virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
     virtual void handle_msg(iomgr_msg* msg);
     virtual const char* loop_type() const = 0;
@@ -214,8 +207,8 @@ public:
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
     virtual void reactor_specific_exit_thread(const io_thread_t& thr) = 0;
-    virtual int _add_iodev_to_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
-    virtual int _remove_iodev_from_reactor(const io_device_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual int remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
 
     void notify_thread_state(bool is_started);
     // const io_thread_t& sthread_from_addr(io_thread_addr_t addr);

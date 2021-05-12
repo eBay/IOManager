@@ -71,7 +71,7 @@ pipeline {
                 axes {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'debug', 'test'
+                        values 'sanitize', 'debug', 'test'
                     }
                     axis {
                         name 'COVERAGE'
@@ -80,7 +80,7 @@ pipeline {
                 excludes { exclude {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'test'
+                        values 'sanitize', 'test'
                     }
                     axis {
                         name 'COVERAGE'
@@ -100,17 +100,28 @@ pipeline {
                     }
 
                     stage("Build") {
-                        when {
+                        when { allOf {
                             expression { "${COVERAGE}" == 'False' }
-                        }
+                            expression { "${BUILD_TYPE}" != 'sanitize' }
+                        } }
                         steps {
                             sh "conan create ${BUILD_MISSING} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
+                        }
+                    }
+
+                    stage("Sanitize") {
+                        when { allOf {
+                            expression { "${BUILD_TYPE}" == 'sanitize' }
+                        } }
+                        steps {
+                            sh "conan create ${BUILD_MISSING} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG}"
                         }
                     }
 
                     stage("Deploy") {
                         when { allOf {
                             expression { "${COVERAGE}" == 'False' }
+                            expression { "${BUILD_TYPE}" != 'sanitize' }
                             expression { !(env.BRANCH_NAME =~ /PR-/) }
                         } }
                         steps {
@@ -180,7 +191,29 @@ pipeline {
                         failure { script { failed_pkg = "Homestore" } }
                     }
                 }
-
+                stage('SCST Connector') {
+                    steps {
+                        script {
+                            built_chain = env.pkg_version
+                            def scst_res = build job: "SCST Connector/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "scst_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "SCST Connector" } }
+                    }
+                }
+                stage('NuBlox Logstore') {
+                    steps {
+                        script {
+                            def nls_res = build job: "Nublox Logstore/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            built_chain = "${built_chain}" + ", " + "nls_res.buildVariables.pkg_version"
+                        }
+                    }
+                    post {
+                        failure { script { failed_pkg = "Nublox Logstore" } }
+                    }
+                }
                 stage('Homestore BDev') {
                     steps {
                         script {

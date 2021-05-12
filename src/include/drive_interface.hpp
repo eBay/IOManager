@@ -69,6 +69,7 @@ public:
                              uint8_t* cookie, bool part_of_batch = false) = 0;
     virtual void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                              bool part_of_batch = false) = 0;
+    virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) = 0;
     virtual size_t get_size(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
     virtual drive_attributes get_attributes(const io_device_ptr& dev) const = 0;
