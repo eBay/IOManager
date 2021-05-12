@@ -222,26 +222,33 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (size == 0) { return; }
-
-    if (size > max_zero_write_size) {
-        LOGINFO("size {} exceed max write size {}, max_iov_cnt: {}", size, max_zero_write_size, IOV_MAX);
-        size = max_zero_write_size;
+    if (size == 0) {
+        assert(false);
+        return;
     }
 
-    uint32_t iovcnt = size / max_buf_size;
-    if (size % max_buf_size) { ++iovcnt; }
+    uint64_t total_sz_written = 0;
+    while (total_sz_written < size) {
+        uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
+                                                                             : (size - total_sz_written)};
 
-    struct iovec iov[iovcnt];
-    for (uint32_t i = 0; i < iovcnt; ++i) {
-        iov[i].iov_base = m_zero_buf;
-        iov[i].iov_len = max_buf_size;
+        auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
+
+        std::vector< iovec > iov(iovcnt);
+        for (uint32_t i = 0; i < iovcnt; ++i) {
+            iov[i].iov_base = m_zero_buf;
+            iov[i].iov_len = max_buf_size;
+        }
+
+        iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
+
+        // returned written sz already asserted in sync_writev;
+        sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+
+        total_sz_written += sz_to_write;
     }
 
-    iov[iovcnt - 1].iov_len = size - (max_buf_size * (iovcnt - 1));
-
-    // returned written size is already asserted inside this function;
-    sync_writev(iodev, iov, iovcnt, size, offset);
+    assert(total_sz_written == size);
 
     if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
