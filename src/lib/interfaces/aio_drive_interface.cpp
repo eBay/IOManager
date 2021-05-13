@@ -241,9 +241,13 @@ void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offs
         }
 
         iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
-
-        // returned written sz already asserted in sync_writev;
-        sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+        try {
+            // returned written sz already asserted in sync_writev;
+            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+        } catch (std::exception& e) {
+            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
+                           iodev->devname, size);
+        }
 
         total_sz_written += sz_to_write;
     }
