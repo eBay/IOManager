@@ -1,18 +1,12 @@
 //
 // Created by Kadayam, Hari on 02/04/18.
 //
-#include <string>
-#include <iostream>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <assert.h>
-#include <unistd.h>
-#include <sys/uio.h>
-#include <fstream>
-#include <sys/epoll.h>
-#include <fmt/format.h>
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <cassert>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -25,8 +19,15 @@
 #endif
 
 #ifdef __linux__
+#include <fcntl.h>
+#include <fmt/format.h>
 #include <linux/fs.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
 #endif
 
 #include <sds_logging/logging.h>
@@ -62,7 +63,17 @@ using namespace std;
 
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
+    m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size);
+    std::memset(m_zero_buf, 0, max_buf_size);
+}
+
+AioDriveInterface::~AioDriveInterface() {
+    if (m_zero_buf) {
+        sisl::AlignedAllocator::allocator().aligned_free(m_zero_buf);
+        m_zero_buf = nullptr;
+    }
+}
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
 #ifndef NDEBUG
@@ -211,15 +222,39 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    uint64_t range[2];
-    range[0] = offset;
-    range[1] = size;
-    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-    if (ret) {
-        if (m_comp_cb) m_comp_cb(errno, cookie);
-    } else {
-        if (m_comp_cb) m_comp_cb(0, cookie);
+    if (size == 0) {
+        assert(false);
+        return;
     }
+
+    uint64_t total_sz_written = 0;
+    while (total_sz_written < size) {
+        const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
+                                                                                   : (size - total_sz_written)};
+
+        const auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
+
+        std::vector< iovec > iov(iovcnt);
+        for (uint32_t i = 0; i < iovcnt; ++i) {
+            iov[i].iov_base = m_zero_buf;
+            iov[i].iov_len = max_buf_size;
+        }
+
+        iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
+        try {
+            // returned written sz already asserted in sync_writev;
+            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+        } catch (std::exception& e) {
+            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
+                           iodev->devname, size);
+        }
+
+        total_sz_written += sz_to_write;
+    }
+
+    assert(total_sz_written == size);
+
+    if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
