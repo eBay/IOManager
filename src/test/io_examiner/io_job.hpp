@@ -37,7 +37,7 @@ public:
     IOJobCfg& operator=(const IOJobCfg&) = default;
     IOJobCfg& operator=(IOJobCfg&&) noexcept = delete;
 
-    uint64_t max_num_ios{100000};
+    std::optional< uint64_t > max_num_ios;
     uint64_t max_io_size{1 * Mi};
     uint64_t qdepth{32u};
     uint64_t max_disk_capacity{10 * Gi};
@@ -180,7 +180,8 @@ public:
     }
 
     bool time_to_stop() const override {
-        return ((m_output.io_count() >= m_cfg.max_num_ios) || (get_elapsed_time_sec(m_start_time) > m_cfg.run_time));
+        return (m_cfg.max_num_ios.has_value() && (m_output.io_count() >= m_cfg.max_num_ios.value())) ||
+            (get_elapsed_time_sec(m_start_time) > m_cfg.run_time);
     }
 
     bool is_job_done() const override { return (m_outstanding_ios.load(std::memory_order_acquire) == 0); }

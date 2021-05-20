@@ -312,6 +312,7 @@ void IOManager::stop() {
         m_worker_reactors.clear();
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
+        m_default_drive_iface.reset();
         m_drive_ifaces.wlock()->clear();
         m_iface_list.wlock()->clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
@@ -328,9 +329,7 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
-extern const version::Semver200_version get_version() {
-    return version::Semver200_version(PACKAGE_VERSION);
-}
+extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
                                     thread_regex iface_scope) {

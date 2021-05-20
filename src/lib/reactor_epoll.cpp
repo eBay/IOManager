@@ -33,8 +33,6 @@ static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     const IODevice* iodev1 = (const IODevice*)ev1.data.ptr;
     const IODevice* iodev2 = (const IODevice*)ev2.data.ptr;
 
-    // In case of equal priority, pick global fd which could get rescheduled
-    if (iodev1->priority() == iodev2->priority()) { return iodev1->is_global(); }
     return (iodev1->priority() > iodev2->priority());
 }
 

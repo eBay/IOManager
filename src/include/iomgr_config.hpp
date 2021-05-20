@@ -3,8 +3,7 @@
 #include <sds_options/options.h>
 #include "iomgr_config_generated.h"
 
-SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config,
-              SDS_OPTIONS.count("config_path") ? SDS_OPTIONS["config_path"].as< std::string >() : "");
+SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
 
 #define IM_DYNAMIC_CONFIG_WITH(...) SETTINGS(iomgr_config, __VA_ARGS__)
 #define IM_DYNAMIC_CONFIG_THIS(...) SETTINGS_THIS(iomgr_config, __VA_ARGS__)
@@ -31,9 +30,6 @@ public:
             // Any more default overrides or set non-scalar entries come here
         });
 
-        if (is_modified) {
-            IM_SETTINGS_FACTORY().save();
-        }
+        if (is_modified) { IM_SETTINGS_FACTORY().save(); }
     }
 };
-

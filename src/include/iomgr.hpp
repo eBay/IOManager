@@ -437,7 +437,6 @@ private:
     uint32_t m_num_workers = 0;
 
     folly::Synchronized< std::vector< std::shared_ptr< IOInterface > > > m_iface_list;
-    folly::Synchronized< std::unordered_map< backing_dev_t, io_device_ptr > > m_iodev_map;
     folly::Synchronized< std::vector< std::shared_ptr< DriveInterface > > > m_drive_ifaces;
 
     std::shared_ptr< DriveInterface > m_default_drive_iface;
