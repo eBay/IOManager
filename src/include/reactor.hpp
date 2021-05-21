@@ -134,6 +134,7 @@ public:
     sisl::sparse_vector< void* > m_thread_local_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
+    bool is_file{false};
 
 private:
     thread_specifier thread_scope{thread_regex::all_io};

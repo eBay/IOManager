@@ -305,6 +305,8 @@ public:
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
+    void write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
+    void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
     void process_completions(IODevice* iodev, void* cookie, int event);
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
