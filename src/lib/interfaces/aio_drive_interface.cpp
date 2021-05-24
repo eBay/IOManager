@@ -92,7 +92,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
-    iodev->is_file = (dev_type == iomgr_drive_type::file);
+    iodev->drive_type = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an
     // event fd and read/write use this device fd to control with iocb.
@@ -223,7 +223,7 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (iodev->is_file) {
+    if (iodev->drive_type == iomgr_drive_type::file) {
         write_zero_writev(iodev, size, offset, cookie);
     } else {
         write_zero_ioctl(iodev, size, offset, cookie);

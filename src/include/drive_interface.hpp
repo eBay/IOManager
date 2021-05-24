@@ -6,11 +6,13 @@
 #define IOMGR_DRIVE_INTERFACE_HPP
 
 #include <fcntl.h>
-#include "io_interface.hpp"
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <string>
+
+#include "drive_type.hpp"
+#include "io_interface.hpp"
 
 namespace iomgr {
 enum class drive_interface_type { aio, spdk, uioring };
@@ -35,15 +37,6 @@ struct drive_attributes {
         return json;
     }
 };
-
-ENUM(iomgr_drive_type, uint8_t,
-     file,      // Works on top of file system
-     block,     // Kernel block device
-     raw_nvme,  // Raw Nvme device (which can be opened only thru spdk)
-     memory,    // Non-persistent memory
-     spdk_bdev, // A SDPK verion of bdev
-     unknown    // Try to deduce it while loading
-)
 
 class DriveInterface : public IOInterface {
 public:
