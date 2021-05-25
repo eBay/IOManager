@@ -76,11 +76,10 @@ AioDriveInterface::~AioDriveInterface() {
 }
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
-#ifndef NDEBUG
     if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
+
     LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
                   "Unexpected dev type to open {}", dev_type);
-#endif
 
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
