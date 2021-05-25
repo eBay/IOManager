@@ -11,6 +11,8 @@
 #include <utility/enum.hpp>
 #include <chrono>
 
+#include "drive_type.hpp"
+
 #define IOMGR_LOG_MODS iomgr, spdk
 SDS_LOGGING_DECL(IOMGR_LOG_MODS);
 
@@ -134,6 +136,7 @@ public:
     sisl::sparse_vector< void* > m_thread_local_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
+    iomgr_drive_type drive_type{iomgr_drive_type::unknown};
 
 private:
     thread_specifier thread_scope{thread_regex::all_io};

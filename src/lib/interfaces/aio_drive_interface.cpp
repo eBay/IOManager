@@ -76,11 +76,10 @@ AioDriveInterface::~AioDriveInterface() {
 }
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
-#ifndef NDEBUG
     if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
+
     LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
                   "Unexpected dev type to open {}", dev_type);
-#endif
 
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -92,6 +91,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
+    iodev->drive_type = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an
     // event fd and read/write use this device fd to control with iocb.
@@ -222,6 +222,26 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    if (iodev->drive_type == iomgr_drive_type::file) {
+        write_zero_writev(iodev, size, offset, cookie);
+    } else {
+        write_zero_ioctl(iodev, size, offset, cookie);
+    }
+}
+
+void AioDriveInterface::write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    uint64_t range[2];
+    range[0] = offset;
+    range[1] = size;
+    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
+    if (ret) {
+        if (m_comp_cb) { m_comp_cb(errno, cookie); } // return errno
+    } else {
+        if (m_comp_cb) { m_comp_cb(0, cookie); } // no error
+    }
+}
+
+void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
     if (size == 0) {
         assert(false);
         return;
