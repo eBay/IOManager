@@ -45,6 +45,7 @@ extern "C" {
 #include <fds/obj_allocator.hpp>
 #include <experimental/random>
 #include <sds_logging/logging.h>
+#include <sisl/version.hpp>
 
 SDS_OPTION_GROUP(iomgr,
                  (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -67,7 +68,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     }
 
     IOMgrDynamicConfig::init_settings_default();
-
+    sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
     m_num_workers = num_threads;
