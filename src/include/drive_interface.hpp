@@ -11,8 +11,8 @@
 #include <filesystem>
 #include <string>
 
-#include "drive_type.hpp"
 #include "io_interface.hpp"
+#include "iomgr_types.hpp"
 
 namespace iomgr {
 enum class drive_interface_type { aio, spdk, uioring };
@@ -43,8 +43,6 @@ public:
     virtual drive_interface_type interface_type() const = 0;
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) = 0;
-    virtual void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) = 0;
-    virtual void detach_end_of_batch_cb() = 0;
     virtual io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
 

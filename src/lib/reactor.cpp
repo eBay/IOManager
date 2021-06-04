@@ -12,12 +12,14 @@ extern "C" {
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
+#include "include/iomgr_config.hpp"
 #include <fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
 
 namespace iomgr {
+thread_local IOReactor* IOReactor::this_reactor{nullptr};
 
 io_thread::io_thread(IOReactor* reactor) : thread_addr(reactor->reactor_idx()), reactor(reactor) {}
 
@@ -33,6 +35,8 @@ void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_
         return;
     }
 
+    this_reactor = this;
+    m_poll_interval = IM_DYNAMIC_CONFIG(poll.force_wakeup_by_time_ms);
     m_user_controlled_loop = user_controlled_loop;
     if (!is_io_reactor()) {
         m_worker_slot_num = worker_slot_num;
@@ -46,9 +50,16 @@ void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_
         if (m_keep_running) { REACTOR_LOG(INFO, base, , "IOReactor is ready to go to listen loop"); }
     }
 
-    if (!m_user_controlled_loop) {
-        while (m_keep_running) {
+    if (!m_user_controlled_loop && m_keep_running) {
+        while (true) {
             listen();
+
+            if (m_keep_running) {
+                auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
+                if (sentinel_cb) { sentinel_cb(); }
+            } else {
+                break;
+            }
         }
     }
 }
@@ -70,6 +81,7 @@ void IOReactor::init() {
 #endif
 
     LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread, reactor_id= {}", m_reactor_num);
+    m_metrics = std::make_unique< IOThreadMetrics >(fmt::format("{}-{}", reactor_idx(), loop_type()));
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
     start_io_thread(iomanager.make_io_thread(this));
@@ -87,6 +99,8 @@ void IOReactor::stop() {
     for (auto thr : m_io_threads) {
         stop_io_thread(thr);
     }
+    m_metrics.reset();
+
     iomanager.reactor_stopped();
 
     // Notify the caller registered to iomanager for it
@@ -101,9 +115,6 @@ bool IOReactor::can_add_iface(const std::shared_ptr< IOInterface >& iface) const
 void IOReactor::start_io_thread(const io_thread_t& thr) {
     m_io_threads.emplace_back(thr);
     thr->thread_addr = m_io_threads.size() - 1;
-
-    thr->m_metrics =
-        std::make_unique< IOThreadMetrics >(fmt::format("{}.{}-{}", reactor_idx(), thr->thread_addr, loop_type()));
 
     // Initialize any thing specific to specialized reactors
     if (!m_user_controlled_loop && !reactor_specific_init_thread(thr)) { return; }
@@ -134,7 +145,6 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
     // Clear all the IO carrier specific context (epoll or spdk etc..)
     if (!m_user_controlled_loop) { reactor_specific_exit_thread(thr); }
 
-    thr->m_metrics = nullptr;
     m_io_threads[thr->thread_addr] = nullptr;
 }
 
@@ -176,7 +186,7 @@ bool IOReactor::deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* s
 const io_thread_t& IOReactor::msg_thread(iomgr_msg* msg) { return addr_to_thread(msg->m_dest_thread); }
 
 void IOReactor::handle_msg(iomgr_msg* msg) {
-    ++msg_thread(msg)->m_metrics->msg_recvd_count;
+    ++m_metrics->msg_recvd_count;
 
     // If the message is for a different module, pass it on to their handler
     if (msg->m_dest_module != iomanager.m_internal_msg_module_id) {
@@ -191,7 +201,7 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
         switch (msg->m_type) {
         case iomgr_msg_type::RESCHEDULE: {
             auto iodev = msg->iodevice_data();
-            //++m_metrics->rescheduled_in;
+            ++m_metrics->rescheduled_in;
             if (msg->event() & EPOLLIN) { iodev->cb(iodev.get(), iodev->cookie, EPOLLIN); }
             if (msg->event() & EPOLLOUT) { iodev->cb(iodev.get(), iodev->cookie, EPOLLOUT); }
             break;
@@ -249,6 +259,8 @@ void IOReactor::notify_thread_state(bool is_started) {
 
 const io_thread_t& IOReactor::select_thread() { return m_io_threads[m_total_op++ % m_io_threads.size()]; }
 
+io_thread_idx_t IOReactor::default_thread_idx() const { return m_io_threads[0]->thread_idx; }
+
 const io_thread_t& IOReactor::addr_to_thread(io_thread_addr_t addr) {
     if (addr >= m_io_threads.size()) {
         LOGMSG_ASSERT(0, "Accessing invalid thread on reactor={} thread_addr={} num_of_threads_in_reactor={}",
@@ -258,4 +270,15 @@ const io_thread_t& IOReactor::addr_to_thread(io_thread_addr_t addr) {
     return m_io_threads[addr];
 }
 
+poll_cb_idx_t IOReactor::register_poll_interval_cb(std::function< void(void) >&& cb) {
+    m_poll_interval_cbs.emplace_back(std::move(cb));
+    return static_cast< poll_cb_idx_t >(m_poll_interval_cbs.size() - 1);
+}
+
+void IOReactor::unregister_poll_interval_cb(const poll_cb_idx_t idx) {
+    DEBUG_ASSERT(idx < m_poll_interval_cbs.size(), "Invalid poll interval cb idx {} to unregister", idx);
+    DEBUG_ASSERT(m_poll_interval_cbs[idx] != nullptr,
+                 "Poll interval cb idx {} already unregistered or never registered", idx);
+    m_poll_interval_cbs[idx] = nullptr;
+}
 } // namespace iomgr

@@ -22,7 +22,7 @@ SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 SDS_OPTION_GROUP(test_iomgr,
                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
-#define ENABLED_OPTIONS logging, iomgr, test_iomgr
+#define ENABLED_OPTIONS logging, iomgr, test_iomgr, config
 SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 using namespace iomgr;
@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
-    iomanager.run_on(thread_regex::all_io, workload_on_thread, false);
+    iomanager.run_on(thread_regex::all_io, workload_on_thread);
 
     // Wait for IO to finish on all threads.
     runner.wait();

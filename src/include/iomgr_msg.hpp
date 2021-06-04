@@ -7,16 +7,12 @@
 
 #include <iostream>
 #include <folly/Traits.h>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <fds/obj_allocator.hpp>
 #include "reactor.hpp"
+#include "iomgr_types.hpp"
 
 namespace iomgr {
-
-struct IODevice;
-typedef std::shared_ptr< IODevice > io_device_ptr;
-
-using msg_module_id_t = uint32_t;
 
 struct iomgr_msg_type {
     static constexpr int UNKNOWN = 0;
@@ -29,14 +25,6 @@ struct iomgr_msg_type {
 #endif
     static constexpr int RUN_METHOD = 6; // Run the method in your thread
 };
-
-struct reschedule_data_t {
-    std::shared_ptr< IODevice > iodev;
-    int event;
-};
-
-typedef std::function< void(io_thread_addr_t) > run_method_t;
-using msg_data_t = std::variant< sisl::blob, reschedule_data_t, run_method_t >;
 
 struct _sync_sem_block {
     std::mutex m_mtx;

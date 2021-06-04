@@ -10,7 +10,7 @@ struct spdk_nvmf_poll_group;
 struct spdk_nvmf_tgt;
 
 namespace iomgr {
-struct SpdkNvmfContext {
+struct SpdkNvmfContext : public IOInterfaceThreadContext {
     struct spdk_nvmf_poll_group* poll_group;
 };
 

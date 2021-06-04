@@ -102,18 +102,19 @@ void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
 void IOReactorEPoll::listen() {
     std::array< struct epoll_event, MAX_EVENTS > events;
 
-    int num_fds = 0;
+    int num_fds{0};
     do {
-        num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, iomanager.idle_timeout_interval_usec());
+        num_fds = epoll_wait(m_epollfd, &events[0], MAX_EVENTS, get_poll_interval());
     } while (num_fds < 0 && errno == EINTR);
 
     if (num_fds == 0) {
-        iomanager.idle_timeout_expired();
+        idle_time_wakeup_poller();
         return;
     } else if (num_fds < 0) {
         REACTOR_LOG(ERROR, base, , "epoll wait failed: {} strerror {}", errno, strerror(errno));
         return;
     }
+    m_metrics->fds_on_event_count += num_fds;
 
     // Next sort the events based on priority and handle them in that order
     std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
@@ -121,7 +122,7 @@ void IOReactorEPoll::listen() {
         auto& e = events[i];
         if (e.data.ptr == (void*)m_msg_iodev.get()) {
             REACTOR_LOG(TRACE, iomgr, , "Processing event on msg fd: {}", m_msg_iodev->fd());
-            ++m_io_threads[0]->m_metrics->msg_recvd_count;
+            ++m_metrics->msg_event_wakeup_count;
             on_msg_fd_notification();
 
             // It is possible for io thread status by the msg processor. Catch at the exit and return
@@ -132,6 +133,7 @@ void IOReactorEPoll::listen() {
         } else {
             IODevice* iodev = (IODevice*)e.data.ptr;
             if (iodev->tinfo) {
+                ++m_metrics->timer_wakeup_count;
                 timer_epoll::on_timer_fd_notification(iodev);
             } else {
                 on_user_iodev_notification(iodev, e.events);
@@ -172,18 +174,24 @@ bool IOReactorEPoll::put_msg(iomgr_msg* msg) {
                 m_reactor_num, msg->m_dest_thread, m_msg_iodev->fd(), (void*)m_msg_iodev.get());
 
     m_msg_q.enqueue(msg);
-    uint64_t temp = 1;
-    while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
-        ;
+    const uint64_t temp{1};
+    while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
+        ++m_metrics->msg_iodev_busy_count;
+    }
 
     return true;
 }
 
 void IOReactorEPoll::on_msg_fd_notification() {
     uint64_t temp;
-    while (0 > read(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
-        ;
+    while ((read(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && errno == EAGAIN) {
+        ++m_metrics->msg_iodev_busy_count;
+    }
 
+    process_messages();
+}
+
+void IOReactorEPoll::process_messages() {
     uint32_t max_msg_batch_size{IM_DYNAMIC_CONFIG(max_msgs_before_yield)};
     uint32_t msg_count{0};
 
@@ -197,23 +205,36 @@ void IOReactorEPoll::on_msg_fd_notification() {
 
     if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
         REACTOR_LOG(DEBUG, iomgr, , "Reached max msg_count batch {}, yielding and will process again", msg_count);
-        temp = 1;
-        while (0 > write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) && errno == EAGAIN)
-            ;
+        const uint64_t temp{1};
+        while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
+            ++m_metrics->msg_iodev_busy_count;
+        }
     }
 }
 
 void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
-    ++m_io_threads[0]->m_metrics->outstanding_ops;
-    ++m_io_threads[0]->m_metrics->io_count;
+    ++m_metrics->outstanding_ops;
+    ++m_metrics->io_event_wakeup_count;
 
     REACTOR_LOG(TRACE, iomgr, , "Processing event on user iodev: {}", iodev->dev_id());
     iodev->cb(iodev, iodev->cookie, event);
 
-    --m_io_threads[0]->m_metrics->outstanding_ops;
+    --m_metrics->outstanding_ops;
 }
 
 bool IOReactorEPoll::is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const {
     return (!iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev, thread));
 }
+
+void IOReactorEPoll::idle_time_wakeup_poller() {
+    ++m_metrics->idle_wakeup_count;
+
+    // Idle time wakeup poller process messages and make any registered callers which look for any
+    // other completions.
+    process_messages();
+    for (auto& cb : m_poll_interval_cbs) {
+        if (cb) { cb(); }
+    }
+}
+
 } // namespace iomgr

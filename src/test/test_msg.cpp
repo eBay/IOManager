@@ -7,7 +7,7 @@
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
 #include <utility/thread_factory.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -23,7 +23,7 @@ SDS_OPTION_GROUP(test_msg,
                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
-#define ENABLED_OPTIONS logging, iomgr, test_msg
+#define ENABLED_OPTIONS logging, iomgr, test_msg, config
 SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 struct timer_test_info {
@@ -64,9 +64,11 @@ public:
         for (uint64_t i{0}; i < g_iters; ++i) {
             int count{0};
             if (std::holds_alternative< io_thread_t >(to_threads)) {
-                count = iomanager.run_on(std::get< io_thread_t >(to_threads), receiver, is_sync);
+                count = iomanager.run_on(std::get< io_thread_t >(to_threads), receiver,
+                                         is_sync ? wait_type_t::sleep : wait_type_t::no_wait);
             } else if (std::holds_alternative< thread_regex >(to_threads)) {
-                count = iomanager.run_on(std::get< thread_regex >(to_threads), receiver, is_sync);
+                count = iomanager.run_on(std::get< thread_regex >(to_threads), receiver,
+                                         is_sync ? wait_type_t::sleep : wait_type_t::no_wait);
             }
             ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
             m_sent_count.fetch_add(count);
@@ -176,7 +178,7 @@ TEST_F(MsgTest, async_relay_broadcast_msg) {
     auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
     auto relay = [this, sink]([[maybe_unused]] auto taddr) {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::all_io, sink, false)};
+        const auto count{iomanager.run_on(thread_regex::all_io, sink, wait_type_t::no_wait)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };
@@ -187,7 +189,7 @@ TEST_F(MsgTest, async_relay_randomcast_msg) {
     auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
     auto relay = [this, sink]([[maybe_unused]] auto taddr) {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::random_worker, sink, false)};
+        const auto count{iomanager.run_on(thread_regex::random_worker, sink, wait_type_t::no_wait)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };
@@ -198,7 +200,7 @@ TEST_F(MsgTest, async_relay_multicast_msg) {
     auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
     auto relay = [this, sink]([[maybe_unused]] auto taddr) {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::least_busy_io, sink, false)};
+        const auto count{iomanager.run_on(thread_regex::least_busy_io, sink)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };

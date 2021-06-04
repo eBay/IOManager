@@ -10,8 +10,10 @@
 #include <utility/atomic_counter.hpp>
 #include <utility/enum.hpp>
 #include <chrono>
+#include "iomgr_types.hpp"
+#include "iomgr_timer.hpp"
 
-#include "drive_type.hpp"
+//#include "drive_type.hpp"
 
 #define IOMGR_LOG_MODS iomgr, spdk
 SDS_LOGGING_DECL(IOMGR_LOG_MODS);
@@ -35,22 +37,28 @@ namespace iomgr {
                             __l, ##__VA_ARGS__);                                                                       \
     }
 
-using reactor_idx_t = uint32_t;
-typedef std::function< void(bool) > thread_state_notifier_t;
-
 class IOThreadMetrics : public sisl::MetricsGroup {
 public:
     explicit IOThreadMetrics(const std::string& thread_name) : sisl::MetricsGroup("IOThreadMetrics", thread_name) {
         LOGINFO("Registring metrics group name = IOThreadMetrics, thread_name = {}", thread_name);
 
-        REGISTER_GAUGE(iomgr_thread_io_count, "IO Manager per thread IO count");
+        REGISTER_GAUGE(iomgr_thread_msg_wakeup_count, "Times thread woken up on msg event");
+        REGISTER_GAUGE(iomgr_thread_timer_wakeup_count, "Times thread woken up on timer event");
+        REGISTER_GAUGE(iomgr_thread_io_event_wakeup_count, "Times thread woken up on io event");
+        REGISTER_GAUGE(iomgr_thread_idle_wakeup_count, "Times thread woken up on idle timer");
+        REGISTER_GAUGE(iomgr_thread_iodevs_on_event_count, "Count of number iodevs armed in this thread");
+
         REGISTER_GAUGE(iomgr_thread_total_msg_recvd, "Total message received for this thread");
-        REGISTER_GAUGE(iomgr_thread_rescheduled_in, "Count of times IOs rescheduled into this thread");
-        REGISTER_GAUGE(iomgr_thread_outstanding_ops, "Count of IO ops outstanding in this thread");
-        REGISTER_GAUGE(iomgr_thread_outstanding_msgs, "Count of msgs outstanding in this thread");
+        REGISTER_GAUGE(iomgr_thread_msg_iodev_busy, "Times event read/write EAGAIN for this thread");
+        REGISTER_GAUGE(iomgr_thread_rescheduled_in, "Times IOs rescheduled into this thread");
+        REGISTER_GAUGE(iomgr_thread_outstanding_ops, "IO ops outstanding in this thread");
+
+        REGISTER_GAUGE(iomgr_thread_io_submissions, "Times IO submitted to this thread");
+        REGISTER_GAUGE(iomgr_thread_actual_ios, "Total IOs submitted to this thread including batch");
+        REGISTER_GAUGE(iomgr_thread_io_callbacks, "Times IO callback from driver to this thread");
+        REGISTER_GAUGE(iomgr_thread_aio_event_in_callbacks, "Total aio events received to this thread");
 
         register_me_to_farm();
-
         attach_gather_cb(std::bind(&IOThreadMetrics::on_gather, this));
     }
 
@@ -60,27 +68,43 @@ public:
     }
 
     void on_gather() {
-        GAUGE_UPDATE(*this, iomgr_thread_io_count, io_count);
+        GAUGE_UPDATE(*this, iomgr_thread_msg_wakeup_count, msg_event_wakeup_count);
+        GAUGE_UPDATE(*this, iomgr_thread_timer_wakeup_count, timer_wakeup_count);
+        GAUGE_UPDATE(*this, iomgr_thread_io_event_wakeup_count, io_event_wakeup_count);
+        GAUGE_UPDATE(*this, iomgr_thread_idle_wakeup_count, idle_wakeup_count);
+        GAUGE_UPDATE(*this, iomgr_thread_iodevs_on_event_count, fds_on_event_count);
+
         GAUGE_UPDATE(*this, iomgr_thread_total_msg_recvd, msg_recvd_count);
+        GAUGE_UPDATE(*this, iomgr_thread_msg_iodev_busy, msg_iodev_busy_count);
         GAUGE_UPDATE(*this, iomgr_thread_rescheduled_in, rescheduled_in);
         GAUGE_UPDATE(*this, iomgr_thread_outstanding_ops, outstanding_ops);
-        GAUGE_UPDATE(*this, iomgr_thread_outstanding_msgs, outstanding_msgs);
+
+        GAUGE_UPDATE(*this, iomgr_thread_io_submissions, io_submissions);
+        GAUGE_UPDATE(*this, iomgr_thread_actual_ios, actual_ios);
+        GAUGE_UPDATE(*this, iomgr_thread_io_callbacks, io_callbacks);
+        GAUGE_UPDATE(*this, iomgr_thread_aio_event_in_callbacks, aio_events_in_callback);
     }
 
-    uint64_t io_count = 0;
-    uint64_t msg_recvd_count = 0;
-    uint64_t rescheduled_in = 0;
-    int64_t outstanding_ops = 0;
-    int64_t outstanding_msgs = 0;
+    uint64_t msg_event_wakeup_count{0};
+    uint64_t timer_wakeup_count{0};
+    uint64_t io_event_wakeup_count{0};
+    uint64_t idle_wakeup_count{0};
+    uint64_t fds_on_event_count{0};
+
+    uint64_t msg_recvd_count{0};
+    uint64_t msg_iodev_busy_count{0};
+    uint64_t rescheduled_in{0};
+    int64_t outstanding_ops{0};
+
+    uint64_t io_submissions{0};
+    uint64_t actual_ios{0};
+    uint64_t io_callbacks{0};
+    uint64_t aio_events_in_callback{0};
 };
 
-// typedef std::function< bool(std::shared_ptr< fd_info >) > fd_selector_t;
-
 /******************* Thread Related ************************/
-using backing_thread_t = std::variant< reactor_idx_t, spdk_thread* >;
-using io_thread_idx_t = uint32_t;
-using io_thread_addr_t = uint32_t;
 class IOReactor;
+class IOInterface;
 
 struct io_thread {
     backing_thread_t thread_impl; // What type of thread it is backed by
@@ -89,33 +113,13 @@ struct io_thread {
     IOReactor* reactor;           // Reactor this thread is currently attached to
 
     friend class IOManager;
-    std::unique_ptr< IOThreadMetrics > m_metrics;
 
     spdk_thread* spdk_thread_impl() const { return std::get< spdk_thread* >(thread_impl); }
     io_thread(IOReactor* reactor);
     io_thread() = default;
 };
-using io_thread_t = std::shared_ptr< io_thread >;
-
-ENUM(thread_regex, uint8_t,
-     all_io,            // Represents all io threads
-     least_busy_io,     // Represents least busy io thread (including worker + user)
-     all_worker,        // Represents all worker io threads (either tloop or iloop)
-     least_busy_worker, // Represents least busy worker io thread
-     random_worker,     // Represents a random worker io thread
-     all_user,          // Represents all user created io threads
-     least_busy_user,   // Represents least busy user io thread
-     all_tloop          // Represents all tight loop threads (could be either worker or user)
-);
-using thread_specifier = std::variant< thread_regex, io_thread_t >;
 
 /****************** Device related *************************/
-class IOInterface;
-struct IODevice;
-struct timer_info;
-using ev_callback = std::function< void(IODevice* iodev, void* cookie, int events) >;
-using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
-
 inline backing_dev_t null_backing_dev() { return backing_dev_t{std::in_place_type< spdk_bdev_desc* >, nullptr}; }
 
 class IODevice {
@@ -160,15 +164,15 @@ public:
     std::string dev_id() const;
     void clear();
 };
-using io_device_ptr = std::shared_ptr< IODevice >;
-using io_device_const_ptr = std::shared_ptr< const IODevice >;
-using iodev_selector_t = std::function< bool(const io_device_const_ptr&) >;
 
 /****************** Reactor related ************************/
 struct iomgr_msg;
 struct timer;
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
+
+public:
+    static thread_local IOReactor* this_reactor;
 
 public:
     virtual ~IOReactor();
@@ -205,7 +209,13 @@ public:
     virtual void handle_msg(iomgr_msg* msg);
     virtual const char* loop_type() const = 0;
     const io_thread_t& select_thread();
+    io_thread_idx_t default_thread_idx() const;
     void start_interface(IOInterface* iface);
+    void set_poll_interval(const int interval) { m_poll_interval = interval; }
+    int get_poll_interval() const { return m_poll_interval; }
+    poll_cb_idx_t register_poll_interval_cb(std::function< void(void) >&& cb);
+    void unregister_poll_interval_cb(const poll_cb_idx_t idx);
+    IOThreadMetrics& thread_metrics() { return *(m_metrics.get()); }
 
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
@@ -224,6 +234,7 @@ protected:
     reactor_idx_t m_reactor_num; // Index into global system wide thread list
 
 protected:
+    std::unique_ptr< IOThreadMetrics > m_metrics;
     sisl::atomic_counter< int32_t > m_io_thread_count = 0;
     int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
@@ -235,8 +246,11 @@ protected:
     iodev_selector_t m_iodev_selector = nullptr;
     uint32_t m_n_iodevices = 0;
 
-    std::vector< io_thread_t > m_io_threads; // List of io threads within the reactor
+    int m_poll_interval{-1};
     uint64_t m_total_op = 0;
+
+    std::vector< io_thread_t > m_io_threads; // List of io threads within the reactor
+    std::vector< std::function< void(void) > > m_poll_interval_cbs;
 };
 } // namespace iomgr
 

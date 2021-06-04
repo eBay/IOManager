@@ -19,7 +19,7 @@ SDS_OPTION_GROUP(test_io,
                  (device_size, "", "device_size", "size of devices to do IO on",
                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"))
 
-#define ENABLED_OPTIONS logging, iomgr, test_io
+#define ENABLED_OPTIONS logging, iomgr, test_io, config
 SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 TEST(IOMgrTest, basic_io_test) {
@@ -43,7 +43,7 @@ TEST(IOMgrTest, basic_io_test) {
     cfg.io_dist = {{io_type_t::write, 50}, {io_type_t::read, 50}};
 
     IOJob job(examiner, cfg);
-    job.start_job(wait_type_t::for_completion);
+    job.start_job(wait_till_t::completion);
 
     LOGINFO("Result: {}", job.job_result());
 }

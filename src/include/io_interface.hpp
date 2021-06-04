@@ -17,14 +17,14 @@
 #pragma GCC diagnostic pop
 #endif
 #include "reactor.hpp"
+#include "iomgr_types.hpp"
 
 namespace iomgr {
-typedef std::function< void(int64_t res, uint8_t* cookie) > io_interface_comp_cb_t;
-typedef std::function< void(int nevents) > io_interface_end_of_batch_cb_t;
-
 class IOReactor;
 
-using io_interface_id_t = uint32_t;
+struct IOInterfaceThreadContext {
+    virtual ~IOInterfaceThreadContext() = default;
+};
 
 class IOInterface {
 protected:
@@ -63,8 +63,13 @@ protected:
 protected:
     // std::shared_mutex m_mtx;
     std::unordered_map< backing_dev_t, io_device_ptr > m_iodev_map;
-    sisl::sparse_vector< void* > m_thread_local_ctx;
-    thread_regex m_thread_scope = thread_regex::all_io;
+    sisl::sparse_vector< std::unique_ptr< IOInterfaceThreadContext > > m_thread_local_ctx;
+    thread_regex m_thread_scope{thread_regex::all_io};
+};
+
+struct GenericInterfaceThreadContext : public IOInterfaceThreadContext {
+    virtual ~GenericInterfaceThreadContext() = default;
+    listen_sentinel_cb_t listen_sentinel_cb;
 };
 
 class GenericIOInterface : public IOInterface {
@@ -74,11 +79,19 @@ public:
     io_device_ptr make_io_device(const backing_dev_t dev, const int events_interested, const int pri, void* cookie,
                                  const bool is_per_thread_dev, const ev_callback& cb);
 
+    void attach_listen_sentinel_cb(const listen_sentinel_cb_t& cb, const run_method_t& on_attach_closure);
+    void detach_listen_sentinel_cb(const run_method_t& on_detach_closure);
+    listen_sentinel_cb_t& get_listen_sentinel_cb();
+
 private:
-    void init_iface_thread_ctx(const io_thread_t& thr) override {}
-    void clear_iface_thread_ctx(const io_thread_t& thr) override {}
+    void init_iface_thread_ctx(const io_thread_t& thr) override;
+    void clear_iface_thread_ctx(const io_thread_t& thr) override;
     void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
     void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
+    GenericInterfaceThreadContext* thread_ctx();
+
+private:
+    listen_sentinel_cb_t m_listen_sentinel_cb;
 };
 } // namespace iomgr
 #endif // IOMGR_INTERFACE_HPP

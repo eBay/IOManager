@@ -27,7 +27,7 @@ struct JobCfg {
 };
 
 ENUM(job_status_t, uint8_t, not_started, running, stopped, completed);
-ENUM(wait_type_t, uint8_t, no_wait, for_execution, for_completion);
+ENUM(wait_till_t, uint8_t, none, execution, completion);
 
 class Job {
 public:
@@ -51,12 +51,12 @@ public:
     virtual bool is_async_job() const = 0;
     virtual std::string job_name() const = 0;
 
-    void start_job(wait_type_t wait_type = wait_type_t::for_completion) {
+    void start_job(wait_till_t wait_till = wait_till_t::completion) {
         iomanager.run_on(iomgr::thread_regex::all_worker,
                          [this](iomgr::io_thread_addr_t a) { start_in_this_thread(); });
-        if (wait_type == wait_type_t::for_execution) {
+        if (wait_till == wait_till_t::execution) {
             wait_for_execution();
-        } else if (wait_type == wait_type_t::for_completion) {
+        } else if (wait_till == wait_till_t::completion) {
             wait_for_completion();
         }
     }

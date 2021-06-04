@@ -30,10 +30,9 @@ private:
     uint32_t m_page_size;
     uint64_t m_max_vol_blks;
     uint64_t m_cur_checkpoint;
-    std::atomic< uint64_t > m_start_lba = 0;
-    std::atomic< uint64_t > m_start_large_lba = 0;
-    std::atomic< uint64_t > m_num_io = 0;
-    size_t m_vol_idx = 0;
+
+    std::atomic< uint64_t > m_seq_lba_cursor{0};
+    size_t m_vol_idx{0};
     sisl::atomic_counter< uint64_t > m_ref_cnt{0};
     std::atomic< bool > m_vol_destroyed{false};
 

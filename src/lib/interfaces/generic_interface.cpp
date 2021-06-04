@@ -3,6 +3,7 @@
 //
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
+#include "include/iomgr_msg.hpp"
 #include "include/io_interface.hpp"
 
 namespace iomgr {
@@ -46,7 +47,7 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add,
                         if (add_comp_cb) add_comp_cb(iodev);
                     }
                 },
-                wait_to_add);
+                wait_to_add ? wait_type_t::sleep : wait_type_t::no_wait);
             m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
         }
 
@@ -97,7 +98,7 @@ void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remo
                         if (remove_comp_cb) remove_comp_cb(iodev);
                     }
                 },
-                wait_to_remove);
+                wait_to_remove ? wait_type_t::sleep : wait_type_t::no_wait);
             m_iodev_map.erase(iodev->dev);
         }
 
@@ -155,6 +156,7 @@ io_device_ptr IOInterface::alloc_io_device(const backing_dev_t dev, const int ev
     return iodev;
 }
 
+///////////////////////////////////////// GenericIOInterface Section ////////////////////////////////////////////
 io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const int events_interested, const int pri,
                                                  void* cookie, const bool is_per_thread_dev, const ev_callback& cb) {
     return make_io_device(dev, events_interested, pri, cookie,
@@ -169,4 +171,51 @@ io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const 
     add_io_device(iodev);
     return iodev;
 }
+
+void GenericIOInterface::init_iface_thread_ctx(const io_thread_t& thr) {
+    auto ctx = std::make_unique< GenericInterfaceThreadContext >();
+    ctx->listen_sentinel_cb = m_listen_sentinel_cb;
+    m_thread_local_ctx[thr->thread_idx] = std::move(ctx);
+}
+
+void GenericIOInterface::clear_iface_thread_ctx(const io_thread_t& thr) { m_thread_local_ctx[thr->thread_idx].reset(); }
+
+void GenericIOInterface::attach_listen_sentinel_cb(const listen_sentinel_cb_t& cb,
+                                                   const run_method_t& on_attach_closure) {
+    auto closure_in_origin = [this, origin_thr = iomanager.iothread_self(), on_attach_closure]() {
+        iomanager.run_on(origin_thr, on_attach_closure);
+    };
+
+    {
+        auto lock = iomanager.iface_wlock();
+        m_listen_sentinel_cb = cb;
+    }
+    iomanager.run_on(
+        thread_regex::all_io,
+        [this, cb]([[maybe_unused]] io_thread_addr_t taddr) { thread_ctx()->listen_sentinel_cb = cb; },
+        on_attach_closure ? closure_in_origin : run_on_closure_t{nullptr});
+}
+
+void GenericIOInterface::detach_listen_sentinel_cb(const run_method_t& on_detach_closure) {
+    auto closure_in_origin = [this, origin_thr = iomanager.iothread_self(), on_detach_closure]() {
+        iomanager.run_on(origin_thr, on_detach_closure);
+    };
+
+    {
+        auto lock = iomanager.iface_wlock();
+        m_listen_sentinel_cb = nullptr;
+    }
+    iomanager.run_on(
+        thread_regex::all_io,
+        [this]([[maybe_unused]] io_thread_addr_t taddr) { thread_ctx()->listen_sentinel_cb = nullptr; },
+        on_detach_closure ? closure_in_origin : run_on_closure_t{nullptr});
+}
+
+listen_sentinel_cb_t& GenericIOInterface::get_listen_sentinel_cb() { return thread_ctx()->listen_sentinel_cb; }
+
+GenericInterfaceThreadContext* GenericIOInterface::thread_ctx() {
+    return static_cast< GenericInterfaceThreadContext* >(
+        m_thread_local_ctx[IOReactor::this_reactor->default_thread_idx()].get());
+}
+
 } // namespace iomgr

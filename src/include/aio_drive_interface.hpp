@@ -11,17 +11,15 @@
 #include <mutex>
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 
+#include "iomgr_types.hpp"
 #ifdef linux
 #include <fcntl.h>
 #include <libaio.h>
 #include <sys/eventfd.h>
 #include <stdio.h>
 #endif
-
-using namespace std;
-using Clock = std::chrono::steady_clock;
 
 namespace iomgr {
 #define MAX_OUTSTANDING_IO 200               // if max outstanding IO is more than 200 then io_submit will fail.
@@ -100,6 +98,7 @@ struct aio_thread_context {
     uint64_t submitted_aio = 0;
     uint64_t max_submitted_aio;
     std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
+    poll_cb_idx_t poll_cb_idx;
 
     ~aio_thread_context() {
         if (ev_fd) { close(ev_fd); }
@@ -148,12 +147,9 @@ struct aio_thread_context {
         return info;
     }
 
-    void dec_submitted_aio() { --submitted_aio; }
+    void dec_submitted_aio();
 
-    void inc_submitted_aio(int count) {
-        if (count < 0) { return; }
-        submitted_aio += count;
-    }
+    void inc_submitted_aio(int count);
 
     void push_retry_list(struct iocb* iocb) { iocb_retry_list.push(static_cast< iocb_info_t* >(iocb)); }
 
@@ -261,16 +257,18 @@ class AioDriveInterfaceMetrics : public sisl::MetricsGroup {
 public:
     explicit AioDriveInterfaceMetrics(const char* inst_name = "AioDriveInterface") :
             sisl::MetricsGroup("AioDriveInterface", inst_name) {
-        REGISTER_COUNTER(spurious_events, "Spurious events count");
         REGISTER_COUNTER(completion_errors, "Aio Completion errors");
         REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
                          {"io_direction", "write"});
         REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
                          {"io_direction", "read"});
-        REGISTER_COUNTER(force_sync_io_empty_iocb, "Forced sync io because of empty iocb");
-        REGISTER_COUNTER(retry_io_eagain_error, "retrying sending IOs");
+        REGISTER_COUNTER(retry_io_eagain_error, "Retry IOs count because of kernel eagain");
+        REGISTER_COUNTER(queued_aio_slots_full, "Count of IOs queued because of aio slots full");
 
-        REGISTER_COUNTER(total_io_submissions, "Number of times aio io_submit called");
+        // TODO: This shouldn't be a counter, but part of get_status(), but we haven't setup one for iomgr, so keeping
+        // as a metric as of now. Once added, will remove this counter/gauge.
+        REGISTER_COUNTER(retry_list_size, "Retry list size", sisl::_publish_as::publish_as_gauge);
+
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         register_me_to_farm();
@@ -286,8 +284,6 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override { m_io_end_of_batch_cb = cb; }
-    void detach_end_of_batch_cb() override { m_io_end_of_batch_cb = nullptr; }
     io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
     ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
@@ -305,13 +301,15 @@ public:
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
-    void write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
-    void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
-    void process_completions(IODevice* iodev, void* cookie, int event);
+    void on_event_notification(IODevice* iodev, void* cookie, int event);
+
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
     drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
+
+    static std::vector< int > s_poll_interval_table;
+    static void init_poll_interval_table();
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
@@ -319,24 +317,28 @@ private:
     void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
     void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
 
+    void handle_completions();
+
     /* return true if it queues io.
      * return false if it do completion callback for error.
      */
     bool handle_io_failure(struct iocb* iocb);
     void retry_io();
-    void push_retry_list(struct iocb* iocb);
+    void push_retry_list(struct iocb* iocb, const bool no_slot);
     bool resubmit_iocb_on_err(struct iocb* iocb);
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
 
+    void write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
+    void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
+
 private:
     static thread_local aio_thread_context* t_aio_ctx;
     uint8_t* m_zero_buf{nullptr};
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
-    io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
 };
 #else
 class AioDriveInterface : public DriveInterface {

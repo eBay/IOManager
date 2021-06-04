@@ -123,18 +123,15 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     if (is_spdk && init_bdev) {
         LOGINFO("Initializing bdev subsystem");
-        iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this](io_thread_addr_t taddr) {
-                spdk_bdev_initialize(
-                    [](void* cb_arg, int rc) {
-                        IOManager* pthis = (IOManager*)cb_arg;
-                        pthis->mempool_metrics_populate();
-                        pthis->set_state_and_notify(iomgr_state::running);
-                    },
-                    (void*)this);
-            },
-            false /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
+            spdk_bdev_initialize(
+                [](void* cb_arg, int rc) {
+                    IOManager* pthis = (IOManager*)cb_arg;
+                    pthis->mempool_metrics_populate();
+                    pthis->set_state_and_notify(iomgr_state::running);
+                },
+                (void*)this);
+        });
         wait_for_state(iomgr_state::running);
         m_spdk_reinit_needed = false;
     } else {
@@ -143,9 +140,8 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     LOGINFO("IOManager is ready and move to running state");
 
     // Notify all the reactors that they are ready to make callback about thread started
-    iomanager.run_on(
-        thread_regex::all_io, [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); },
-        false /* wait_for_completion */);
+    iomanager.run_on(thread_regex::all_io,
+                     [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); });
 }
 
 static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
@@ -264,17 +260,14 @@ void IOManager::stop() {
     LOGINFO("Stopping IOManager");
 
     if (m_is_spdk) {
-        iomanager.run_on(
-            thread_regex::least_busy_worker,
-            [this](io_thread_addr_t taddr) {
-                spdk_bdev_finish(
-                    [](void* cb_arg) {
-                        IOManager* pthis = (IOManager*)cb_arg;
-                        pthis->set_state_and_notify(iomgr_state::stopping);
-                    },
-                    (void*)this);
-            },
-            false /* wait_for_completion */);
+        iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
+            spdk_bdev_finish(
+                [](void* cb_arg) {
+                    IOManager* pthis = (IOManager*)cb_arg;
+                    pthis->set_state_and_notify(iomgr_state::stopping);
+                },
+                (void*)this);
+        });
         wait_for_state(iomgr_state::stopping);
     } else {
         set_state(iomgr_state::stopping);
@@ -349,7 +342,7 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
         [this, iface](io_thread_addr_t taddr) {
             iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
         },
-        true /* wait_for_completion */);
+        wait_type_t::sleep);
 
     iface_list->push_back(iface);
     if (iface->is_spdk_interface()) { mempool_metrics_populate(); }
@@ -363,29 +356,33 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
         [this, iface](io_thread_addr_t taddr) {
             iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
         },
-        true /* wait_for_completion */);
+        wait_type_t::sleep);
     iface_list->erase(std::remove(iface_list->begin(), iface_list->end(), iface), iface_list->end());
 }
 
 void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
                                     const iodev_selector_t& iodev_selector,
                                     const thread_state_notifier_t& addln_notifier) {
+    std::shared_ptr< IOReactor > reactor;
     if (is_tloop_reactor) {
-        *(m_reactors.get()) = std::make_shared< IOReactorSPDK >();
+        reactor = std::make_shared< IOReactorSPDK >();
     } else {
-        *(m_reactors.get()) = std::make_shared< IOReactorEPoll >();
+        reactor = std::make_shared< IOReactorEPoll >();
     }
-    this_reactor()->run(-1, user_controlled_loop, iodev_selector, addln_notifier);
+    *(m_reactors.get()) = reactor;
+    reactor->run(-1, user_controlled_loop, iodev_selector, addln_notifier);
 }
 
 void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
+    std::shared_ptr< IOReactor > reactor;
     if (is_tloop_reactor) {
-        *(m_reactors.get()) = std::make_shared< IOReactorSPDK >();
+        reactor = std::make_shared< IOReactorSPDK >();
     } else {
-        *(m_reactors.get()) = std::make_shared< IOReactorEPoll >();
+        reactor = std::make_shared< IOReactorEPoll >();
     }
-    this_reactor()->run(iomgr_slot_num, false /* user_controlled_loop */, iodev_selector, addln_notifier);
+    *(m_reactors.get()) = reactor;
+    reactor->run(iomgr_slot_num, false /* user_controlled_loop */, iodev_selector, addln_notifier);
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
@@ -447,9 +444,9 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                 for (auto& thr : reactor->io_threads()) {
                     if (match_regex(r, thr)) {
                         if ((r == thread_regex::least_busy_worker) || (r == thread_regex::least_busy_user)) {
-                            if (thr->m_metrics->outstanding_ops < min_cnt) {
+                            if (reactor->m_metrics->outstanding_ops < min_cnt) {
                                 min_thread = thr->thread_addr;
-                                min_cnt = thr->m_metrics->outstanding_ops;
+                                min_cnt = reactor->m_metrics->outstanding_ops;
                                 min_reactor = reactor;
                             }
                         } else {
@@ -537,6 +534,9 @@ timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recur
     return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
 }
 
+void IOManager::set_poll_interval(const int interval) { this_reactor()->set_poll_interval(interval); }
+int IOManager::get_poll_interval() const { return this_reactor()->get_poll_interval(); }
+
 void IOManager::foreach_interface(const auto& iface_cb) {
     m_iface_list.withRLock([&](auto& iface_list) {
         for (auto iface : iface_list) {
@@ -545,7 +545,8 @@ void IOManager::foreach_interface(const auto& iface_cb) {
     });
 }
 
-IOReactor* IOManager::this_reactor() const { return m_reactors.get()->get(); }
+IOReactor* IOManager::this_reactor() const { return IOReactor::this_reactor; }
+
 void IOManager::all_reactors(const auto& cb) {
     m_reactors.access_all_threads(
         [&cb](std::shared_ptr< IOReactor >* preactor, bool is_last_thread) { cb(preactor->get(), is_last_thread); });
@@ -615,11 +616,13 @@ void IODevice::clear() {
     creator = nullptr;
 }
 
-uint8_t* IOManager::iobuf_alloc(size_t align, size_t size) {
-    return sisl::AlignedAllocator::allocator().aligned_alloc(align, size);
+uint8_t* IOManager::iobuf_alloc(size_t align, size_t size, const sisl::buftag tag) {
+    return sisl::AlignedAllocator::allocator().aligned_alloc(align, size, tag);
 }
 
-void IOManager::iobuf_free(uint8_t* buf) { sisl::AlignedAllocator::allocator().aligned_free(buf); }
+void IOManager::iobuf_free(uint8_t* buf, const sisl::buftag tag) {
+    sisl::AlignedAllocator::allocator().aligned_free(buf, tag);
+}
 
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
@@ -632,24 +635,24 @@ void IOManager::set_io_memory_limit(const size_t limit) {
 }
 
 /************* Spdk Memory Allocator section ************************/
-uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
+uint8_t* SpdkAlignedAllocImpl::aligned_alloc(size_t align, size_t size, [[maybe_unused]] const sisl::buftag tag) {
     auto buf = (uint8_t*)spdk_malloc(size, align, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 #ifdef _PRERELEASE
-    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, buf_size(buf));
+    sisl::AlignedAllocator::metrics().increment(tag, buf_size(buf));
 #endif
     return buf;
 }
 
-void SpdkAlignedAllocImpl::aligned_free(uint8_t* b) {
+void SpdkAlignedAllocImpl::aligned_free(uint8_t* b, [[maybe_unused]] const sisl::buftag tag) {
 #ifdef _PRERELEASE
-    COUNTER_DECREMENT(iomanager.metrics(), iomem_retained, buf_size(b));
+    sisl::AlignedAllocator::metrics().decrement(tag, buf_size(b));
 #endif
     spdk_free((void*)b);
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
 #ifdef _PRERELEASE
-    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, new_sz - old_sz);
+    sisl::AlignedAllocator::metrics().increment(sisl::buftag::common, new_sz - old_sz);
 #endif
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
 }
@@ -662,19 +665,12 @@ size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
 }
 
 /************* Conventional Memory Allocator section ************************/
-uint8_t* IOMgrAlignedAllocImpl::aligned_alloc(size_t align, size_t size) {
-    auto buf = sisl::AlignedAllocatorImpl::aligned_alloc(align, size);
-#ifdef _PRERELEASE
-    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, buf_size(buf));
-#endif
-    return buf;
+uint8_t* IOMgrAlignedAllocImpl::aligned_alloc(size_t align, size_t size, const sisl::buftag tag) {
+    return sisl::AlignedAllocatorImpl::aligned_alloc(align, size, tag);
 }
 
-void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b) {
-#ifdef _PRERELEASE
-    COUNTER_DECREMENT(iomanager.metrics(), iomem_retained, buf_size(b));
-#endif
-    sisl::AlignedAllocatorImpl::aligned_free(b);
+void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b, const sisl::buftag tag) {
+    sisl::AlignedAllocatorImpl::aligned_free(b, tag);
 
     static std::atomic< uint64_t > num_frees{0};
     if (((num_frees.fetch_add(1, std::memory_order_relaxed) + 1) % IM_DYNAMIC_CONFIG(iomem.limit_check_freq)) == 0) {
@@ -683,9 +679,6 @@ void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b) {
 }
 
 uint8_t* IOMgrAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
-#ifdef _PRERELEASE
-    COUNTER_INCREMENT(iomanager.metrics(), iomem_retained, new_sz - old_sz);
-#endif
     return sisl::AlignedAllocatorImpl::aligned_realloc(old_buf, align, new_sz, old_sz);
 }
 

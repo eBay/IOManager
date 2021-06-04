@@ -3,7 +3,7 @@
 #include "include/spdk_drive_interface.hpp"
 #include <folly/Exception.h>
 #include <fds/obj_allocator.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <filesystem>
 #include <thread>
 // TODO: Remove this once the problem is fixed in flip
@@ -245,7 +245,7 @@ void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
                 iodev->creator = iomanager.iothread_self();
             }
         },
-        true /* wait_for_completion */);
+        wait_type_t::sleep);
 
     if (rc != 0) {
         folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
@@ -267,7 +267,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     iomanager.run_on(
         iodev->creator,
         [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev)](io_thread_addr_t taddr) { spdk_bdev_close(bdev_desc); },
-        true /* wait_for_completion */);
+        wait_type_t::sleep);
 
     iodev->clear();
 }
@@ -346,14 +346,7 @@ static bool resubmit_io_on_err(void* b) {
     return true;
 }
 
-static void complete_io(SpdkIocb* iocb) {
-    // As of now we complete the batch as soon as 1 io is completed. We can potentially do batching based on if
-    // async thread is completed or not
-    auto& ecb = iocb->iface->get_end_of_batch_cb();
-    if (ecb) { ecb(1); }
-
-    sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
-}
+static void complete_io(SpdkIocb* iocb) { sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb); }
 
 static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void* ctx) {
     SpdkIocb* iocb = (SpdkIocb*)ctx;

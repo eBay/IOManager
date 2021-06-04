@@ -28,10 +28,30 @@ table IOMemory {
     limit_check_freq: uint32 = 1000;
 }
 
+table Poll {
+    // Frequency in milliseconds that poll will wake up during non-IO periods. -1 would mean never, 0 would
+    // mean run always in tight loop
+    force_wakeup_by_time_ms: int = -1;
+
+    // The max ios after which thread runs in a tight loop
+    tight_loop_after_io_max: uint32 = 4;
+
+    // Upon every outstanding io in the reactor thread, the wait time is reduced by the factor of this setting
+    // So if io_wakeup_interval_max = 4, then when no IO it will wait for "quiet_wakeup_interval_ms", then upon
+    // first io, it will wait for "io_wakeup_interval_max", then next outstanding io, it will wait for 
+    // "io_wakeup_interval_max" * "io_wakeup_interval_decay_percentage" and so on.. until wait time becomes zero
+    // where it will run tight loop.
+    force_wakeup_by_io_decay_factor : float = 0.5;
+
+    //io_wakeup_interval_decay_percentage : float = 0.5;
+    
+}
+
 table IomgrSettings {
     spdk: SpdkDriveInterface;
     aio : AioDriveInterface;
     iomem: IOMemory;
+    poll: Poll;
 
     cpuset_path: string;
 

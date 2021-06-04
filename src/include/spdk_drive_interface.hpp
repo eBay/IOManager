@@ -2,7 +2,7 @@
 
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <fds/vector_pool.hpp>
 #include <optional>
 #include <spdk/bdev.h>
@@ -59,8 +59,6 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::spdk; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override { m_io_end_of_batch_cb = cb; }
-    void detach_end_of_batch_cb() override { m_io_end_of_batch_cb = nullptr; }
 
     io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
@@ -85,7 +83,6 @@ public:
     void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
-    io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
 
     SpdkDriveInterfaceMetrics& get_metrics() { return m_metrics; }
     drive_attributes get_attributes(const io_device_ptr& dev) const override;
@@ -121,7 +118,6 @@ private:
     msg_module_id_t m_my_msg_modid;
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
-    io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
 };

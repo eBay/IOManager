@@ -11,7 +11,7 @@
 #include <utility/enum.hpp>
 #include <nlohmann/json.hpp>
 #include <fmt/format.h>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 
 #include "iomgr.hpp"
 #include "job.hpp"
@@ -53,7 +53,9 @@ public:
     verify_type_t verify_type{verify_type_t::csum}; // What type of verification on every reads
     load_type_t load_type{load_type_t::random};     // IO type (random, sequential, same)
     buf_pattern_t buf_pattern{buf_pattern_t::lbas}; // Buffer pattern to read/write verify (fill with lba, random)
-    // Distribution of sizes
+    std::optional< uint32_t > io_blk_size;          // If not provided, use random blk_size, else use this blksize
+
+    // Distribution of IO Patterms
     std::map< io_type_t, float > io_dist{{io_type_t::write, 34}, {io_type_t::read, 33}, {io_type_t::unmap, 33}};
 
     bool init{true};
@@ -187,10 +189,7 @@ public:
     bool is_job_done() const override { return (m_outstanding_ios.load(std::memory_order_acquire) == 0); }
     bool is_async_job() const override { return true; }
     std::string job_name() const { return "VolIOJob"; }
-    std::string job_result() const {
-        nlohmann::json j = sisl::MetricsFarm::getInstance().get_result_in_json();
-        return j.dump(2);
-    }
+    std::string job_result() const { return sisl::MetricsFarm::getInstance().get_result_in_json().dump(2); }
 
 protected:
     IOJobCfg m_cfg;
@@ -246,17 +245,13 @@ private:
         const auto vinfo{pick_vol_round_robin(ret)};
         if (vinfo == nullptr) { return ret; }
 
-        if (vinfo->m_num_io.fetch_add(1, std::memory_order_acquire) == 1000) {
-            ret.num_lbas = 200;
-            ret.lba = (vinfo->m_start_large_lba.fetch_add(ret.num_lbas, std::memory_order_acquire)) %
-                (vinfo->m_max_vol_blks - ret.num_lbas);
-        } else {
-            ret.num_lbas = 2;
-            ret.lba = (vinfo->m_start_lba.fetch_add(ret.num_lbas, std::memory_order_acquire)) %
-                (vinfo->m_max_vol_blks - ret.num_lbas);
-        }
-        if (ret.num_lbas == 0) { ret.num_lbas = 1; }
-
+        static thread_local std::random_device rd{};
+        static thread_local std::default_random_engine engine{rd()};
+        const uint32_t max_blks{static_cast< uint32_t >(m_cfg.max_io_size / vinfo->m_page_size)};
+        std::uniform_int_distribution< uint32_t > nlbas_random{1, max_blks};
+        ret.num_lbas = m_cfg.io_blk_size ? *m_cfg.io_blk_size / vinfo->m_page_size : nlbas_random(engine);
+        ret.lba = vinfo->m_seq_lba_cursor.fetch_add(ret.num_lbas, std::memory_order_acq_rel) %
+            (vinfo->m_max_vol_blks - ret.num_lbas);
         ret.valid_io = true;
         return ret;
     }
