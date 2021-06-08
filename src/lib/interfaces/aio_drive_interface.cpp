@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <sys/sysmacros.h>
 #endif
 
 #include <sds_logging/logging.h>
@@ -65,12 +66,7 @@ using namespace std;
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 std::vector< int > AioDriveInterface::s_poll_interval_table;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
-    m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(nullptr).align_size, max_buf_size,
-                                                                   sisl::buftag::common);
-    std::memset(m_zero_buf, 0, max_buf_size);
-    init_poll_interval_table();
-}
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) { init_poll_interval_table(); }
 
 AioDriveInterface::~AioDriveInterface() {
     if (m_zero_buf) {
@@ -79,11 +75,53 @@ AioDriveInterface::~AioDriveInterface() {
     }
 }
 
+#ifdef __linux__
+static std::string get_major_minor(const std::string& devname) {
+    struct stat statbuf;
+    const int ret{::stat(devname.c_str(), &statbuf)};
+    if (ret != 0) {
+        LOGERROR("Unable to stat the path {}, ignoring to get major/minor", devname.c_str());
+        return "";
+    }
+    return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
+}
+
+static uint64_t get_max_write_zeros(const std::string& devname) {
+    uint64_t max_zeros{0};
+    const auto maj_min{get_major_minor(devname)};
+    if (!maj_min.empty()) {
+        const auto p{fmt::format("/sys/dev/block/{}/queue/write_zeroes_max_bytes", maj_min)};
+        if (auto max_zeros_file = std::ifstream(p); max_zeros_file.is_open()) {
+            max_zeros_file >> max_zeros;
+        } else {
+            LOGERROR("Unable to open sys path={} to get write_zeros_max_bytes, assuming 0", p);
+        }
+    }
+    return max_zeros;
+}
+#endif
+
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
     if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
 
     LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
                   "Unexpected dev type to open {}", dev_type);
+
+#ifdef __linux__
+    if ((dev_type == iomgr_drive_type::block) && IM_DYNAMIC_CONFIG(aio.zeros_by_ioctl)) {
+        static std::once_flag flag1;
+        std::call_once(flag1, [this, &devname]() { m_max_write_zeros = get_max_write_zeros(devname); });
+    }
+#endif
+
+    if (m_max_write_zeros == 0) {
+        static std::once_flag flag2;
+        std::call_once(flag2, [this, &devname, &dev_type]() {
+            m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
+                                                                           max_buf_size, sisl::buftag::common);
+            std::memset(m_zero_buf, 0, max_buf_size);
+        });
+    }
 
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -230,23 +268,33 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (iodev->drive_type == iomgr_drive_type::file) {
-        write_zero_writev(iodev, size, offset, cookie);
-    } else {
+    if ((iodev->drive_type == iomgr_drive_type::block) && (m_max_write_zeros != 0)) {
         write_zero_ioctl(iodev, size, offset, cookie);
+    } else {
+        write_zero_writev(iodev, size, offset, cookie);
     }
 }
 
-void AioDriveInterface::write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+void AioDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    assert(m_max_write_zeros != 0);
+
+#ifdef __linux__
     uint64_t range[2];
-    range[0] = offset;
-    range[1] = size;
-    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-    if (ret) {
-        if (m_comp_cb) { m_comp_cb(errno, cookie); } // return errno
-    } else {
-        if (m_comp_cb) { m_comp_cb(0, cookie); } // no error
+    int ret{0};
+    while (size > 0) {
+        uint64_t this_size = std::min(size, m_max_write_zeros);
+        range[0] = offset;
+        range[1] = this_size;
+        ret = ioctl(iodev->fd(), BLKZEROOUT, range);
+        if (ret != 0) {
+            LOGERROR("Error in writing zeros at offset={} size={} errno={}", offset, this_size, errno);
+            break;
+        }
+        offset += this_size;
+        size -= this_size;
     }
+    if (m_comp_cb) { m_comp_cb(((ret != 0) ? errno : 0), cookie); }
+#endif
 }
 
 void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
@@ -545,7 +593,7 @@ size_t AioDriveInterface::get_size(IODevice* iodev) {
     return 0;
 }
 
-drive_attributes AioDriveInterface::get_attributes([[maybe_unused]] const io_device_ptr& dev) const {
+drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
     // TODO: Get this information from SSD using /sys commands
     drive_attributes attr;
     attr.phys_page_size = 4096;
@@ -556,10 +604,6 @@ drive_attributes AioDriveInterface::get_attributes([[maybe_unused]] const io_dev
     attr.atomic_phys_page_size = 4096;
 #endif
     return attr;
-}
-
-drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
-    return get_attributes(nullptr);
 }
 
 void AioDriveInterface::init_poll_interval_table() {
@@ -592,5 +636,4 @@ void aio_thread_context::inc_submitted_aio(int count) {
                                                     ? 0
                                                     : AioDriveInterface::s_poll_interval_table[submitted_aio]);
 }
-
 } // namespace iomgr

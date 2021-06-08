@@ -81,12 +81,19 @@ struct iomgr_msg {
 protected:
     iomgr_msg() = default;
     iomgr_msg(const iomgr_msg& msg) = default;
-    iomgr_msg(int type, msg_module_id_t module, const msg_data_t& d) : m_type(type), m_dest_module(module), m_data(d) {}
+    iomgr_msg(int type, msg_module_id_t module, const msg_data_t& d) : m_type{type}, m_dest_module{module}, m_data{d} {}
     iomgr_msg(int type, msg_module_id_t module, void* buf = nullptr, uint32_t size = 0u) :
-            iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
+            m_type{type}, m_dest_module{module}, m_data{sisl::blob{(uint8_t*)buf, size}} {}
     iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
-            iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
-    iomgr_msg(int type, msg_module_id_t module, const auto& fn) : iomgr_msg(type, module, msg_data_t(fn)) {}
+            m_type{type}, m_dest_module{module}, m_data{reschedule_data_t{iodev, event}} {}
+    iomgr_msg(int type, msg_module_id_t module, const auto& fn) :
+            m_type{type}, m_dest_module{module}, m_data{run_method_t{fn}} {}
+
+    // iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
+    // iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
+    //        iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
+    // iomgr_msg(int type, msg_module_id_t module, const auto& fn) :
+    //        iomgr_msg(type, module, msg_data_t(run_method_t{fn})) {}
 
     virtual ~iomgr_msg() = default;
 };

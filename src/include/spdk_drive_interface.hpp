@@ -85,7 +85,6 @@ public:
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
 
     SpdkDriveInterfaceMetrics& get_metrics() { return m_metrics; }
-    drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
     iomgr_drive_type get_drive_type(const std::string& devname) const override;
@@ -95,6 +94,7 @@ public:
     static constexpr auto min_wait_sync_io_us = 0us;
 
 private:
+    drive_attributes get_attributes(const io_device_ptr& dev) const;
     void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
     void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 

@@ -63,7 +63,6 @@ public:
     virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) = 0;
     virtual size_t get_size(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
-    virtual drive_attributes get_attributes(const io_device_ptr& dev) const = 0;
     virtual drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) = 0;
 
     virtual iomgr_drive_type get_drive_type(const std::string& devname) const {

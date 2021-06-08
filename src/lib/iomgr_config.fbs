@@ -12,6 +12,7 @@ table SpdkDriveInterface {
 
 table AioDriveInterface {
     retry_timeout: uint32 = 1000 (hotswap);
+    zeros_by_ioctl: bool = false;
 }
 
 table IOMemory {

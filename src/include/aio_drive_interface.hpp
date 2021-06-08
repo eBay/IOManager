@@ -305,7 +305,6 @@ public:
 
     size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
-    drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
     static std::vector< int > s_poll_interval_table;
@@ -331,12 +330,13 @@ private:
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
 
-    void write_zero_ioctl(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
+    void write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
     void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
 
 private:
     static thread_local aio_thread_context* t_aio_ctx;
     uint8_t* m_zero_buf{nullptr};
+    uint64_t m_max_write_zeros{0};
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
 };

@@ -109,7 +109,8 @@ public:
         info->m_shadow_fd = open(shadow_fname.c_str(), O_RDWR);
         // init_shadow_file(info->m_shadow_fd);
 
-        info->m_page_size = drive_iface()->get_attributes(info->m_vol_dev).phys_page_size;
+        info->m_page_size =
+            drive_iface()->get_attributes(info->m_vol_name, drive_iface()->get_drive_type(dev_name)).phys_page_size;
         info->m_max_vol_blks = drive_iface()->get_size(info->m_vol_dev.get()) / info->m_page_size;
         info->m_pending_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);
         info->m_hole_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);

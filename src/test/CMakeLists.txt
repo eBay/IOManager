@@ -20,6 +20,10 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
     set(TEST_IOJOB_FILES test_io_job.cpp)
     add_executable(test_iojob ${TEST_IOJOB_FILES})
     target_link_libraries(test_iojob ${CONAN_LIBS} iomgr sisl flip isal atomic)
+    
+    set(TEST_WRITEZERO_FILES test_write_zero.cpp)
+    add_executable(test_write_zero ${TEST_WRITEZERO_FILES})
+    target_link_libraries(test_write_zero ${CONAN_LIBS} iomgr sisl flip)
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
