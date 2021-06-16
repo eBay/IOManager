@@ -9,6 +9,7 @@
 #include <folly/Traits.h>
 #include <fds/buffer.hpp>
 #include <fds/obj_allocator.hpp>
+#include <utility/obj_life_counter.hpp>
 #include "reactor.hpp"
 #include "iomgr_types.hpp"
 
@@ -48,7 +49,7 @@ struct _sync_sem_block {
     }
 };
 
-struct iomgr_msg {
+struct iomgr_msg : public sisl::ObjLifeCounter< iomgr_msg > {
     friend class sisl::ObjectAllocator< iomgr_msg >;
 
     int m_type = 0;                               // Type of the message (different meaning for different modules)

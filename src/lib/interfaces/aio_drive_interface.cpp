@@ -429,10 +429,10 @@ void AioDriveInterface::submit_batch() {
 
     auto& metrics{iomanager.this_reactor()->thread_metrics()};
     ++metrics.io_submissions;
-    metrics.actual_ios += ibatch.n_iocbs;
 
     auto n_issued = io_submit(t_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
     if (n_issued < 0) { n_issued = 0; }
+    metrics.actual_ios += n_issued;
     t_aio_ctx->inc_submitted_aio(n_issued);
 
     // For those which we are not able to issue, convert that to sync io

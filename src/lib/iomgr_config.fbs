@@ -32,7 +32,7 @@ table IOMemory {
 table Poll {
     // Frequency in milliseconds that poll will wake up during non-IO periods. -1 would mean never, 0 would
     // mean run always in tight loop
-    force_wakeup_by_time_ms: int = -1;
+    force_wakeup_by_time_ms: int = 10;
 
     // The max ios after which thread runs in a tight loop
     tight_loop_after_io_max: uint32 = 4;
