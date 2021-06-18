@@ -120,6 +120,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_user_timer = std::make_unique< timer_epoll >(thread_regex::all_user);
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
+    m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     if (is_spdk && init_bdev) {
         LOGINFO("Initializing bdev subsystem");
@@ -436,7 +437,9 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
 
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
-        auto& reactor = m_worker_reactors[std::experimental::randint(0, (int)m_worker_reactors.size() - 1)].second;
+        static thread_local std::random_device s_rd{};
+        static thread_local std::default_random_engine s_re{s_rd()};
+        auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)].second;
         sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {

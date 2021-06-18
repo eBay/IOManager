@@ -13,6 +13,7 @@ extern "C" {
 #include <mutex>
 #include <map>
 #include <memory>
+#include <random>
 #include <vector>
 #include <utility/thread_buffer.hpp>
 #include <utility/atomic_counter.hpp>
@@ -491,6 +492,7 @@ private:
     std::condition_variable m_cv;
 
     sisl::sparse_vector< reactor_info_t > m_worker_reactors;
+    std::uniform_int_distribution< size_t > m_rand_worker_distribution;
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
