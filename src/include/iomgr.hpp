@@ -372,29 +372,30 @@ public:
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
-    // bool is_interface_registered() const { return ((uint16_t)get_state() >
-    // (uint16_t)iomgr_state::interface_init); }
-    void wait_to_be_ready() {
+
+    void set_state(iomgr_state state) {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        m_cv.wait(lck, [this] { return (get_state() == iomgr_state::running); });
+        m_state = state;
     }
 
-    void wait_to_be_stopped() {
+    iomgr_state get_state() const {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (get_state() != iomgr_state::stopped) {
-            m_cv.wait(lck, [this] { return (get_state() == iomgr_state::stopped); });
-        }
+        return m_state;
     }
 
-    /*void wait_for_interface_registration() {
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
-        m_cv.wait(lck, [this] { return is_interface_registered(); });
-    }*/
+    void set_state_and_notify(iomgr_state state) {
+        set_state(state);
+        m_cv.notify_all();
+    }
+
+    void wait_to_be_ready() { wait_for_state(iomgr_state::running); }
+
+    void wait_to_be_stopped() { wait_for_state(iomgr_state::stopped); }
 
     void wait_for_state(iomgr_state expected_state) {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (get_state() != expected_state) {
-            m_cv.wait(lck, [&] { return (get_state() == expected_state); });
+        if (m_state != expected_state) {
+            m_cv.wait(lck, [&] { return (m_state == expected_state); });
         }
     }
 
@@ -405,10 +406,10 @@ public:
             LOGINFO("IOManager is ready now");
         }
     }
-    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
 
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
+    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
 
     /******** Message related infra ********/
     bool send_msg(const io_thread_t& thread, iomgr_msg* msg);
@@ -457,13 +458,6 @@ private:
     void mempool_metrics_populate();
     void register_mempool_metrics(struct rte_mempool* mp);
 
-    void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
-    iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
-    void set_state_and_notify(iomgr_state state) {
-        set_state(state);
-        m_cv.notify_all();
-    }
-
     void _pick_reactors(thread_regex r, const auto& cb);
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
@@ -474,7 +468,7 @@ private:
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
-    std::atomic< iomgr_state > m_state = iomgr_state::stopped;    // Current state of IOManager
+    iomgr_state m_state = iomgr_state::stopped;                   // Current state of IOManager
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors = 0; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
     uint32_t m_num_workers = 0;
@@ -488,7 +482,7 @@ private:
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 
-    std::mutex m_cv_mtx;
+    mutable std::mutex m_cv_mtx;
     std::condition_variable m_cv;
 
     sisl::sparse_vector< reactor_info_t > m_worker_reactors;

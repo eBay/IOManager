@@ -395,7 +395,7 @@ void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
 
         // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
         if (m_yet_to_start_nreactors.decrement_testz()) {
-            LOGINFO("All IOMgr reactors started, moving iomanager to sys_init state");
+            LOGINFO("All Worker reactors started, moving iomanager to sys_init state");
             set_state_and_notify(iomgr_state::sys_init);
         }
     }
