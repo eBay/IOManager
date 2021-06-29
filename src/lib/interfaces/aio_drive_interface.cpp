@@ -168,6 +168,13 @@ void AioDriveInterface::init_iface_thread_ctx([[maybe_unused]] const io_thread_t
 }
 
 void AioDriveInterface::clear_iface_thread_ctx([[maybe_unused]] const io_thread_t& thr) {
+    iomanager.this_reactor()->unregister_poll_interval_cb(t_aio_ctx->poll_cb_idx);
+
+    int err = io_destroy(t_aio_ctx->ioctx);
+    if (err) {
+        LOGERROR("io_destroy failed with ret status={} errno={}", err, errno);
+    }
+
     iomanager.generic_interface()->remove_io_device(t_aio_ctx->ev_io_dev);
     close(t_aio_ctx->ev_fd);
     delete t_aio_ctx;
