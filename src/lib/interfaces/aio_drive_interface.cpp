@@ -1,30 +1,51 @@
 //
 // Created by Kadayam, Hari on 02/04/18.
 //
-#include <folly/Exception.h>
-#include <string>
-#include <iostream>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <assert.h>
-#include <unistd.h>
-#include <sys/uio.h>
-#include <fstream>
-#include <sys/epoll.h>
-#include <fmt/format.h>
+#include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <cassert>
+
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
+#include <folly/Exception.h>
 #include "iomgr_config.hpp"
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 #ifdef __linux__
+#include <fcntl.h>
+#include <fmt/format.h>
 #include <linux/fs.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <unistd.h>
+#include <sys/sysmacros.h>
 #endif
 
 #include <sds_logging/logging.h>
+
+// TODO: Remove this once the problem is fixed in flip
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 #include <flip/flip.hpp>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "include/iomgr.hpp"
 #include "include/aio_drive_interface.hpp"
+#include "include/iomgr_config.hpp"
 
 namespace iomgr {
 #ifdef __APPLE__
@@ -42,18 +63,66 @@ ssize_t pwritev(int fd, const iovec* iov, int iovcnt, off_t offset) {
 #endif
 using namespace std;
 
-thread_local aio_thread_context* AioDriveInterface::_aio_ctx;
+thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
+std::vector< int > AioDriveInterface::s_poll_interval_table;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb){};
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) { init_poll_interval_table(); }
 
-io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
-#ifndef NDEBUG
-    if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
-    LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
-                  "Unexpected dev type to open {}", dev_type);
+AioDriveInterface::~AioDriveInterface() {
+    if (m_zero_buf) {
+        sisl::AlignedAllocator::allocator().aligned_free(m_zero_buf, sisl::buftag::common);
+        m_zero_buf = nullptr;
+    }
+}
+
+#ifdef __linux__
+static std::string get_major_minor(const std::string& devname) {
+    struct stat statbuf;
+    const int ret{::stat(devname.c_str(), &statbuf)};
+    if (ret != 0) {
+        LOGERROR("Unable to stat the path {}, ignoring to get major/minor", devname.c_str());
+        return "";
+    }
+    return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
+}
+
+static uint64_t get_max_write_zeros(const std::string& devname) {
+    uint64_t max_zeros{0};
+    const auto maj_min{get_major_minor(devname)};
+    if (!maj_min.empty()) {
+        const auto p{fmt::format("/sys/dev/block/{}/queue/write_zeroes_max_bytes", maj_min)};
+        if (auto max_zeros_file = std::ifstream(p); max_zeros_file.is_open()) {
+            max_zeros_file >> max_zeros;
+        } else {
+            LOGERROR("Unable to open sys path={} to get write_zeros_max_bytes, assuming 0", p);
+        }
+    }
+    return max_zeros;
+}
 #endif
 
-    /* it doesn't need to keep track of any fds */
+io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
+    if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
+
+    LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
+                  "Unexpected dev type to open {}", dev_type);
+
+#ifdef __linux__
+    if ((dev_type == iomgr_drive_type::block) && IM_DYNAMIC_CONFIG(aio.zeros_by_ioctl)) {
+        static std::once_flag flag1;
+        std::call_once(flag1, [this, &devname]() { m_max_write_zeros = get_max_write_zeros(devname); });
+    }
+#endif
+
+    if (m_max_write_zeros == 0) {
+        static std::once_flag flag2;
+        std::call_once(flag2, [this, &devname, &dev_type]() {
+            m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
+                                                                           max_buf_size, sisl::buftag::common);
+            std::memset(m_zero_buf, 0, max_buf_size);
+        });
+    }
+
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
         folly::throwSystemError(fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
@@ -61,14 +130,13 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
         return nullptr;
     }
 
-    auto iodev = std::make_shared< IODevice >();
-    iodev->dev = backing_dev_t(fd);
-    iodev->thread_scope = thread_regex::all_io;
-    iodev->pri = 9;
-    iodev->io_interface = this;
+    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
+    iodev->drive_type = dev_type;
 
+    // We don't need to add the device to each thread, because each AioInterface thread context add an
+    // event fd and read/write use this device fd to control with iocb.
     LOGINFO("Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
     return iodev;
 }
@@ -80,52 +148,60 @@ void AioDriveInterface::close_dev(const io_device_ptr& iodev) {
 }
 
 void AioDriveInterface::init_iface_thread_ctx([[maybe_unused]] const io_thread_t& thr) {
-    _aio_ctx = new aio_thread_context();
-    _aio_ctx->ev_fd = eventfd(0, EFD_NONBLOCK);
-    _aio_ctx->ev_io_dev =
-        iomanager.generic_interface()->make_io_device(backing_dev_t(_aio_ctx->ev_fd), EPOLLIN, 0, nullptr, true,
-                                                      bind_this(AioDriveInterface::process_completions, 3));
+    // TODO: Ideally we need to move this aio_thread_context from thread_local to IOInterface::thread_local
+    // so that we can support multiple AioDriveInterfaces within the thread if needed.
+    t_aio_ctx = new aio_thread_context();
+    t_aio_ctx->ev_fd = eventfd(0, EFD_NONBLOCK);
+    t_aio_ctx->ev_io_dev =
+        iomanager.generic_interface()->make_io_device(backing_dev_t(t_aio_ctx->ev_fd), EPOLLIN, 0, nullptr, true,
+                                                      bind_this(AioDriveInterface::on_event_notification, 3));
 
-    int err = io_setup(MAX_OUTSTANDING_IO, &_aio_ctx->ioctx);
+    int err = io_setup(MAX_OUTSTANDING_IO, &t_aio_ctx->ioctx);
     if (err) {
         LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
         folly::throwSystemError(fmt::format("io_setup failed with ret status {} errno {}", err, errno));
     }
 
-    _aio_ctx->iocb_info_prealloc(MAX_OUTSTANDING_IO);
+    t_aio_ctx->iocb_info_prealloc(MAX_OUTSTANDING_IO);
+    t_aio_ctx->poll_cb_idx =
+        iomanager.this_reactor()->register_poll_interval_cb(bind_this(AioDriveInterface::handle_completions, 0));
 }
 
 void AioDriveInterface::clear_iface_thread_ctx([[maybe_unused]] const io_thread_t& thr) {
-    iomanager.generic_interface()->remove_io_device(_aio_ctx->ev_io_dev);
-    close(_aio_ctx->ev_fd);
-    delete _aio_ctx;
+    iomanager.generic_interface()->remove_io_device(t_aio_ctx->ev_io_dev);
+    close(t_aio_ctx->ev_fd);
+    delete t_aio_ctx;
 }
 
-void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int event) {
-    assert(iodev->fd() == _aio_ctx->ev_fd);
+void AioDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]] void* cookie,
+                                              [[maybe_unused]] int event) {
+    assert(iodev->fd() == t_aio_ctx->ev_fd);
 
-    (void)cookie;
-    (void)event;
-
-    /* TODO need to handle the error events */
     uint64_t temp = 0;
+    [[maybe_unused]] auto rsize = read(t_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
 
-    [[maybe_unused]] auto rsize = read(_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
-    int nevents = io_getevents(_aio_ctx->ioctx, 0, MAX_COMPLETIONS, _aio_ctx->events, NULL);
+    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {}", iodev->fd(), t_aio_ctx->ev_fd);
+    handle_completions();
+}
 
-    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {} nevents = {}", iodev->fd(), _aio_ctx->ev_fd, nevents);
+void AioDriveInterface::handle_completions() {
+    auto& tmetrics{iomanager.this_reactor()->thread_metrics()};
+
+    const int nevents = io_getevents(t_aio_ctx->ioctx, 0, MAX_COMPLETIONS, t_aio_ctx->events, NULL);
+    ++tmetrics.io_callbacks;
+
     if (nevents == 0) {
-        COUNTER_INCREMENT(m_metrics, spurious_events, 1);
+        return;
     } else if (nevents < 0) {
         /* TODO: Handle error by reporting failures */
         LOGERROR("process_completions nevents is less then zero {}", nevents);
         COUNTER_INCREMENT(m_metrics, completion_errors, 1);
     } else {
-        COUNTER_INCREMENT(m_metrics, total_io_callbacks, 1);
+        tmetrics.aio_events_in_callback += nevents;
     }
 
-    for (int i = 0; i < nevents; i++) {
-        auto& e = _aio_ctx->events[i];
+    for (int i = 0; i < nevents; ++i) {
+        auto& e = t_aio_ctx->events[i];
 
         auto ret = static_cast< int64_t >(e.res);
         auto iocb = (struct iocb*)e.obj;
@@ -148,16 +224,10 @@ void AioDriveInterface::process_completions(IODevice* iodev, void* cookie, int e
         }
 
         auto user_cookie = (uint8_t*)iocb->data;
-        _aio_ctx->dec_submitted_aio();
-        _aio_ctx->free_iocb(iocb);
+        t_aio_ctx->dec_submitted_aio();
+        t_aio_ctx->free_iocb(iocb);
         retry_io();
         if (m_comp_cb) { m_comp_cb(e.res2, user_cookie); }
-    }
-
-    // Call any batch completion hints
-    if (nevents && m_io_end_of_batch_cb) {
-        LOGTRACEMOD(iomgr, "Making end of batch cb list callback with nevents={}", nevents);
-        m_io_end_of_batch_cb(nevents);
     }
 }
 
@@ -165,8 +235,8 @@ bool AioDriveInterface::resubmit_iocb_on_err(struct iocb* iocb) {
     auto info = (iocb_info_t*)iocb;
     if (info->resubmit_cnt > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) { return false; }
     ++info->resubmit_cnt;
-    _aio_ctx->prep_iocb_for_resubmit(iocb);
-    auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
+    t_aio_ctx->prep_iocb_for_resubmit(iocb);
+    auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
     COUNTER_INCREMENT(m_metrics, resubmit_io_on_err, 1);
     if (ret != 1) { handle_io_failure(iocb); }
     return true;
@@ -174,19 +244,22 @@ bool AioDriveInterface::resubmit_iocb_on_err(struct iocb* iocb) {
 
 void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                     bool part_of_batch) {
-    if (!_aio_ctx->can_submit_aio()) {
-        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
-        push_retry_list(iocb);
+    if (!t_aio_ctx->can_submit_aio()) {
+        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
+        push_retry_list(iocb, true /* no_slot */);
         return;
     }
 
-    if (part_of_batch && _aio_ctx->can_be_batched(0)) {
-        _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
+    if (part_of_batch && t_aio_ctx->can_be_batched(0)) {
+        t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
     } else {
-        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
-        COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        _aio_ctx->inc_submitted_aio(ret);
+        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
+        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        ++metrics.io_submissions;
+        ++metrics.actual_ios;
+
+        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
+        t_aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -195,32 +268,89 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
 }
 
 void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    uint64_t range[2];
-    range[0] = offset;
-    range[1] = size;
-    auto ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-    if (ret) {
-        if (m_comp_cb) m_comp_cb(errno, cookie);
+    if ((iodev->drive_type == iomgr_drive_type::block) && (m_max_write_zeros != 0)) {
+        write_zero_ioctl(iodev, size, offset, cookie);
     } else {
-        if (m_comp_cb) m_comp_cb(0, cookie);
+        write_zero_writev(iodev, size, offset, cookie);
     }
+}
+
+void AioDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    assert(m_max_write_zeros != 0);
+
+#ifdef __linux__
+    uint64_t range[2];
+    int ret{0};
+    while (size > 0) {
+        uint64_t this_size = std::min(size, m_max_write_zeros);
+        range[0] = offset;
+        range[1] = this_size;
+        ret = ioctl(iodev->fd(), BLKZEROOUT, range);
+        if (ret != 0) {
+            LOGERROR("Error in writing zeros at offset={} size={} errno={}", offset, this_size, errno);
+            break;
+        }
+        offset += this_size;
+        size -= this_size;
+    }
+    if (m_comp_cb) { m_comp_cb(((ret != 0) ? errno : 0), cookie); }
+#endif
+}
+
+void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+    if (size == 0) {
+        assert(false);
+        return;
+    }
+
+    uint64_t total_sz_written = 0;
+    while (total_sz_written < size) {
+        const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
+                                                                                   : (size - total_sz_written)};
+
+        const auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
+
+        std::vector< iovec > iov(iovcnt);
+        for (uint32_t i = 0; i < iovcnt; ++i) {
+            iov[i].iov_base = m_zero_buf;
+            iov[i].iov_len = max_buf_size;
+        }
+
+        iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
+        try {
+            // returned written sz already asserted in sync_writev;
+            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+        } catch (std::exception& e) {
+            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
+                           iodev->devname, size);
+        }
+
+        total_sz_written += sz_to_write;
+    }
+
+    assert(total_sz_written == size);
+
+    if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
 
-    if (!_aio_ctx->can_submit_aio()) {
-        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
-        push_retry_list(iocb);
+    if (!t_aio_ctx->can_submit_aio()) {
+        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
+        push_retry_list(iocb, true /* no_slot */);
         return;
     }
-    if (part_of_batch && _aio_ctx->can_be_batched(0)) {
-        _aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
+    if (part_of_batch && t_aio_ctx->can_be_batched(0)) {
+        t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
     } else {
-        auto iocb = _aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
-        COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        _aio_ctx->inc_submitted_aio(ret);
+        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
+        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        ++metrics.io_submissions;
+        ++metrics.actual_ios;
+
+        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
+        t_aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -231,22 +361,26 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
 void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie, bool part_of_batch) {
 
-    if (!_aio_ctx->can_submit_aio()
+    if (!t_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
         || flip::Flip::instance().test_flip("io_write_iocb_empty_flip")
 #endif
     ) {
-        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
-        push_retry_list(iocb);
+        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
+        push_retry_list(iocb, true /* no_slot */);
         return;
     }
-    if (part_of_batch && _aio_ctx->can_be_batched(iovcnt)) {
-        _aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), false /* is_read */, iov, iovcnt, size, offset, cookie);
+    if (part_of_batch && t_aio_ctx->can_be_batched(iovcnt)) {
+        t_aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), false /* is_read */, iov, iovcnt, size, offset,
+                               cookie);
     } else {
-        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
-        COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        _aio_ctx->inc_submitted_aio(ret);
+        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
+        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        ++metrics.io_submissions;
+        ++metrics.actual_ios;
+
+        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
+        t_aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -257,23 +391,27 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie, bool part_of_batch) {
 
-    if (!_aio_ctx->can_submit_aio()
+    if (!t_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
         || flip::Flip::instance().test_flip("io_read_iocb_empty_flip")
 #endif
     ) {
-        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
-        push_retry_list(iocb);
+        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
+        push_retry_list(iocb, true /* no_slot */);
         return;
     }
 
-    if (part_of_batch && _aio_ctx->can_be_batched(iovcnt)) {
-        _aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), true /* is_read */, iov, iovcnt, size, offset, cookie);
+    if (part_of_batch && t_aio_ctx->can_be_batched(iovcnt)) {
+        t_aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), true /* is_read */, iov, iovcnt, size, offset, cookie);
     } else {
-        auto iocb = _aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
-        COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        _aio_ctx->inc_submitted_aio(ret);
+        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
+
+        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        ++metrics.io_submissions;
+        ++metrics.actual_ios;
+
+        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
+        t_aio_ctx->inc_submitted_aio(ret);
         if (ret != 1) {
             handle_io_failure(iocb);
             return;
@@ -285,14 +423,17 @@ void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t off
                                     bool part_of_batch) {}
 
 void AioDriveInterface::submit_batch() {
-    auto ibatch = _aio_ctx->move_cur_batch();
+    auto ibatch = t_aio_ctx->move_cur_batch();
     LOGTRACEMOD(iomgr, "submit pending batch n_iocbs={}", ibatch.n_iocbs);
     if (ibatch.n_iocbs == 0) { return; } // No batch to submit
 
-    COUNTER_INCREMENT(m_metrics, total_io_submissions, 1);
-    auto n_issued = io_submit(_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
+    auto& metrics{iomanager.this_reactor()->thread_metrics()};
+    ++metrics.io_submissions;
+
+    auto n_issued = io_submit(t_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
     if (n_issued < 0) { n_issued = 0; }
-    _aio_ctx->inc_submitted_aio(n_issued);
+    metrics.actual_ios += n_issued;
+    t_aio_ctx->inc_submitted_aio(n_issued);
 
     // For those which we are not able to issue, convert that to sync io
     auto n_iocbs = ibatch.n_iocbs;
@@ -305,22 +446,24 @@ void AioDriveInterface::submit_batch() {
 
 void AioDriveInterface::retry_io() {
     struct iocb* iocb = nullptr;
-    while ((_aio_ctx->can_submit_aio()) && (iocb = _aio_ctx->pop_retry_list()) != nullptr) {
-        auto ret = io_submit(_aio_ctx->ioctx, 1, &iocb);
-        _aio_ctx->inc_submitted_aio(ret);
+    while ((t_aio_ctx->can_submit_aio()) && (iocb = t_aio_ctx->pop_retry_list()) != nullptr) {
+        COUNTER_DECREMENT(m_metrics, retry_list_size, 1);
+        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
+        t_aio_ctx->inc_submitted_aio(ret);
         if (ret != 1 && handle_io_failure(iocb)) { break; }
     }
 }
 
-void AioDriveInterface::push_retry_list(struct iocb* iocb) {
+void AioDriveInterface::push_retry_list(struct iocb* iocb, const bool no_slot) {
     auto info = (iocb_info_t*)iocb;
-    COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
-    LOGINFO("adding io into retry list: {}", info->to_string());
-    _aio_ctx->push_retry_list(iocb);
-    if (!_aio_ctx->timer_set) {
-        _aio_ctx->timer_set = true;
+    COUNTER_INCREMENT_IF_ELSE(m_metrics, no_slot, queued_aio_slots_full, retry_io_eagain_error, 1);
+    COUNTER_INCREMENT(m_metrics, retry_list_size, 1);
+    LOGDEBUGMOD(iomgr, "adding io into retry list: {}", info->to_string());
+    t_aio_ctx->push_retry_list(iocb);
+    if (!t_aio_ctx->timer_set) {
+        t_aio_ctx->timer_set = true;
         iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(aio->retry_timeout), false, nullptr, [this](void* cookie) {
-            _aio_ctx->timer_set = false;
+            t_aio_ctx->timer_set = false;
             retry_io();
         });
     }
@@ -331,14 +474,12 @@ bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
     bool ret = true;
 
     if (errno == EAGAIN) {
-        COUNTER_INCREMENT(m_metrics, retry_io_eagain_error, 1);
-        LOGINFO("adding io into retry list: {}", info->to_string());
-        push_retry_list(iocb);
+        push_retry_list(iocb, false /* no_slot */);
     } else {
         LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
         COUNTER_INCREMENT_IF_ELSE(m_metrics, info->is_read, read_io_submission_errors, write_io_submission_errors, 1);
         ret = false;
-        _aio_ctx->free_iocb(iocb);
+        t_aio_ctx->free_iocb(iocb);
         if (m_comp_cb) m_comp_cb(errno, (uint8_t*)iocb->data);
     }
     return ret;
@@ -452,7 +593,7 @@ size_t AioDriveInterface::get_size(IODevice* iodev) {
     return 0;
 }
 
-drive_attributes AioDriveInterface::get_attributes([[maybe_unused]] const io_device_ptr& dev) const {
+drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
     // TODO: Get this information from SSD using /sys commands
     drive_attributes attr;
     attr.phys_page_size = 4096;
@@ -465,8 +606,34 @@ drive_attributes AioDriveInterface::get_attributes([[maybe_unused]] const io_dev
     return attr;
 }
 
-drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
-    return get_attributes(nullptr);
+void AioDriveInterface::init_poll_interval_table() {
+    s_poll_interval_table.clear();
+    s_poll_interval_table.push_back(IM_DYNAMIC_CONFIG(poll.force_wakeup_by_time_ms));
+    auto tight_loop_after_ios{IM_DYNAMIC_CONFIG(poll.tight_loop_after_io_max)};
+
+    // TODO: For now we are not putting the decay factor, but eventually timeout
+    // will start high for lower outstanding ios and decay towards max ios
+    int t{s_poll_interval_table[0]};
+    for (uint32_t i{1}; i < tight_loop_after_ios; ++i) {
+        s_poll_interval_table.push_back(t);
+    }
+    s_poll_interval_table.push_back(0); // Tight loop from here on
 }
 
+/////////////////////////// aio_thread_context /////////////////////////////////////////////////
+void aio_thread_context::dec_submitted_aio() {
+    --submitted_aio;
+    iomanager.this_reactor()->set_poll_interval((submitted_aio >= AioDriveInterface::s_poll_interval_table.size())
+                                                    ? 0
+                                                    : AioDriveInterface::s_poll_interval_table[submitted_aio]);
+}
+
+void aio_thread_context::inc_submitted_aio(int count) {
+    if (count < 0) { return; }
+    submitted_aio += count;
+
+    iomanager.this_reactor()->set_poll_interval(submitted_aio >= AioDriveInterface::s_poll_interval_table.size()
+                                                    ? 0
+                                                    : AioDriveInterface::s_poll_interval_table[submitted_aio]);
+}
 } // namespace iomgr

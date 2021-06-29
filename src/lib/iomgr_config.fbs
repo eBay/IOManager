@@ -12,11 +12,48 @@ table SpdkDriveInterface {
 
 table AioDriveInterface {
     retry_timeout: uint32 = 1000 (hotswap);
+    zeros_by_ioctl: bool = false;
+}
+
+table IOMemory {
+    // Percentage of memory to be filled by app before we ask underlying mem allocator to free it up
+    soft_mem_release_threshold: uint32 = 85;
+
+    // Percentage of memory to be filled by app before we force underlying mem allocator to free it up
+    aggressive_mem_release_threshold: uint32 = 95;
+
+    // Rate of memory release rate to the underlying mem allocator
+    mem_release_rate: uint32 = 8;
+
+    // Frequency in count of alloc/free to check if memory limit is exceeded
+    limit_check_freq: uint32 = 1000;
+}
+
+table Poll {
+    // Frequency in milliseconds that poll will wake up during non-IO periods. -1 would mean never, 0 would
+    // mean run always in tight loop
+    force_wakeup_by_time_ms: int = 10;
+
+    // The max ios after which thread runs in a tight loop
+    tight_loop_after_io_max: uint32 = 4;
+
+    // Upon every outstanding io in the reactor thread, the wait time is reduced by the factor of this setting
+    // So if io_wakeup_interval_max = 4, then when no IO it will wait for "quiet_wakeup_interval_ms", then upon
+    // first io, it will wait for "io_wakeup_interval_max", then next outstanding io, it will wait for 
+    // "io_wakeup_interval_max" * "io_wakeup_interval_decay_percentage" and so on.. until wait time becomes zero
+    // where it will run tight loop.
+    force_wakeup_by_io_decay_factor : float = 0.5;
+
+    //io_wakeup_interval_decay_percentage : float = 0.5;
+    
 }
 
 table IomgrSettings {
     spdk: SpdkDriveInterface;
     aio : AioDriveInterface;
+    iomem: IOMemory;
+    poll: Poll;
+
     cpuset_path: string;
 
     // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor

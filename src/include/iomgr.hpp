@@ -13,21 +13,34 @@ extern "C" {
 #include <mutex>
 #include <map>
 #include <memory>
+#include <random>
 #include <vector>
 #include <utility/thread_buffer.hpp>
 #include <utility/atomic_counter.hpp>
 #include <fds/sparse_vector.hpp>
+#include <fds/malloc_helper.hpp>
+#include <fds/buffer.hpp>
+
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
 #include <folly/Synchronized.h>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 #include "iomgr_msg.hpp"
 #include "reactor.hpp"
 #include "iomgr_timer.hpp"
 #include "io_interface.hpp"
+#include "iomgr_types.hpp"
 #include "drive_interface.hpp"
 #include <functional>
-#include <fds/utils.hpp>
 #include <fds/id_reserver.hpp>
 #include <utility/enum.hpp>
 #include <sds_logging/logging.h>
+#include <semver/semver200.h>
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -58,25 +71,6 @@ struct overloaded : Ts... {
 };
 template < class... Ts >
 overloaded(Ts...) -> overloaded< Ts... >;
-
-using msg_handler_t = std::function< void(iomgr_msg*) >;
-using interface_adder_t = std::function< void(void) >;
-using reactor_info_t = std::pair< std::thread, std::shared_ptr< IOReactor > >;
-typedef void (*spdk_msg_signature_t)(void*);
-
-class IOManagerMetrics : public sisl::MetricsGroup {
-public:
-    IOManagerMetrics() : sisl::MetricsGroup{"IOManager", "Singelton"} {
-#ifdef _PRERELEASE
-        REGISTER_COUNTER(iomem_retained, "IO Memory maintained", sisl::_publish_as::publish_as_gauge);
-#endif
-        register_me_to_farm();
-    }
-    IOManagerMetrics(const IOManagerMetrics&) = delete;
-    IOManagerMetrics(IOManagerMetrics&&) noexcept = delete;
-    IOManagerMetrics& operator=(const IOManagerMetrics&) = delete;
-    IOManagerMetrics& operator=(IOManagerMetrics&&) noexcept = delete;
-};
 
 class IOMempoolMetrics : public sisl::MetricsGroup {
 public:
@@ -121,11 +115,18 @@ public:
     }
 };
 
+/**
+ * @brief Get the IOManager version
+ */
+extern const version::Semver200_version get_version();
+
 class IOManager {
 public:
     friend class IOReactor;
     friend class IOReactorEPoll;
     friend class IOInterface;
+    friend class DriveInterface;
+    friend class GenericIOInterface;
 
     static IOManager& instance() {
         static IOManager inst;
@@ -230,53 +231,115 @@ public:
      */
     void device_reschedule(const io_device_ptr& iodev, int event);
 
-    /**
-     * @brief Run a method on one or more reactors and optionally wait for that method to complete.
-     *
-     * @param r One of the thread_regex indicating which all reactors this method has to run.
-     * @param fn
-     * @param wait_for_completion
-     * @return int
-     */
-    int run_on(thread_regex r, const auto& fn, bool wait_for_completion = false) {
-        int sent_to = 0;
-        if (wait_for_completion) {
-            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent_to = multicast_msg_and_wait(r, smsg);
-            LOGDEBUGMOD(iomgr, "Run method sync msg completion done"); // TODO: Remove this line
-        } else {
-            sent_to = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-        }
-        return sent_to;
-    }
-
     // Direct run_on method for spdk without any msg creation
     int run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* context);
 
-    int run_on(const io_thread_t& thread, const auto& fn, bool wait_for_completion = false) {
-        bool sent = false;
-        if (wait_for_completion) {
-            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent = send_msg_and_wait(thread, smsg);
+    /**
+     * @brief Run the lambda/function passed on specific thread and optionally wait for its completion. If the
+     * caller is same as destination thread, it will run the method right away.
+     *
+     * @param thread The IO Thread returned from the destination iothread_self() to which the method is to run
+     * @param fn  Method to run
+     * @param wait_type wait_type A variant supporting 4 types,
+     *         1. nowait - Fire and forget, no need of waiting for the function to be completed.
+     *         2. sleep -  Wait by sleeping till the thread that executing completed running the method
+     *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
+     *                     the running method, then program will be deadlocked.
+     *         3. spin  -  Wait by spinning, this method is not supported, but once supported will be able to handle
+     *                     any incoming events while spinning
+     *         4. Closure - Closure to be called after method is run in the caller thread.
+     *
+     * @return 1 for able to schedule the method to run, 0 otherwise
+     */
+    int run_on(const io_thread_t& thread, const auto& fn,
+               const std::variant< wait_type_t, run_on_closure_t >& wait_type = wait_type_t::no_wait) {
+        bool sent{false};
+        if (std::holds_alternative< wait_type_t >(wait_type)) {
+            const wait_type_t wtype = std::get< wait_type_t >(wait_type);
+            if (wtype == wait_type_t::no_wait) {
+                sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+            } else if (wtype == wait_type_t::sleep) {
+                sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+                sent = send_msg_and_wait(thread, smsg);
+            } else {
+                DEBUG_ASSERT(0, "run_on with spin wait_type not supported yet");
+            }
         } else {
-            sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+            DEBUG_ASSERT(0, "run_on direct thread with async closure is not supported yet");
         }
-        return ((int)sent);
+        return (sent ? 1 : 0);
+    }
+
+    /**
+     * @brief Run the lambda/function passed on multipled threads and optionally wait for theirs completion. If the
+     * caller is one among the destination thread, it will run the method right away in that thread.
+     *
+     * @param thread_regex Thread regex representing all the threads the method needs to run
+     * @param fn  Method to run (can be a lambda or std::function)
+     * @param wait_type wait_type A variant supporting 4 types,
+     *         1. nowait - Fire and forget, no need of waiting for the function to be completed.
+     *         2. sleep -  Wait by sleeping till all threads that executing completed running the method
+     *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
+     *                     the running method, then program will be deadlocked.
+     *         3. spin  -  Wait by spinning, this method is not supported yet, but once supported will be able to handle
+     *                     any incoming events while spinning
+     *         4. Closure - Closure to be called after method is run on all the threads. NOTE that this closure can be
+     *                      called on any thread, not neccessarily issuing thread only.
+     *
+     * @return number of threads this method was run.
+     */
+    int run_on(const thread_regex r, const auto& fn,
+               const std::variant< wait_type_t, run_on_closure_t >& wait_type = wait_type_t::no_wait) {
+        int sent_count{0};
+        wait_type_t wtype{wait_type_t::no_wait};
+
+        if (std::holds_alternative< run_on_closure_t >(wait_type)) {
+            // If the closure is not provided, its same as no_wait, so switch to no_wait
+            auto closure = std::get< run_on_closure_t >(wait_type);
+            if (closure != nullptr) {
+                auto pending_count = new std::atomic< int >(0);
+                auto temp_cb = [fn, closure, pending_count](io_thread_addr_t addr) {
+                    fn(addr);
+                    if (pending_count->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                        closure();
+                        delete pending_count;
+                    }
+                };
+
+                sent_count =
+                    multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
+                if ((pending_count->fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count)) {
+                    closure();
+                    delete pending_count;
+                }
+                return sent_count;
+            }
+        } else {
+            wtype = std::get< wait_type_t >(wait_type);
+        }
+
+        if (wtype == wait_type_t::no_wait) {
+            sent_count = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        } else if (wtype == wait_type_t::sleep) {
+            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent_count = multicast_msg_and_wait(r, smsg);
+        } else {
+            DEBUG_ASSERT(0, "run_on with spin wait_type not supported yet");
+        }
+
+        return sent_count;
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
         static synchronized_async_method_ctx mctx;
-        int executed_on = run_on(
-            r,
-            [&fn]([[maybe_unused]] auto taddr) {
-                fn(mctx);
-                {
-                    std::unique_lock< std::mutex > lk{mctx.m};
-                    --mctx.outstanding_count;
-                }
-                mctx.cv.notify_one();
-            },
-            false);
+        int executed_on = run_on(r, [&fn]([[maybe_unused]] auto taddr) {
+            fn(mctx);
+            {
+                std::unique_lock< std::mutex > lk{mctx.m};
+                --mctx.outstanding_count;
+            }
+            mctx.cv.notify_one();
+        });
 
         {
             std::unique_lock< std::mutex > lk{mctx.m};
@@ -305,32 +368,34 @@ public:
         auto r = this_reactor();
         return r && r->is_worker();
     }
-    IOManagerMetrics& metrics() { return m_iomgr_metrics; }
+    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
-    // bool is_interface_registered() const { return ((uint16_t)get_state() > (uint16_t)iomgr_state::interface_init); }
-    void wait_to_be_ready() {
+
+    void set_state(iomgr_state state) {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        m_cv.wait(lck, [this] { return (get_state() == iomgr_state::running); });
+        m_state = state;
     }
 
-    void wait_to_be_stopped() {
+    iomgr_state get_state() const {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (get_state() != iomgr_state::stopped) {
-            m_cv.wait(lck, [this] { return (get_state() == iomgr_state::stopped); });
-        }
+        return m_state;
     }
 
-    /*void wait_for_interface_registration() {
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
-        m_cv.wait(lck, [this] { return is_interface_registered(); });
-    }*/
+    void set_state_and_notify(iomgr_state state) {
+        set_state(state);
+        m_cv.notify_all();
+    }
+
+    void wait_to_be_ready() { wait_for_state(iomgr_state::running); }
+
+    void wait_to_be_stopped() { wait_for_state(iomgr_state::stopped); }
 
     void wait_for_state(iomgr_state expected_state) {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (get_state() != expected_state) {
-            m_cv.wait(lck, [&] { return (get_state() == expected_state); });
+        if (m_state != expected_state) {
+            m_cv.wait(lck, [&] { return (m_state == expected_state); });
         }
     }
 
@@ -341,10 +406,10 @@ public:
             LOGINFO("IOManager is ready now");
         }
     }
-    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
 
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
+    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
 
     /******** Message related infra ********/
     bool send_msg(const io_thread_t& thread, iomgr_msg* msg);
@@ -356,23 +421,22 @@ public:
     msg_handler_t& get_msg_module(msg_module_id_t id);
 
     /******** IO Buffer related ********/
-    uint8_t* iobuf_alloc(size_t align, size_t size);
-    void iobuf_free(uint8_t* buf);
+    uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
+    void set_io_memory_limit(size_t limit);
+    [[nodiscard]] size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
+    [[nodiscard]] size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
 
     /******** Timer related Operations ********/
-    int64_t idle_timeout_interval_usec() const { return -1; };
-    void idle_timeout_expired() {
-        if (m_idle_timeout_expired_cb) { m_idle_timeout_expired_cb(); }
-    }
-
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn);
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
                                          timer_callback_t&& timer_fn);
-
     void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
+    void set_poll_interval(const int interval);
+    int get_poll_interval() const;
 
 private:
     IOManager();
@@ -394,31 +458,22 @@ private:
     void mempool_metrics_populate();
     void register_mempool_metrics(struct rte_mempool* mp);
 
-    void set_state(iomgr_state state) { m_state.store(state, std::memory_order_release); }
-    iomgr_state get_state() const { return m_state.load(std::memory_order_acquire); }
-    void set_state_and_notify(iomgr_state state) {
-        set_state(state);
-        m_cv.notify_all();
-    }
-
     void _pick_reactors(thread_regex r, const auto& cb);
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
 
     [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
     [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
-    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
     [[nodiscard]] bool is_spdk_inited() const;
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
-    std::atomic< iomgr_state > m_state = iomgr_state::stopped;    // Current state of IOManager
+    iomgr_state m_state = iomgr_state::stopped;                   // Current state of IOManager
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors = 0; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
     uint32_t m_num_workers = 0;
 
     folly::Synchronized< std::vector< std::shared_ptr< IOInterface > > > m_iface_list;
-    folly::Synchronized< std::unordered_map< backing_dev_t, io_device_ptr > > m_iodev_map;
     folly::Synchronized< std::vector< std::shared_ptr< DriveInterface > > > m_drive_ifaces;
 
     std::shared_ptr< DriveInterface > m_default_drive_iface;
@@ -427,11 +482,11 @@ private:
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 
-    std::mutex m_cv_mtx;
+    mutable std::mutex m_cv_mtx;
     std::condition_variable m_cv;
-    std::function< void() > m_idle_timeout_expired_cb = nullptr;
 
     sisl::sparse_vector< reactor_info_t > m_worker_reactors;
+    std::uniform_int_distribution< size_t > m_rand_worker_distribution;
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
@@ -447,20 +502,22 @@ private:
     bool m_is_spdk{false};
     bool m_spdk_reinit_needed{false};
 
-    IOManagerMetrics m_iomgr_metrics;
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
+    size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};
+    size_t m_mem_soft_threshold_size{m_mem_size_limit};
+    size_t m_mem_aggressive_threshold_size{m_mem_size_limit};
 };
 
 struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
-    uint8_t* aligned_alloc(size_t align, size_t sz) override;
-    void aligned_free(uint8_t* b) override;
+    uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
+    void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
     size_t buf_size(uint8_t* buf) const override;
 };
 
 struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
-    uint8_t* aligned_alloc(size_t align, size_t sz) override;
-    void aligned_free(uint8_t* b) override;
+    uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
+    void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
 };
 #define iomanager iomgr::IOManager::instance()

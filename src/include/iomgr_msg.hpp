@@ -7,16 +7,13 @@
 
 #include <iostream>
 #include <folly/Traits.h>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <fds/obj_allocator.hpp>
+#include <utility/obj_life_counter.hpp>
 #include "reactor.hpp"
+#include "iomgr_types.hpp"
 
 namespace iomgr {
-
-struct IODevice;
-typedef std::shared_ptr< IODevice > io_device_ptr;
-
-using msg_module_id_t = uint32_t;
 
 struct iomgr_msg_type {
     static constexpr int UNKNOWN = 0;
@@ -29,14 +26,6 @@ struct iomgr_msg_type {
 #endif
     static constexpr int RUN_METHOD = 6; // Run the method in your thread
 };
-
-struct reschedule_data_t {
-    std::shared_ptr< IODevice > iodev;
-    int event;
-};
-
-typedef std::function< void(io_thread_addr_t) > run_method_t;
-using msg_data_t = std::variant< sisl::blob, reschedule_data_t, run_method_t >;
 
 struct _sync_sem_block {
     std::mutex m_mtx;
@@ -60,7 +49,7 @@ struct _sync_sem_block {
     }
 };
 
-struct iomgr_msg {
+struct iomgr_msg : public sisl::ObjLifeCounter< iomgr_msg > {
     friend class sisl::ObjectAllocator< iomgr_msg >;
 
     int m_type = 0;                               // Type of the message (different meaning for different modules)
@@ -93,12 +82,19 @@ struct iomgr_msg {
 protected:
     iomgr_msg() = default;
     iomgr_msg(const iomgr_msg& msg) = default;
-    iomgr_msg(int type, msg_module_id_t module, const msg_data_t& d) : m_type(type), m_dest_module(module), m_data(d) {}
+    iomgr_msg(int type, msg_module_id_t module, const msg_data_t& d) : m_type{type}, m_dest_module{module}, m_data{d} {}
     iomgr_msg(int type, msg_module_id_t module, void* buf = nullptr, uint32_t size = 0u) :
-            iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
+            m_type{type}, m_dest_module{module}, m_data{sisl::blob{(uint8_t*)buf, size}} {}
     iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
-            iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
-    iomgr_msg(int type, msg_module_id_t module, const auto& fn) : iomgr_msg(type, module, msg_data_t(fn)) {}
+            m_type{type}, m_dest_module{module}, m_data{reschedule_data_t{iodev, event}} {}
+    iomgr_msg(int type, msg_module_id_t module, const auto& fn) :
+            m_type{type}, m_dest_module{module}, m_data{run_method_t{fn}} {}
+
+    // iomgr_msg(type, module, msg_data_t(sisl::blob{(uint8_t*)buf, size})) {}
+    // iomgr_msg(int type, msg_module_id_t module, const std::shared_ptr< IODevice >& iodev, int event) :
+    //        iomgr_msg(type, module, msg_data_t(reschedule_data_t{iodev, event})) {}
+    // iomgr_msg(int type, msg_module_id_t module, const auto& fn) :
+    //        iomgr_msg(type, module, msg_data_t(run_method_t{fn})) {}
 
     virtual ~iomgr_msg() = default;
 };

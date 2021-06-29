@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(iomgr)
 
-enable_testing()
 set(CMAKE_CXX_STANDARD 17)
+enable_testing()
 
 include (cmake/Flags.cmake)
 
@@ -34,9 +34,12 @@ else()
     endif()
 endif()
 
-if  (${MEMORY_SANITIZER_ON})
-  include (cmake/mem_sanitizer.cmake)
-endif ()
+if (DEFINED MEMORY_SANITIZER_ON AND ${MEMORY_SANITIZER_ON})
+    message(STATUS "Build with Memory Sanitizer ON")
+    include (cmake/mem_sanitizer.cmake)
+else ()
+    message(STATUS "Build with Memory Sanitizer OFF")
+endif()
 
 include(${CONAN_SISL_ROOT}/cmake/settings_gen.cmake)
 
@@ -48,3 +51,15 @@ endif ()
 
 add_subdirectory(src/)
 add_subdirectory(src/test)
+
+# build info
+string(TOUPPER "${CMAKE_BUILD_TYPE}" UC_CMAKE_BUILD_TYPE)
+message(STATUS "Build configuration:       ${CMAKE_BUILD_TYPE}")
+message(STATUS "C compiler info:           ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION} ${CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN}")
+message(STATUS "C++ compiler info:         ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} ${CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN}")
+message(STATUS "C flags:                   ${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_${UC_CMAKE_BUILD_TYPE}}")
+message(STATUS "C++ flags:                 ${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${UC_CMAKE_BUILD_TYPE}}")
+message(STATUS "Linker flags (executable): ${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_EXE_LINKER_FLAGS_${UC_CMAKE_BUILD_TYPE}}")
+message(STATUS "Linker flags (shared):     ${CMAKE_SHARED_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS_${UC_CMAKE_BUILD_TYPE}}")
+message(STATUS "Linker flags (module):     ${CMAKE_MODULE_LINKER_FLAGS} ${CMAKE_MODULE_LINKER_FLAGS_${UC_CMAKE_BUILD_TYPE}}")
+message(STATUS "Linker flags (static):     ${CMAKE_STATIC_LINKER_FLAGS} ${CMAKE_STATIC_LINKER_FLAGS_${UC_CMAKE_BUILD_TYPE}}")

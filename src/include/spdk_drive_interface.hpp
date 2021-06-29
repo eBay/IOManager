@@ -2,7 +2,7 @@
 
 #include "drive_interface.hpp"
 #include <metrics/metrics.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <fds/vector_pool.hpp>
 #include <optional>
 #include <spdk/bdev.h>
@@ -59,8 +59,6 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::spdk; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    void attach_end_of_batch_cb(const io_interface_end_of_batch_cb_t& cb) override { m_io_end_of_batch_cb = cb; }
-    void detach_end_of_batch_cb() override { m_io_end_of_batch_cb = nullptr; }
 
     io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
@@ -85,26 +83,28 @@ public:
     void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
-    io_interface_end_of_batch_cb_t& get_end_of_batch_cb() { return m_io_end_of_batch_cb; }
 
     SpdkDriveInterfaceMetrics& get_metrics() { return m_metrics; }
-    drive_attributes get_attributes(const io_device_ptr& dev) const override;
     drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
     iomgr_drive_type get_drive_type(const std::string& devname) const override;
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
-private:
-    void _add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    void _remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    static constexpr auto max_wait_sync_io_us = 5us;
+    static constexpr auto min_wait_sync_io_us = 0us;
 
-    io_device_ptr _real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type);
-    void _open_dev_in_worker(const io_device_ptr& iodev);
+private:
+    drive_attributes get_attributes(const io_device_ptr& dev) const;
+    void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+
+    io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
+    void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
@@ -118,13 +118,8 @@ private:
     msg_module_id_t m_my_msg_modid;
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
-    io_interface_end_of_batch_cb_t m_io_end_of_batch_cb;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
-
-    static constexpr auto max_wait_sync_io_us = 5us;
-    static constexpr auto min_wait_sync_io_us = 0us;
-    static thread_local int s_num_user_sync_devs;
 };
 
 ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)

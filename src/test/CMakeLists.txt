@@ -13,27 +13,29 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
     add_executable(test_iomgr ${TEST_IOMGR_FILES})
     target_link_libraries(test_iomgr ${CONAN_LIBS} iomgr sisl flip)
 
-    if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
-        add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
-    endif()
-
-# TODO: Disabled till we get the spdk test_iomgr failure is fixed
-#   if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode"))
-#       add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
-#   endif()
-endif()
-
-if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode") OR 
-        ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
     set(TEST_MSG_FILES test_msg.cpp)
     add_executable(test_msg ${TEST_MSG_FILES})
     target_link_libraries(test_msg ${CONAN_LIBS} iomgr sisl flip)
 
+    set(TEST_IOJOB_FILES test_io_job.cpp)
+    add_executable(test_iojob ${TEST_IOJOB_FILES})
+    target_link_libraries(test_iojob ${CONAN_LIBS} iomgr sisl flip isal atomic)
+    
+    set(TEST_WRITEZERO_FILES test_write_zero.cpp)
+    add_executable(test_write_zero ${TEST_WRITEZERO_FILES})
+    target_link_libraries(test_write_zero ${CONAN_LIBS} iomgr sisl flip)
+
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
+        add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
         add_test(NAME TestMsg-Epoll COMMAND test_msg)
+        add_test(NAME TestIOJob-Epoll COMMAND test_iojob)
     endif()
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode"))
-        add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
+        # TODO: Disabled till we get the spdk test_iomgr failure is fixed
+        # add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
+
+        # TODO: Disabled till we fix SDSTOR-4468
+        # add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
     endif()
 endif()

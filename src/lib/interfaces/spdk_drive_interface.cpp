@@ -3,10 +3,19 @@
 #include "include/spdk_drive_interface.hpp"
 #include <folly/Exception.h>
 #include <fds/obj_allocator.hpp>
-#include <fds/utils.hpp>
+#include <fds/buffer.hpp>
 #include <filesystem>
 #include <thread>
+// TODO: Remove this once the problem is fixed in flip
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 #include <flip/flip.hpp>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 extern "C" {
 #include <spdk/env.h>
 #include <spdk/thread.h>
@@ -22,14 +31,13 @@ extern "C" {
 namespace iomgr {
 
 static io_thread_t _non_io_thread = std::make_shared< io_thread >();
-thread_local int SpdkDriveInterface::s_num_user_sync_devs{0};
+thread_local int s_temp_thread_ref_count{0};
 
 #ifndef NDEBUG
 std::atomic< uint64_t > SpdkIocb::_iocb_id_counter{0};
 #endif
 
 SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
-    // m_my_msg_modid = iomanager.register_msg_module(bind_this(handle_msg, 1));
     m_my_msg_modid = iomanager.register_msg_module([this](iomgr_msg* msg) { handle_msg(msg); });
 }
 
@@ -40,50 +48,67 @@ struct creat_ctx {
     iomgr_drive_type addr_type;
     std::error_condition err;
     const char* names[128];
-    std::mutex lock;
-    std::condition_variable cv;
     bool done{false};
     std::string bdev_name;
 };
 
-static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
-    {
-        auto lg = std::lock_guard< std::mutex >(ctx->lock);
-        LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted",
-                ctx->address);
-        auto const bdev_name = ctx->address + std::string("_bdev");
+static spdk_thread* create_temp_spdk_thread() {
+    auto sthread = spdk_get_thread();
+    if (s_temp_thread_ref_count == 0) {
+        if (sthread != nullptr) { return sthread; } // We are already tight loop reactor
 
-        assert(spdk_bdev_get_by_name(bdev_name.c_str()) == nullptr);
-#ifdef SPDK_DRIVE_USE_URING
-        auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-        if (bdev == nullptr) {
-            folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
-        }
-#else
-        int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
-        if (ret != 0) {
-            folly::throwSystemError(
-                fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
-        }
-#endif
-        ctx->bdev_name = bdev_name;
-        ctx->done = true;
+        sthread = spdk_thread_create(NULL, NULL);
+        if (sthread == NULL) { throw std::runtime_error("SPDK Thread Create failed"); }
+        spdk_set_thread(sthread);
     }
-    ctx->cv.notify_all();
+    ++s_temp_thread_ref_count;
+    return sthread;
+}
+
+static void destroy_temp_spdk_thread() {
+    if (s_temp_thread_ref_count == 0) {
+        assert(spdk_get_thread() != nullptr); // We must be a tight loop reactor, don't disturb it
+    } else if (--s_temp_thread_ref_count == 0) {
+        auto sthread = spdk_get_thread();
+        assert(sthread != NULL);
+        spdk_thread_exit(sthread);
+        while (!spdk_thread_is_exited(sthread)) {
+            spdk_thread_poll(sthread, 0, 0);
+        }
+        spdk_thread_destroy(sthread);
+    }
+}
+
+static void create_fs_bdev(std::shared_ptr< creat_ctx > ctx) {
+    LOGINFO("Opening {} as an SPDK drive, creating a bdev out of the file, performance will be impacted", ctx->address);
+    auto const bdev_name = ctx->address + std::string("_bdev");
+
+    create_temp_spdk_thread();
+    assert(spdk_bdev_get_by_name(bdev_name.c_str()) == nullptr);
+#ifdef SPDK_DRIVE_USE_URING
+    auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+    if (bdev == nullptr) {
+        folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error", bdev_name));
+    }
+#else
+    int ret = create_aio_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
+    if (ret != 0) {
+        folly::throwSystemError(fmt::format("Unable to open the device={} to create bdev error={}", bdev_name, ret));
+    }
+#endif
+    ctx->bdev_name = bdev_name;
+    ctx->done = true;
+    destroy_temp_spdk_thread();
 }
 
 static void create_bdev_done(void* cb_ctx, size_t bdev_cnt, int rc) {
-    auto context = static_cast< creat_ctx* >(cb_ctx);
-    {
-        auto lg = std::lock_guard< std::mutex >(context->lock);
-        LOGDEBUGMOD(iomgr, "Volume setup for {} received: [rc={}, cnt={}]", context->address, rc, bdev_cnt);
-        if (0 < bdev_cnt) {
-            context->bdev_name = std::string(context->names[--bdev_cnt]);
-            LOGDEBUGMOD(iomgr, "Created BDev: [{}]", context->bdev_name);
-        }
-        context->done = true;
+    auto ctx = static_cast< creat_ctx* >(cb_ctx);
+    LOGDEBUGMOD(iomgr, "Volume setup for {} received: [rc={}, cnt={}]", ctx->address, rc, bdev_cnt);
+    if (0 < bdev_cnt) {
+        ctx->bdev_name = std::string(ctx->names[--bdev_cnt]);
+        LOGDEBUGMOD(iomgr, "Created BDev: [{}]", ctx->bdev_name);
     }
-    context->cv.notify_all();
+    ctx->done = true;
 }
 
 static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
@@ -92,45 +117,51 @@ static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
     memset(&trid, 0, sizeof(trid));
     trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
 
-    do {
-        auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
-        if (rc < 0) {
-            LOGERROR("Failed to parse given str: {}", address_c);
-            continue;
-        }
-
-        if (trid.trtype == SPDK_NVME_TRANSPORT_PCIE) {
-            struct spdk_pci_addr pci_addr;
-            if (spdk_pci_addr_parse(&pci_addr, trid.traddr) < 0) {
-                LOGERROR("Invalid traddr={}", address_c);
-                continue;
-            }
-            spdk_pci_addr_fmt(trid.traddr, sizeof(trid.traddr), &pci_addr);
-        } else {
-            if (trid.subnqn[0] == '\0') { snprintf(trid.subnqn, sizeof(trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN); }
-        }
-
-        /* Enumerate all of the controllers */
-        spdk_nvme_host_id hostid{};
-        uint32_t count{128};
-        if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
-                                  (void*)ctx.get());
-            0 != rc) {
-            LOGERROR("Failed createing NVMe BDEV from {}", trid.traddr);
-        }
-        // Good exit path, wait for create_bdev_done!
-        return;
-    } while (false);
-    // Failed!
-    {
-        auto lg = std::lock_guard< std::mutex >(ctx->lock);
+    auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
+    if (rc < 0) {
+        LOGERROR("Failed to parse given str: {}", address_c);
         ctx->err = std::make_error_condition(std::errc::io_error);
         ctx->done = true;
+        return;
     }
-    ctx->cv.notify_all();
+
+    if (trid.trtype == SPDK_NVME_TRANSPORT_PCIE) {
+        struct spdk_pci_addr pci_addr;
+        if (spdk_pci_addr_parse(&pci_addr, trid.traddr) < 0) {
+            LOGERROR("Invalid traddr={}", address_c);
+            ctx->err = std::make_error_condition(std::errc::io_error);
+            ctx->done = true;
+            return;
+        }
+        spdk_pci_addr_fmt(trid.traddr, sizeof(trid.traddr), &pci_addr);
+    } else {
+        if (trid.subnqn[0] == '\0') { snprintf(trid.subnqn, sizeof(trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN); }
+    }
+
+    /* Enumerate all of the controllers */
+    spdk_nvme_host_id hostid{};
+    uint32_t count{128};
+    if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
+                              (void*)ctx.get());
+        0 != rc) {
+        LOGERROR("Failed creating NVMe BDEV from {}", trid.traddr);
+        ctx->err = std::make_error_condition(std::errc::io_error);
+        ctx->done = true;
+        return;
+    }
+
+    /* Create a temporary spdk thread if needed and spin */
+    auto sthread = create_temp_spdk_thread();
+    auto cur_wait_us = SpdkDriveInterface::max_wait_sync_io_us;
+    do {
+        std::this_thread::sleep_for(cur_wait_us);
+        spdk_thread_poll(sthread, 0, 0);
+        if (cur_wait_us > SpdkDriveInterface::min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
+    } while (!ctx->done);
+    destroy_temp_spdk_thread();
 }
 
-static void _creat_dev(std::shared_ptr< creat_ctx > ctx) {
+static void create_dev_internal(std::shared_ptr< creat_ctx > ctx) {
     // Check if the device is a file, if so create a bdev out of the file and open that bdev. This is meant only for
     // a testing and docker environment
     try {
@@ -169,62 +200,56 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_dri
     m_opened_device.withWLock([this, &devname, &iodev, &drive_type](auto& m) {
         auto it = m.find(devname);
         if ((it == m.end()) || (it->second == nullptr)) {
-            iodev = _real_create_open_dev(devname, drive_type);
+            iodev = create_open_dev_internal(devname, drive_type);
             m.insert(std::make_pair<>(devname, iodev));
         } else {
             iodev = it->second;
             if (!iodev->ready) { // Closed before, reopen it
-                iomanager.run_on(
-                    thread_regex::least_busy_worker,
-                    [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
-                    true /* wait_for_completion */);
+                open_dev_internal(iodev);
             }
         }
     });
     return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::_real_create_open_dev(const std::string& devname, iomgr_drive_type drive_type) {
+io_device_ptr SpdkDriveInterface::create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type) {
     io_device_ptr iodev{nullptr};
     RELEASE_ASSERT(!iomanager.am_i_worker_reactor(),
                    "We cannot open the device from a worker reactor thread unless its a bdev");
 
     // First create the bdev
-    auto create_ctx = std::make_shared< creat_ctx >();
-    create_ctx->address = devname;
-    create_ctx->addr_type = (drive_type == iomgr_drive_type::unknown) ? get_drive_type(devname) : drive_type;
-    {
-        iomanager.run_on(
-            thread_regex::least_busy_worker, [create_ctx](io_thread_addr_t taddr) { _creat_dev(create_ctx); },
-            false /* wait_for_completion */);
-        auto ul = std::unique_lock< std::mutex >(create_ctx->lock);
-        create_ctx->cv.wait(ul, [create_ctx] { return create_ctx->done; });
-    }
+    auto ctx = std::make_shared< creat_ctx >();
+    ctx->address = devname;
+    ctx->addr_type = (drive_type == iomgr_drive_type::unknown) ? get_drive_type(devname) : drive_type;
+    create_dev_internal(ctx);
 
-    if (!create_ctx->bdev_name.empty() && !create_ctx->err) {
-        iodev = std::make_shared< IODevice >();
-        iodev->thread_scope = thread_regex::all_io;
-        iodev->pri = 9;
-        iodev->io_interface = this;
+    if (!ctx->bdev_name.empty() && !ctx->err) {
+        iodev = alloc_io_device(null_backing_dev(), 9 /* pri*/, thread_regex::all_io);
         iodev->devname = devname;
-        iodev->alias_name = create_ctx->bdev_name;
+        iodev->alias_name = ctx->bdev_name;
 
-        // Issue the opendev on any one of the tight loop reactor
-        iomanager.run_on(
-            thread_regex::least_busy_worker, [this, iodev](io_thread_addr_t taddr) { _open_dev_in_worker(iodev); },
-            true /* wait_for_completion */);
+        open_dev_internal(iodev);
     }
     return iodev;
 }
 
-void SpdkDriveInterface::_open_dev_in_worker(const io_device_ptr& iodev) {
-    struct spdk_bdev_desc* desc = NULL;
-    auto rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, NULL, &desc);
+void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
+    int rc{-1};
+    iomanager.run_on(
+        thread_regex::least_busy_worker,
+        [this, iodev, &rc](io_thread_addr_t taddr) {
+            struct spdk_bdev_desc* desc{nullptr};
+            rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, nullptr, &desc);
+            if (rc == 0) {
+                iodev->dev = backing_dev_t(desc);
+                iodev->creator = iomanager.iothread_self();
+            }
+        },
+        wait_type_t::sleep);
+
     if (rc != 0) {
         folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
     }
-    iodev->dev = backing_dev_t(desc);
-    iodev->creator = iomanager.iothread_self();
 
     // Set the bdev to split on underlying device io boundary.
     auto bdev = spdk_bdev_get_by_name(iodev->alias_name.c_str());
@@ -242,7 +267,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     iomanager.run_on(
         iodev->creator,
         [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev)](io_thread_addr_t taddr) { spdk_bdev_close(bdev_desc); },
-        true /* wait_for_completion */);
+        wait_type_t::sleep);
 
     iodev->clear();
 }
@@ -265,58 +290,49 @@ iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) 
     return iomgr_drive_type::unknown;
 }
 
-void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
+void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     auto dctx = new SpdkDriveDeviceContext();
-    iodev->m_thread_local_ctx[thr->thread_idx] = (void*)dctx;
+    auto mut_iodev = std::const_pointer_cast< IODevice >(iodev);
+
+    mut_iodev->m_thread_local_ctx[thr->thread_idx] = (void*)dctx;
     dctx->channel = spdk_bdev_get_io_channel(iodev->bdev_desc());
     if (dctx->channel == NULL) {
         folly::throwSystemError(fmt::format("Unable to get io channel for bdev={}", spdk_bdev_get_name(iodev->bdev())));
     }
 }
 
-void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
+void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     auto dctx = (SpdkDriveDeviceContext*)iodev->m_thread_local_ctx[thr->thread_idx];
     if (dctx->channel != NULL) { spdk_put_io_channel(dctx->channel); }
     delete (dctx);
 }
 
-void SpdkDriveInterface::_add_to_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
+void SpdkDriveInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
-        IOInterface::_add_to_thread(iodev, thr);
+        IOInterface::add_to_my_reactor(iodev, thr);
     } else {
         // If we are asked to initialize the thread context for non-spdk thread reactor, then create one spdk
         // thread for sync IO which we will use to keep spinning.
-        if (s_num_user_sync_devs == 0) {
-            assert(spdk_get_thread() == NULL);
-            auto sthread = spdk_thread_create(NULL, NULL);
-            if (sthread == NULL) { throw std::runtime_error("SPDK Thread Create failed"); }
-            spdk_set_thread(sthread);
-        }
-        ++s_num_user_sync_devs;
+        create_temp_spdk_thread();
         init_iodev_thread_ctx(iodev, thr);
     }
 }
 
-void SpdkDriveInterface::_remove_from_thread(const io_device_ptr& iodev, const io_thread_t& thr) {
+void SpdkDriveInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
-        IOInterface::_remove_from_thread(iodev, thr);
+        IOInterface::remove_from_my_reactor(iodev, thr);
     } else {
         clear_iodev_thread_ctx(iodev, thr);
-        if (--s_num_user_sync_devs == 0) {
-            auto sthread = spdk_get_thread();
-            assert(sthread != NULL);
-            spdk_thread_exit(sthread);
-            while (!spdk_thread_is_exited(sthread)) {
-                spdk_thread_poll(sthread, 0, 0);
-            }
-            spdk_thread_destroy(sthread);
-        }
+        destroy_temp_spdk_thread();
     }
 }
 
 static spdk_io_channel* get_io_channel(IODevice* iodev) {
     auto tidx = iomanager.this_reactor()->select_thread()->thread_idx;
     auto dctx = (SpdkDriveDeviceContext*)iodev->m_thread_local_ctx[tidx];
+    RELEASE_ASSERT_NOTNULL((void*)dctx,
+                           "Null SpdkDriveDeviceContext for reactor={} selected thread_idx={} for iodev={}",
+                           iomanager.this_reactor()->reactor_idx(), tidx, iodev->devname);
     return dctx->channel;
 }
 
@@ -330,14 +346,7 @@ static bool resubmit_io_on_err(void* b) {
     return true;
 }
 
-static void complete_io(SpdkIocb* iocb) {
-    // As of now we complete the batch as soon as 1 io is completed. We can potentially do batching based on if
-    // async thread is completed or not
-    auto& ecb = iocb->iface->get_end_of_batch_cb();
-    if (ecb) { ecb(1); }
-
-    sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
-}
+static void complete_io(SpdkIocb* iocb) { sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb); }
 
 static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void* ctx) {
     SpdkIocb* iocb = (SpdkIocb*)ctx;

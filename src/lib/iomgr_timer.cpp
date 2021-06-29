@@ -185,7 +185,7 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
             [&stinfo, this](io_thread_addr_t taddr) {
                 stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo));
             },
-            true);
+            wait_type_t::sleep);
         thdl = timer_handle_t(this, stinfo);
         PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
     } else {
@@ -198,7 +198,7 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
                 [&stt_info, &stinfo, this](io_thread_addr_t taddr) {
                     stt_info = create_register_spdk_thread_timer(stinfo);
                 },
-                true);
+                wait_type_t::sleep);
         }
         thdl = timer_handle_t(this, stt_info);
         PROTECTED_REGION(m_active_thread_timer_infos.insert(stt_info));
@@ -239,7 +239,7 @@ void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* const stt_info) con
     } else {
         iomanager.run_on(
             stt_info->owner_thread,
-            [this, &stt_info](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, true);
+            [this, &stt_info](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, wait_type_t::sleep);
     }
     delete stt_info;
 }
@@ -248,7 +248,7 @@ void timer_spdk::cancel_global_timer(spdk_timer_info* const stinfo) const {
     iomanager.run_on(
         thread_regex::all_worker,
         [&stinfo, this](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stinfo->get_thread_timer_info()); },
-        true);
+        wait_type_t::sleep);
     delete stinfo;
 }
 
