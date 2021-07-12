@@ -95,8 +95,8 @@ public:
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
-    void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    bool add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    bool remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
 
     io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
