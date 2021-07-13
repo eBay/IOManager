@@ -334,11 +334,12 @@ void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, boo
 }
 
 void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope) {
-    auto iface_list = m_iface_list.wlock();
+    LOGINFOMOD(iomgr, "Adding new interface={} to thread_scope={}", (void*)iface.get(), enum_name(iface_scope));
 
     // Setup the reactor io threads to do any registration for interface specific registration
+    auto iface_list = m_iface_list.wlock();
     iface->set_scope(iface_scope);
-    iomanager.run_on(
+    const auto sent_count = iomanager.run_on(
         iface_scope,
         [this, iface](io_thread_addr_t taddr) {
             iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
@@ -347,18 +348,25 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
 
     iface_list->push_back(iface);
     if (iface->is_spdk_interface()) { mempool_metrics_populate(); }
+
+    LOGINFOMOD(iomgr, "Interface={} added to {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
+               iface_list->size());
 }
 
 void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
+    LOGINFOMOD(iomgr, "Removing interface={} from thread_scope={}", (void*)iface.get(), enum_name(iface->scope()));
     auto iface_list = m_iface_list.wlock();
 
-    iomanager.run_on(
+    const auto sent_count = iomanager.run_on(
         iface->scope(),
         [this, iface](io_thread_addr_t taddr) {
             iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
         },
         wait_type_t::sleep);
     iface_list->erase(std::remove(iface_list->begin(), iface_list->end(), iface), iface_list->end());
+
+    LOGINFOMOD(iomgr, "Interface={} removed from {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
+               iface_list->size());
 }
 
 void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,

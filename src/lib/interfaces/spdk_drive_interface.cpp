@@ -307,24 +307,26 @@ void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_const_ptr& iodev
     delete (dctx);
 }
 
-void SpdkDriveInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool SpdkDriveInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
-        IOInterface::add_to_my_reactor(iodev, thr);
+        return IOInterface::add_to_my_reactor(iodev, thr);
     } else {
         // If we are asked to initialize the thread context for non-spdk thread reactor, then create one spdk
         // thread for sync IO which we will use to keep spinning.
         create_temp_spdk_thread();
         init_iodev_thread_ctx(iodev, thr);
     }
+    return true;
 }
 
-void SpdkDriveInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool SpdkDriveInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
-        IOInterface::remove_from_my_reactor(iodev, thr);
+        return IOInterface::remove_from_my_reactor(iodev, thr);
     } else {
         clear_iodev_thread_ctx(iodev, thr);
         destroy_temp_spdk_thread();
     }
+    return true;
 }
 
 static spdk_io_channel* get_io_channel(IODevice* iodev) {
