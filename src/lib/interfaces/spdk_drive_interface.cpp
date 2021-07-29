@@ -117,6 +117,7 @@ static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
     memset(&trid, 0, sizeof(trid));
     trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
 
+    auto sthread = create_temp_spdk_thread();
     auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
     if (rc < 0) {
         LOGERROR("Failed to parse given str: {}", address_c);
@@ -151,7 +152,6 @@ static void create_nvme_bdev(std::shared_ptr< creat_ctx > ctx) {
     }
 
     /* Create a temporary spdk thread if needed and spin */
-    auto sthread = create_temp_spdk_thread();
     auto cur_wait_us = SpdkDriveInterface::max_wait_sync_io_us;
     do {
         std::this_thread::sleep_for(cur_wait_us);
