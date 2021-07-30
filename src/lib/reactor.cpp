@@ -80,7 +80,6 @@ void IOReactor::init() {
     }
 #endif
 
-    LOGTRACEMOD(iomgr, "Initializing iomanager context for this thread, reactor_id= {}", m_reactor_num);
     m_metrics = std::make_unique< IOThreadMetrics >(fmt::format("{}-{}", reactor_idx(), loop_type()));
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
@@ -117,15 +116,28 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
     thr->thread_addr = m_io_threads.size() - 1;
 
     // Initialize any thing specific to specialized reactors
-    if (!m_user_controlled_loop && !reactor_specific_init_thread(thr)) { return; }
+    if (!m_user_controlled_loop && !reactor_specific_init_thread(thr)) {
+        REACTOR_LOG(INFO, iomgr, thr->thread_addr,
+                    "IOThreadContext is not started for this io thread, user_controlled_loop={}",
+                    m_user_controlled_loop);
+        return;
+    }
 
     // Notify all the interfaces about new thread, which in turn will add all relevant devices to current reactor.
+    uint32_t added_iface{0};
     {
         auto iface_list = iomanager.iface_rlock();
         for (auto& iface : *iface_list) {
-            if (can_add_iface(iface)) { iface->on_io_thread_start(thr); }
+            if (can_add_iface(iface)) {
+                iface->on_io_thread_start(thr);
+                ++added_iface;
+            } else {
+                REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOInterface with scope={} ignored to add", iface->scope());
+            }
         }
         m_io_thread_count.increment();
+        REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOThreadContext started in this reactor, added {} interfaces",
+                    added_iface);
     }
 }
 
@@ -134,13 +146,22 @@ void IOReactor::stop_io_thread(const io_thread_t& thr) {
     //                 *(thr.get()));
     // iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(thr); });
 
+    uint32_t removed_iface{0};
     {
         auto iface_list = iomanager.iface_rlock();
         for (auto& iface : *iface_list) {
-            if (can_add_iface(iface)) { iface->on_io_thread_stopped(thr); }
+            if (can_add_iface(iface)) {
+                iface->on_io_thread_stopped(thr);
+                ++removed_iface;
+            } else {
+                REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOInterface with scope={} ignored to remove",
+                            iface->scope());
+            }
         }
         m_io_thread_count.decrement();
     }
+    REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOThreadContext stopped in this reactor, removed {} interfaces",
+                removed_iface);
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
     if (!m_user_controlled_loop) { reactor_specific_exit_thread(thr); }

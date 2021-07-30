@@ -116,31 +116,42 @@ void IOInterface::on_io_thread_start(const io_thread_t& thr) {
     init_iface_thread_ctx(thr);
 
     // Add all devices part of this interface to this thread
+    uint32_t added_count{0};
     for (auto& iodev : m_iodev_map) {
-        add_to_my_reactor(iodev.second, thr);
+        if (add_to_my_reactor(iodev.second, thr)) { ++added_count; }
     }
+    LOGINFOMOD(iomgr, "Added IOInterface [scope={}] and iodevices [{} out of {}] to io_thread [idx={},addr={}]",
+               scope(), added_count, m_iodev_map.size(), thr->thread_idx, thr->thread_addr);
 }
 
 /* This method is expected to be called with interface lock held always */
 void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
+    uint32_t removed_count{0};
     for (auto& iodev : m_iodev_map) {
-        remove_from_my_reactor(iodev.second, thr);
+        if (remove_from_my_reactor(iodev.second, thr)) { ++removed_count; }
     }
-
     clear_iface_thread_ctx(thr);
+    LOGINFOMOD(iomgr, "Removed IOInterface [scope={}] and iodevices [{} out of {}] from io_thread [idx={},addr={}]",
+               scope(), removed_count, m_iodev_map.size(), thr->thread_idx, thr->thread_addr);
 }
 
-void IOInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool IOInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
         thr->reactor->add_iodev(iodev, thr);
         init_iodev_thread_ctx(iodev, thr);
+        return true;
+    } else {
+        return false;
     }
 }
 
-void IOInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool IOInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_iodev_addable(iodev, thr)) {
         clear_iodev_thread_ctx(iodev, thr);
         thr->reactor->remove_iodev(iodev, thr);
+        return true;
+    } else {
+        return false;
     }
 }
 

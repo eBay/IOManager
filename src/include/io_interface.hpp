@@ -57,8 +57,8 @@ protected:
     virtual void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
     virtual void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
 
-    virtual void add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
-    virtual void remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
+    virtual bool add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
+    virtual bool remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr);
 
 protected:
     // std::shared_mutex m_mtx;
