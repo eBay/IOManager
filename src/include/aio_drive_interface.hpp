@@ -282,6 +282,7 @@ public:
     AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     ~AioDriveInterface();
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
+    std::string name() const override { return "aio_drive_interface"; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
     io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
@@ -313,8 +314,8 @@ public:
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;
     void clear_iface_thread_ctx(const io_thread_t& thr) override;
-    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
-    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override {}
+    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 
     void handle_completions();
 

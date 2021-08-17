@@ -42,12 +42,13 @@ void timer_epoll::stop() {
     }
     // Now close the common timer
     if (m_common_timer_io_dev && (m_common_timer_io_dev->fd() != -1)) {
-        iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev, false,
-                                                        [](io_device_ptr iodev) { close(iodev->fd()); });
+        iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev, wait_type_t::spin);
+        close(m_common_timer_io_dev->fd());
     }
     // Now iterate over recurring timer list and remove them
     for (auto& iodev : m_recurring_timer_iodevs) {
-        iomanager.generic_interface()->remove_io_device(iodev, false, [](io_device_ptr iodev) { close(iodev->fd()); });
+        iomanager.generic_interface()->remove_io_device(iodev, wait_type_t::spin);
+        close(iodev->fd());
     }
     m_stopped = true;
 }
@@ -105,8 +106,8 @@ void timer_epoll::cancel(timer_handle_t thandle) {
                        LOGINFO("Removing recurring {} timer fd {} device ",
                                (is_thread_local() ? "per-thread" : "global"), iodev->fd());
                        if (iodev->fd() != -1) {
-                           iomanager.generic_interface()->remove_io_device(
-                               iodev, false, [](io_device_ptr iodev) { close(iodev->fd()); });
+                           iomanager.generic_interface()->remove_io_device(iodev, wait_type_t::spin);
+                           close(iodev->fd());
                        }
                        PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
                    },

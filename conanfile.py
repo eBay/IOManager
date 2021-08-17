@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "5.1.0"
+    version = "6.0.1"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -35,6 +35,7 @@ class IOMgrConan(ConanFile):
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
+            "grpc/1.37.0",
             ("fmt/7.1.3", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
@@ -43,6 +44,7 @@ class IOMgrConan(ConanFile):
             "openssl/1.1.1k",
             "isa-l/2.21.0",
             "semver/1.1.0",
+            "grpc_internal/1.37.0"
             )
     build_requires = (
                 "gtest/1.10.0",

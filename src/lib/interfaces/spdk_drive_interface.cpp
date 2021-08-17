@@ -256,7 +256,7 @@ void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
     if (!bdev) { folly::throwSystemError(fmt::format("Unable to get opened device={}", iodev->alias_name)); }
     bdev->split_on_optimal_io_boundary = true;
 
-    add_io_device(iodev, true /* wait_to_add */);
+    add_io_device(iodev);
     LOGINFOMOD(iomgr, "Device {} bdev_name={} opened successfully", iodev->devname, iodev->alias_name);
 }
 
@@ -290,24 +290,22 @@ iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) 
     return iomgr_drive_type::unknown;
 }
 
-void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) {
-    auto dctx = new SpdkDriveDeviceContext();
-    auto mut_iodev = std::const_pointer_cast< IODevice >(iodev);
-
-    mut_iodev->m_thread_local_ctx[thr->thread_idx] = (void*)dctx;
+void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
+    auto dctx = std::make_unique< SpdkDriveDeviceContext >();
     dctx->channel = spdk_bdev_get_io_channel(iodev->bdev_desc());
     if (dctx->channel == NULL) {
         folly::throwSystemError(fmt::format("Unable to get io channel for bdev={}", spdk_bdev_get_name(iodev->bdev())));
     }
+    iodev->m_iodev_thread_ctx[thr->thread_idx] = std::move(dctx);
 }
 
-void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) {
-    auto dctx = (SpdkDriveDeviceContext*)iodev->m_thread_local_ctx[thr->thread_idx];
+void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
+    auto dctx = (SpdkDriveDeviceContext*)iodev->m_iodev_thread_ctx[thr->thread_idx].get();
     if (dctx->channel != NULL) { spdk_put_io_channel(dctx->channel); }
-    delete (dctx);
+    iodev->m_iodev_thread_ctx[thr->thread_idx].reset();
 }
 
-bool SpdkDriveInterface::add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool SpdkDriveInterface::add_to_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
         return IOInterface::add_to_my_reactor(iodev, thr);
     } else {
@@ -319,7 +317,7 @@ bool SpdkDriveInterface::add_to_my_reactor(const io_device_const_ptr& iodev, con
     return true;
 }
 
-bool SpdkDriveInterface::remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) {
+bool SpdkDriveInterface::remove_from_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor()) {
         return IOInterface::remove_from_my_reactor(iodev, thr);
     } else {
@@ -331,7 +329,7 @@ bool SpdkDriveInterface::remove_from_my_reactor(const io_device_const_ptr& iodev
 
 static spdk_io_channel* get_io_channel(IODevice* iodev) {
     auto tidx = iomanager.this_reactor()->select_thread()->thread_idx;
-    auto dctx = (SpdkDriveDeviceContext*)iodev->m_thread_local_ctx[tidx];
+    auto dctx = (SpdkDriveDeviceContext*)iodev->m_iodev_thread_ctx[tidx].get();
     RELEASE_ASSERT_NOTNULL((void*)dctx,
                            "Null SpdkDriveDeviceContext for reactor={} selected thread_idx={} for iodev={}",
                            iomanager.this_reactor()->reactor_idx(), tidx, iodev->devname);
