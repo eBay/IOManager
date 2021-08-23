@@ -1,22 +1,12 @@
 //
 // Created by Kadayam, Hari on 02/04/18.
 //
+
 #include <algorithm>
+#include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <string>
-#include <cassert>
-
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-#include <folly/Exception.h>
-#include "iomgr_config.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -27,8 +17,17 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
-#include <unistd.h>
 #include <sys/sysmacros.h>
+#endif
+
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
+#endif
+#include <folly/Exception.h>
+#include "iomgr_config.hpp"
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
 #endif
 
 #include <sds_logging/logging.h>
@@ -68,12 +67,7 @@ std::vector< int > AioDriveInterface::s_poll_interval_table;
 
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) { init_poll_interval_table(); }
 
-AioDriveInterface::~AioDriveInterface() {
-    if (m_zero_buf) {
-        sisl::AlignedAllocator::allocator().aligned_free(m_zero_buf, sisl::buftag::common);
-        m_zero_buf = nullptr;
-    }
-}
+AioDriveInterface::~AioDriveInterface() {}
 
 #ifdef __linux__
 static std::string get_major_minor(const std::string& devname) {
@@ -102,6 +96,8 @@ static uint64_t get_max_write_zeros(const std::string& devname) {
 #endif
 
 io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
+    std::lock_guard lock{m_open_mtx};
+
     if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
 
     LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
@@ -109,21 +105,29 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
 
 #ifdef __linux__
     if ((dev_type == iomgr_drive_type::block) && IM_DYNAMIC_CONFIG(aio.zeros_by_ioctl)) {
-        static std::once_flag flag1;
-        std::call_once(flag1, [this, &devname]() { m_max_write_zeros = get_max_write_zeros(devname); });
+        if (m_max_write_zeros == std::numeric_limits< uint64_t >::max()) {
+            m_max_write_zeros = get_max_write_zeros(devname);
+        }
+    } else {
+        m_max_write_zeros = 0;
     }
+#elif
+    m_max_write_zeros = 0;
 #endif
 
     if (m_max_write_zeros == 0) {
-        static std::once_flag flag2;
-        std::call_once(flag2, [this, &devname, &dev_type]() {
-            m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
-                                                                           max_buf_size, sisl::buftag::common);
-            std::memset(m_zero_buf, 0, max_buf_size);
-        });
+        if (!m_zero_buf) {
+            m_zero_buf = std::unique_ptr< uint8_t, std::function<void(uint8_t* const)> >{
+                sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
+                                                                  max_buf_size, sisl::buftag::common),
+                [](uint8_t* const ptr) {
+                    if (ptr) sisl::AlignedAllocator::allocator().aligned_free(ptr, sisl::buftag::common);
+                }};
+            if (m_zero_buf) std::memset(m_zero_buf.get(), 0, max_buf_size);
+        };
     }
 
-    auto fd = open(devname.c_str(), oflags, 0640);
+    auto fd = ::open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
         folly::throwSystemError(fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
                                             dev_type, errno, strerror(errno)));
@@ -143,7 +147,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
 
 void AioDriveInterface::close_dev(const io_device_ptr& iodev) {
     // AIO base devices are not added to any poll list, so it can be closed as is.
-    close(iodev->fd());
+    ::close(iodev->fd());
     iodev->clear();
 }
 
@@ -305,7 +309,7 @@ void AioDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, u
 }
 
 void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (size == 0) {
+    if (size == 0 || !m_zero_buf) {
         assert(false);
         return;
     }
@@ -319,7 +323,7 @@ void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64
 
         std::vector< iovec > iov(iovcnt);
         for (uint32_t i = 0; i < iovcnt; ++i) {
-            iov[i].iov_base = m_zero_buf;
+            iov[i].iov_base = m_zero_buf.get();
             iov[i].iov_len = max_buf_size;
         }
 

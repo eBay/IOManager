@@ -1,16 +1,28 @@
 #pragma once
 
-#include "drive_interface.hpp"
-#include <metrics/metrics.hpp>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
 #include <fds/buffer.hpp>
 #include <fds/vector_pool.hpp>
-#include <optional>
+#include <metrics/metrics.hpp>
 #include <spdk/bdev.h>
-#include "iomgr_msg.hpp"
 #include <utility/enum.hpp>
-#include <chrono>
 
+#include "drive_interface.hpp"
 #include "iomgr_config.hpp"
+#include "iomgr_msg.hpp"
 
 struct spdk_io_channel;
 struct spdk_thread;
@@ -167,7 +179,7 @@ struct SpdkIocb {
     void set_iovs(const iovec* iovs, const int count) {
         iovcnt = count;
         if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
-        ::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs), count * sizeof(iovec));
+        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs), count * sizeof(iovec));
     }
 
     void set_data(char* data) { user_data = data; }

@@ -1,15 +1,22 @@
-#include <fcntl.h>
+#include <algorithm>
+#include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <condition_variable>
 #include <chrono>
 #include <random>
 
-#include <gtest/gtest.h>
+#ifdef __linux__
+#include <fcntl.h>
+#endif
+
+#include <fds/utils.hpp>
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <fds/utils.hpp>
+
+#include <gtest/gtest.h>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -26,24 +33,29 @@ SDS_OPTION_GROUP(test_write_zeros,
 #define ENABLED_OPTIONS logging, iomgr, test_write_zeros, config
 SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
-struct Runner {
+static struct Runner {
     std::mutex cv_mutex;
     std::condition_variable comp_cv;
-    int n_running_threads{1};
+    size_t n_running_threads{0};
+
+    void start() {
+        std::unique_lock< std::mutex > lk{cv_mutex};
+        ++n_running_threads;
+    }
 
     void wait() {
-        std::unique_lock< std::mutex > lk(cv_mutex);
+        std::unique_lock< std::mutex > lk{cv_mutex};
         comp_cv.wait(lk, [&] { return (n_running_threads == 0); });
     }
 
     void job_done() {
         {
-            std::unique_lock< std::mutex > lk(cv_mutex);
+            std::unique_lock< std::mutex > lk{cv_mutex};
             --n_running_threads;
         }
         comp_cv.notify_one();
     }
-};
+} s_runner;
 
 static constexpr uint64_t max_io_size{8 * 1024 * 1024}; // 8MB
 #define g_drive_iface iomanager.default_drive_interface()
@@ -61,7 +73,7 @@ public:
 
         if (!std::filesystem::exists(std::filesystem::path{dev})) {
             LOGINFO("Device {} doesn't exists, creating a file for size {}", dev, dev_size);
-            auto fd = open(dev.c_str(), O_RDWR | O_CREAT, 0666);
+            auto fd = ::open(dev.c_str(), O_RDWR | O_CREAT, 0666);
             ASSERT_NE(fd, -1) << "Open of device " << dev << " failed";
             const auto ret{fallocate(fd, 0, 0, dev_size)};
             ASSERT_EQ(ret, 0) << "fallocate of device " << dev << " for size " << dev_size << " failed";
@@ -70,6 +82,9 @@ public:
         iomanager.start(1, SDS_OPTIONS["spdk"].as< bool >());
         g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_io_completion, 2));
         m_iodev = g_drive_iface->open_dev(dev, iomgr_drive_type::unknown, O_CREAT | O_RDWR | O_DIRECT);
+        m_driveattr = g_drive_iface->get_attributes(dev, iomgr_drive_type::unknown);
+
+        s_runner.start();
     }
 
     void TearDown() override { iomanager.stop(); }
@@ -81,7 +96,7 @@ public:
         // First fill in the entire set with some value in specific pattern
         random_bytes_engine rbe;
         LOGINFO("Filling the device with random bytes from offset={} size={}", cur_offset, remain_size);
-        auto buf{iomanager.iobuf_alloc(512, max_io_size)};
+        auto buf{iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size)};
         for (uint64_t i{0}; i < max_io_size; ++i) {
             buf[i] = rbe();
         }
@@ -110,7 +125,7 @@ public:
         ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
         LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", remain_size,
                 get_elapsed_time_us(m_start_time));
-        auto buf{iomanager.iobuf_alloc(512, max_io_size)};
+        auto buf{iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size)};
 
         // Read back and ensure all bytes are 0s
         m_start_time = Clock::now();
@@ -118,22 +133,38 @@ public:
             const auto this_sz{std::min(max_io_size, remain_size)};
             const auto ret{g_drive_iface->sync_read(m_iodev.get(), (char*)buf, (uint32_t)this_sz, cur_offset)};
             ASSERT_EQ((size_t)ret, this_sz) << "Expected sync_read to be successful";
-            for (uint64_t i{0}; i < (uint64_t)ret; ++i) {
-                ASSERT_EQ((int)buf[i], 0) << "Expected all bytes to be zero, but not";
+            bool all_zero{true};
+            size_t remain_ret{static_cast<size_t>(ret)};
+            const int* pInt{reinterpret_cast< int* >(buf)};
+            for (; remain_ret >= sizeof(int); remain_ret -= sizeof(int), ++pInt) {
+                if (*pInt != 0) {
+                    all_zero = false;
+                    break;
+                }
             }
+            if (all_zero && (remain_ret > 0)) {
+                const uint8_t* pByte{reinterpret_cast< const uint8_t* >(pInt)};
+                for (; remain_ret > 0; --remain_ret, ++pByte) {
+                    if (*pByte != 0x00) {
+                        all_zero = false;
+                        break;
+                    }
+                }
+            }
+            ASSERT_TRUE(all_zero) << "Expected all bytes to be zero, but not";
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
         LOGINFO("Write zeros of size={} validated in {} microseconds", remain_size, get_elapsed_time_us(m_start_time));
         iomanager.iobuf_free(buf);
-        m_runner.job_done();
+        s_runner.job_done();
     }
 
 protected:
     uint64_t m_size;
     uint64_t m_offset;
     io_device_ptr m_iodev;
-    Runner m_runner;
+    iomgr::drive_attributes m_driveattr;
     Clock::time_point m_start_time;
 };
 
@@ -141,7 +172,7 @@ TEST_F(WriteZeroTest, fill_zero_validate) {
     iomanager.run_on(
         thread_regex::least_busy_worker, [this]([[maybe_unused]] auto taddr) { this->write_zero_test(); },
         wait_type_t::no_wait);
-    m_runner.wait();
+    s_runner.wait();
 }
 
 int main(int argc, char* argv[]) {
