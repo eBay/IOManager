@@ -185,8 +185,9 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
             thread_regex::all_worker,
             [&stinfo, this](io_thread_addr_t taddr) {
                 stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo));
+                stinfo->thread_timers.increment();
             },
-            wait_type_t::sleep);
+            wait_type_t::spin);
         thdl = timer_handle_t(this, stinfo);
         PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
     } else {
@@ -199,7 +200,7 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
                 [&stt_info, &stinfo, this](io_thread_addr_t taddr) {
                     stt_info = create_register_spdk_thread_timer(stinfo);
                 },
-                wait_type_t::sleep);
+                wait_type_t::spin);
         }
         thdl = timer_handle_t(this, stt_info);
         PROTECTED_REGION(m_active_thread_timer_infos.insert(stt_info));
@@ -234,26 +235,38 @@ void timer_spdk::stop() {
     }
 }
 
-void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* const stt_info) const {
-    if (is_thread_local()) {
-        unregister_spdk_thread_timer(stt_info);
-    } else {
-        iomanager.run_on(
-            stt_info->owner_thread,
-            [this, &stt_info](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); }, wait_type_t::sleep);
-    }
+void timer_spdk::cancel_thread_timer(spdk_thread_timer_info* stt_info) const {
+    iomanager.run_on(
+        stt_info->owner_thread, [this, &stt_info](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stt_info); },
+        wait_type_t::spin);
+
     delete stt_info;
 }
 
-void timer_spdk::cancel_global_timer(spdk_timer_info* const stinfo) const {
+void timer_spdk::cancel_global_timer(spdk_timer_info* stinfo) const {
+    // Reset to max to prevent a callback while cancel is triggerred.
+    stinfo->cur_term_num = std::numeric_limits< uint64_t >::max();
+
+    // Do a non-wait version of broadcast, so that we can avoid poller deregister and listening on them issue on spdk
+    // thread
     iomanager.run_on(
         thread_regex::all_worker,
-        [&stinfo, this](io_thread_addr_t taddr) { unregister_spdk_thread_timer(stinfo->get_thread_timer_info()); },
-        wait_type_t::sleep);
-    delete stinfo;
+        [stinfo, this](io_thread_addr_t taddr) {
+            unregister_spdk_thread_timer(stinfo->get_thread_timer_info());
+            delete_timer_info_if_needed(stinfo);
+        },
+        wait_type_t::no_wait);
+    delete_timer_info_if_needed(stinfo);
 }
 
-spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer_info* const stinfo) const {
+void timer_spdk::delete_timer_info_if_needed(spdk_timer_info* stinfo) const {
+    if (stinfo->thread_timers.decrement_testz()) {
+        LOGDEBUGMOD(iomgr, "Completed cancelling global timer={}", (void*)stinfo);
+        delete stinfo;
+    }
+}
+
+spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer_info* stinfo) const {
     auto stt_info = new spdk_thread_timer_info(stinfo);
     stt_info->poller = spdk_poller_register(
         [](void* context) -> int {
@@ -266,8 +279,10 @@ spdk_thread_timer_info* timer_spdk::create_register_spdk_thread_timer(spdk_timer
     return stt_info;
 }
 
-void timer_spdk::unregister_spdk_thread_timer(spdk_thread_timer_info* const stinfo) const {
-    spdk_poller_unregister(&stinfo->poller);
+void timer_spdk::unregister_spdk_thread_timer(spdk_thread_timer_info* sttinfo) const {
+    LOGDEBUGMOD(iomgr, "Unregistering per thread timer={} thread_timer={} poller={}", (void*)sttinfo->tinfo,
+                (void*)sttinfo, (void*)sttinfo->poller);
+    spdk_poller_unregister(&sttinfo->poller);
 }
 
 void spdk_timer_info::add_thread_timer_info(spdk_thread_timer_info* stt_info) {
@@ -287,12 +302,14 @@ spdk_thread_timer_info::spdk_thread_timer_info(spdk_timer_info* sti) {
 
 bool spdk_thread_timer_info::call_timer_cb_once() {
     bool ret = false;
+    auto cur_term_num = term_num++;
     if (!tinfo->is_multi_threaded ||
-        tinfo->cur_term_num.compare_exchange_strong(term_num, term_num + 1, std::memory_order_acq_rel)) {
+        tinfo->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
         tinfo->cb(tinfo->context);
         ret = true;
     }
-    ++term_num;
+    // NOTE: Do not access this pointer or tinfo from this point, as once callback is called, it could
+    // cancel the timer and thus delete this pointer.
     return ret;
 }
 

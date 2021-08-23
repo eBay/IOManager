@@ -155,11 +155,15 @@ static ::grpc_event_engine_vtable s_vtable = ::grpc_event_engine_vtable{
     [](grpc_fd* fd) { grpc_iface()->fd_set_writable(fd); },
     [](grpc_fd* fd) { grpc_iface()->fd_set_error(fd); },
     [](grpc_fd* fd) -> bool { return grpc_iface()->fd_is_shutdown(fd); },
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
-    nullptr,
+    [](grpc_pollset* pollset, gpr_mu** mu) { grpc_iface()->pollset_init(pollset, mu); },
+    [](grpc_pollset* pollset, grpc_closure* closure) { grpc_iface()->pollset_shutdown(pollset, closure); },
+    [](grpc_pollset* pollset) { grpc_iface()->pollset_destroy(pollset); },
+    [](grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_millis deadline) -> grpc_error* {
+        return grpc_iface()->pollset_work(pollset, worker, deadline);
+    },
+    [](grpc_pollset* pollset, grpc_pollset_worker* specific_worker) -> grpc_error* {
+        return grpc_iface()->pollset_kick(pollset, specific_worker);
+    },
     nullptr,
     nullptr,
     nullptr,

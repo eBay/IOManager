@@ -64,6 +64,7 @@ public:
     uint64_t timeout_nanos = 0;
     std::atomic< uint64_t > cur_term_num = 0; // Term # for timer (where single timer cb to be called among all threads)
     std::map< uint32_t, spdk_thread_timer_info* > thread_timer_list;
+    sisl::atomic_counter< uint32_t > thread_timers{1};
     bool is_multi_threaded = true;
     std::mutex timer_list_mtx;
 };
@@ -171,10 +172,11 @@ public:
     void stop() override;
 
 private:
-    spdk_thread_timer_info* create_register_spdk_thread_timer(spdk_timer_info* const stinfo) const;
-    void unregister_spdk_thread_timer(spdk_thread_timer_info* const stinfo) const;
-    void cancel_thread_timer(spdk_thread_timer_info* const stt_info) const;
-    void cancel_global_timer(spdk_timer_info* const stinfo) const;
+    spdk_thread_timer_info* create_register_spdk_thread_timer(spdk_timer_info* stinfo) const;
+    void unregister_spdk_thread_timer(spdk_thread_timer_info* stinfo) const;
+    void cancel_thread_timer(spdk_thread_timer_info* stt_info) const;
+    void cancel_global_timer(spdk_timer_info* stinfo) const;
+    void delete_timer_info_if_needed(spdk_timer_info* stinfo) const;
 
 private:
     std::unordered_set< spdk_timer_info* > m_active_global_timer_infos;

@@ -22,6 +22,8 @@ SDS_OPTION_GROUP(test_timer,
                   "number"),
                  (num_timers, "", "num_timers", "num_timers", ::cxxopts::value< uint64_t >()->default_value("1000"),
                   "number"),
+                 (time_check, "Need timeout time check?", "time_check", "time_check",
+                  ::cxxopts::value< bool >()->default_value("false"), "true or false"),
                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
@@ -50,6 +52,7 @@ static uint32_t g_user_threads{0};
 static bool g_is_spdk{false};
 static uint64_t g_num_timers{0};
 static uint64_t g_iters{0};
+static bool g_need_time_check{false};
 
 void glob_setup() {
     g_is_spdk = SDS_OPTIONS["spdk"].as< bool >();
@@ -58,6 +61,7 @@ void glob_setup() {
     g_user_threads = SDS_OPTIONS["user_threads"].as< uint32_t >();
     g_num_timers = SDS_OPTIONS["num_timers"].as< uint64_t >();
     g_iters = SDS_OPTIONS["num_timers"].as< uint64_t >();
+    g_need_time_check = SDS_OPTIONS["time_check"].as< bool >();
 
     iomanager.start(g_io_threads, g_is_spdk);
 }
@@ -76,12 +80,15 @@ public:
         timer_test_info* ti = reinterpret_cast< timer_test_info* >(arg);
         ASSERT_EQ(ti->is_active, true) << "Timer armed after it is cancelled";
 
-#if 0
-        // Temporarily disabling the timer check till better check is added
-        auto elapsed_time_ns = get_elapsed_time_ns(ti->start_timer_time) / ++ti->timer_call_count;
-        ASSERT_GE(elapsed_time_ns, ti->nanos_after - early_tolerance_ns) << "Received timeout earlier than expected";
-        ASSERT_LT(elapsed_time_ns, ti->nanos_after + late_tolerance_ns) << "Received timeout much later than expected";
-#endif
+        if (g_need_time_check) {
+            // Enabling time check if a little tricky to run on all types of environments. Hence making it
+            // as an option. Enable it only on a targetted system and not by default.
+            auto elapsed_time_ns = get_elapsed_time_ns(ti->start_timer_time) / ++ti->timer_call_count;
+            ASSERT_GE(elapsed_time_ns, ti->nanos_after - early_tolerance_ns)
+                << "Received timeout earlier than expected";
+            ASSERT_LT(elapsed_time_ns, ti->nanos_after + late_tolerance_ns)
+                << "Received timeout much later than expected";
+        }
 
         if (--ti->pending_count == 0) {
             finish_timer(ti);
@@ -110,7 +117,7 @@ public:
     void create_timer(const uint64_t nanos_after, const thread_specifier scope, const bool recurring) {
         auto ti = std::make_unique< timer_test_info >(nanos_after, g_iters, recurring);
         ti->start_timer_time = Clock::now();
-        LOGDEBUG("Creating {} {} timer for {} ns {} for {} iterations", timer_scope_string(scope),
+        LOGDEBUG("Creating {} {} timer for {} ns for {} iterations", timer_scope_string(scope),
                  (recurring ? "recurring" : "one_time"), nanos_after, g_iters);
         if (std::holds_alternative< io_thread_t >(scope)) {
             ti->scope = iomanager.iothread_self();
