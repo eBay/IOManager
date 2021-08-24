@@ -18,6 +18,7 @@ class IOMgrConan(ConanFile):
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "prerelease": ['True', 'False'],
         }
     default_options = (
         'shared=False',
@@ -25,12 +26,11 @@ class IOMgrConan(ConanFile):
         'coverage=False',
         'sanitize=False',
         'testing=full',
+        'prerelease=True',
         )
 
     requires = (
             "flip/[~=2, include_prerelease=True]@sds/master",
-            "sds_logging/[~=10, include_prerelease=True]@sds/master",
-            "sds_options/[~=1, include_prerelease=True]@sds/master",
             "sisl/[~=5, include_prerelease=True]@sisl/master",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
@@ -57,6 +57,7 @@ class IOMgrConan(ConanFile):
             del self.options.coverage
 
     def configure(self):
+        self.options['sisl'].prerelease = self.options.prerelease
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
