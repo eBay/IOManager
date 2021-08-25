@@ -60,6 +60,7 @@ class IOMgrConan(ConanFile):
 
     def configure(self):
         self.options['sisl'].prerelease = self.options.prerelease
+        self.options['flip'].prerelease = self.options.prerelease
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
