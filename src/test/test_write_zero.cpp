@@ -80,89 +80,132 @@ public:
         }
 
         iomanager.start(1, SDS_OPTIONS["spdk"].as< bool >());
-        g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_io_completion, 2));
+        // g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_io_completion, 2));
         m_iodev = g_drive_iface->open_dev(dev, iomgr_drive_type::unknown, O_CREAT | O_RDWR | O_DIRECT);
         m_driveattr = g_drive_iface->get_attributes(dev, iomgr_drive_type::unknown);
 
         s_runner.start();
     }
 
-    void TearDown() override { iomanager.stop(); }
+    void TearDown() override {
+        g_drive_iface->close_dev(m_iodev);
+        iomanager.stop();
+    }
+
+    struct io_req {
+        uint8_t* buf{nullptr};
+        uint64_t size{0};
+    };
 
     void write_zero_test() {
         auto remain_size{m_size};
         auto cur_offset{m_offset};
 
+        g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_write_completion, 2));
+
         // First fill in the entire set with some value in specific pattern
         random_bytes_engine rbe;
         LOGINFO("Filling the device with random bytes from offset={} size={}", cur_offset, remain_size);
-        auto buf{iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size)};
+        uint8_t* buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
         for (uint64_t i{0}; i < max_io_size; ++i) {
             buf[i] = rbe();
         }
 
         m_start_time = Clock::now();
         while (remain_size > 0) {
-            const auto this_sz{std::min(max_io_size, remain_size)};
-            const auto ret{g_drive_iface->sync_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset)};
-            ASSERT_EQ((size_t)ret, this_sz) << "Expected sync_write to be successful";
+            const auto this_sz = std::min(max_io_size, remain_size);
+            io_req* req = new io_req();
+            req->buf = buf;
+            req->size = this_sz;
+            g_drive_iface->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset, (uint8_t*)req);
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
-        LOGINFO("Filling with rand bytes for size={} offset={} completed in {} usecs, now filling with 0s", m_size,
-                m_offset, get_elapsed_time_us(m_start_time));
-        iomanager.iobuf_free(buf);
-
-        // Now issue write zeros
-        m_start_time = Clock::now();
-        g_drive_iface->write_zero(m_iodev.get(), m_size, m_offset, nullptr);
     }
 
-    void on_io_completion(int64_t res, [[maybe_unused]] void* cookie) {
+    void on_write_completion(int64_t res, uint8_t* cookie) {
+        ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
+        io_req* req = (io_req*)cookie;
+        m_filled_size += req->size;
+
+        if (m_filled_size == m_size) {
+            LOGINFO("Filling with rand bytes for size={} offset={} completed in {} usecs, now filling with 0s", m_size,
+                    m_offset, get_elapsed_time_us(m_start_time));
+            g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_zero_completion, 2));
+            iomanager.iobuf_free(req->buf);
+
+            // Now issue write zeros
+            m_start_time = Clock::now();
+            g_drive_iface->write_zero(m_iodev.get(), m_size, m_offset, nullptr);
+        }
+        delete req;
+    }
+
+    void on_zero_completion(int64_t res, [[maybe_unused]] void* cookie) {
+        ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
+        LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_size,
+                get_elapsed_time_us(m_start_time));
+
+        g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_read_completion, 2));
+
         auto remain_size{m_size};
         auto cur_offset{m_offset};
-
-        ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
-        LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", remain_size,
-                get_elapsed_time_us(m_start_time));
-        auto buf{iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size)};
 
         // Read back and ensure all bytes are 0s
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz{std::min(max_io_size, remain_size)};
-            const auto ret{g_drive_iface->sync_read(m_iodev.get(), (char*)buf, (uint32_t)this_sz, cur_offset)};
-            ASSERT_EQ((size_t)ret, this_sz) << "Expected sync_read to be successful";
-            bool all_zero{true};
-            size_t remain_ret{static_cast<size_t>(ret)};
-            const int* pInt{reinterpret_cast< int* >(buf)};
-            for (; remain_ret >= sizeof(int); remain_ret -= sizeof(int), ++pInt) {
-                if (*pInt != 0) {
+
+            io_req* req = new io_req();
+            req->buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
+            req->size = this_sz;
+            g_drive_iface->async_read(m_iodev.get(), (char*)req->buf, (uint32_t)this_sz, cur_offset, (uint8_t*)req);
+            cur_offset += this_sz;
+            remain_size -= this_sz;
+        }
+    }
+
+    void on_read_completion(int64_t res, uint8_t* cookie) {
+        ASSERT_EQ(res, 0) << "Expected read to be successful";
+        bool all_zero{true};
+        io_req* req = (io_req*)cookie;
+        size_t remain_size = req->size;
+
+        const int* pInt = reinterpret_cast< int* >(req->buf);
+        for (; remain_size >= sizeof(int); remain_size -= sizeof(int), ++pInt) {
+            if (*pInt != 0) {
+                all_zero = false;
+                break;
+            }
+        }
+
+        if (all_zero && (remain_size > 0)) {
+            const uint8_t* pByte{reinterpret_cast< const uint8_t* >(pInt)};
+            for (; remain_size > 0; --remain_size, ++pByte) {
+                if (*pByte != 0x00) {
                     all_zero = false;
                     break;
                 }
             }
-            if (all_zero && (remain_ret > 0)) {
-                const uint8_t* pByte{reinterpret_cast< const uint8_t* >(pInt)};
-                for (; remain_ret > 0; --remain_ret, ++pByte) {
-                    if (*pByte != 0x00) {
-                        all_zero = false;
-                        break;
-                    }
-                }
-            }
-            ASSERT_TRUE(all_zero) << "Expected all bytes to be zero, but not";
-            cur_offset += this_sz;
-            remain_size -= this_sz;
         }
-        LOGINFO("Write zeros of size={} validated in {} microseconds", remain_size, get_elapsed_time_us(m_start_time));
-        iomanager.iobuf_free(buf);
-        s_runner.job_done();
+        ASSERT_TRUE(all_zero) << "Expected all bytes to be zero, but not";
+
+        m_validated_size += req->size;
+        iomanager.iobuf_free(req->buf);
+        delete req;
+
+        if (m_validated_size == m_size) {
+            LOGINFO("Write zeros of size={} validated in {} microseconds", remain_size,
+                    get_elapsed_time_us(m_start_time));
+            s_runner.job_done();
+        }
     }
 
 protected:
     uint64_t m_size;
     uint64_t m_offset;
+    uint64_t m_filled_size{0};
+    uint64_t m_validated_size{0};
     io_device_ptr m_iodev;
     iomgr::drive_attributes m_driveattr;
     Clock::time_point m_start_time;

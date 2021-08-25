@@ -433,8 +433,10 @@ public:
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn);
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                         timer_callback_t&& timer_fn);
-    void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
+                                         timer_callback_t&& timer_fn, bool wait_to_schedule = false);
+    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false) {
+        return thdl.first->cancel(thdl, wait_to_cancel);
+    }
     void set_poll_interval(const int interval);
     int get_poll_interval() const;
 

@@ -31,16 +31,23 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
-        add_test(NAME TestMsg-Epoll COMMAND test_msg)
-        add_test(NAME TestIOJob-Epoll COMMAND test_iojob)
         add_test(NAME TestTimer-Epoll COMMAND test_timer)
+        add_test(NAME TestIOJob-Epoll COMMAND test_iojob)
         add_test(NAME TestWriteZero-Epoll COMMAND test_write_zero)
+
+        add_test(NAME TestMsg-Epoll COMMAND test_msg)
+        SET_TESTS_PROPERTIES(TestMsg-Epoll PROPERTIES DEPENDS TestWriteZero-Epoll)
     endif()
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode"))
         # TODO: Disabled till we get the spdk test_iomgr failure is fixed
-        #add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
+        add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
+
         add_test(NAME TestTimer-Spdk COMMAND test_timer --spdk true)
+        SET_TESTS_PROPERTIES(TestTimer-Spdk PROPERTIES DEPENDS TestIOMgr-Spdk)
+
+        add_test(NAME TestWriteZero-Spdk COMMAND test_write_zero --spdk true)
+        SET_TESTS_PROPERTIES(TestWriteZero-Spdk PROPERTIES DEPENDS TestTimer-Spdk)
 
         add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
         SET_TESTS_PROPERTIES(TestMsg-Spdk PROPERTIES DEPENDS TestTimer-Spdk)

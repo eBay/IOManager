@@ -104,7 +104,7 @@ public:
         } else {
             ti->hdl = iomanager.schedule_global_timer(ti->nanos_after, false /* auto recurring */, ti,
                                                       std::get< thread_regex >(ti->scope),
-                                                      bind_this(TimerTest::validate_timeout, 1));
+                                                      bind_this(TimerTest::validate_timeout, 1), true /* wait */);
         }
     }
 
@@ -126,7 +126,7 @@ public:
         } else {
             ti->scope = scope;
             ti->hdl = iomanager.schedule_global_timer(nanos_after, recurring, ti.get(), std::get< thread_regex >(scope),
-                                                      bind_this(TimerTest::validate_timeout, 1));
+                                                      bind_this(TimerTest::validate_timeout, 1), true /* wait */);
         }
 
         {
@@ -147,7 +147,7 @@ public:
     }
 
     void finish_timer(timer_test_info* ti) {
-        iomanager.cancel_timer(ti->hdl);
+        iomanager.cancel_timer(ti->hdl, true /* wait_to_cancel */);
         ti->is_active = false;
         bool notify{false};
         {
@@ -174,6 +174,23 @@ protected:
 TEST_F(TimerTest, global_recurring_timer) {
     create_random_timers(thread_regex::all_worker, true /* recurring */);
     wait_for_all_timers();
+}
+
+/* NOTE: Make sure this is the last test case, so that iomanager stop is running in parallel to timer test */
+TEST_F(TimerTest, timer_parallel_to_shutdown) {
+    std::random_device rd{};
+    std::default_random_engine engine{rd()};
+    std::uniform_int_distribution< uint64_t > rand_freq_ns{500 * 1000, 5 * 1000 * 1000};
+
+    std::vector< timer_handle_t > m_thdls;
+    for (uint64_t i{0}; i < g_num_timers; ++i) {
+        m_thdls.push_back(iomanager.schedule_global_timer(
+            rand_freq_ns(engine), true /* recurring */, nullptr, thread_regex::all_worker, [](void*) {},
+            true /* wait */));
+    }
+    for (auto& thdl : m_thdls) {
+        iomanager.cancel_timer(thdl, false /* wait_to_cancel */);
+    }
 }
 
 int main(int argc, char* argv[]) {

@@ -147,7 +147,7 @@ public:
         auto ti = std::make_unique< timer_test_info >(1 * 1000ul * 1000ul, g_iters);
         ti->start_timer_time = Clock::now();
         ti->hdl = iomanager.schedule_global_timer(ti->nanos_after, true, ti.get(), thread_regex::all_worker,
-                                                  validate_timeout);
+                                                  validate_timeout, true /* wait */);
 
         auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
         if (wtype == wait_type_t::sleep) {
@@ -162,7 +162,7 @@ public:
             // std::lock_guard< std::mutex > lg(ti->mtx);
             // if (ti->pending_count > 0) { iomanager.cancel_timer(ti->hdl); }
         }
-        iomanager.cancel_timer(ti->hdl);
+        iomanager.cancel_timer(ti->hdl, true);
         // g_timer_infos.push_back(std::move(ti));
     }
 

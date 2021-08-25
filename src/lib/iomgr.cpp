@@ -583,7 +583,7 @@ timer_handle_t IOManager::schedule_thread_timer(uint64_t nanos_after, bool recur
 }
 
 timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                                timer_callback_t&& timer_fn) {
+                                                timer_callback_t&& timer_fn, bool wait_to_schedule) {
     timer* t = nullptr;
     if (r == thread_regex::all_worker) {
         t = m_global_worker_timer.get();
@@ -594,7 +594,7 @@ timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recur
         return null_timer_handle;
     }
 
-    return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
+    return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn), wait_to_schedule);
 }
 
 void IOManager::set_poll_interval(const int interval) { this_reactor()->set_poll_interval(interval); }
