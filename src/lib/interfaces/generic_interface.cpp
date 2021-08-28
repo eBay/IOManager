@@ -160,9 +160,9 @@ bool IOInterface::add_to_my_reactor(const io_device_ptr& iodev, const io_thread_
     if (iodev_thread_ctx == nullptr) {
         if (thr->reactor->is_iodev_addable(iodev, thr)) {
             thr->reactor->add_iodev(iodev, thr);
-            init_iodev_thread_ctx(iodev, thr);
             added = true;
         }
+        init_iodev_thread_ctx(iodev, thr);
         if (iodev->m_iodev_thread_ctx[thr->thread_idx] == nullptr) {
             iodev->m_iodev_thread_ctx[thr->thread_idx] = std::make_unique< IODeviceThreadContext >();
         }
@@ -174,10 +174,10 @@ bool IOInterface::remove_from_my_reactor(const io_device_ptr& iodev, const io_th
     bool removed{false};
     if (iodev->m_iodev_thread_ctx[thr->thread_idx]) {
         if (thr->reactor->is_iodev_addable(iodev, thr)) {
-            clear_iodev_thread_ctx(iodev, thr);
             thr->reactor->remove_iodev(iodev, thr);
             removed = true;
         }
+        clear_iodev_thread_ctx(iodev, thr);
         iodev->m_iodev_thread_ctx[thr->thread_idx].reset();
     }
     return removed;

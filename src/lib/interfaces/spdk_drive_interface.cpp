@@ -291,6 +291,12 @@ iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) 
 }
 
 void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
+    if (!thr->reactor->is_tight_loop_reactor()) {
+        // If we are asked to initialize the thread context for non-spdk thread reactor, then create one spdk
+        // thread for sync IO which we will use to keep spinning.
+        create_temp_spdk_thread();
+    }
+
     auto dctx = std::make_unique< SpdkDriveDeviceContext >();
     dctx->channel = spdk_bdev_get_io_channel(iodev->bdev_desc());
     if (dctx->channel == NULL) {
@@ -303,28 +309,8 @@ void SpdkDriveInterface::clear_iodev_thread_ctx(const io_device_ptr& iodev, cons
     auto dctx = (SpdkDriveDeviceContext*)iodev->m_iodev_thread_ctx[thr->thread_idx].get();
     if (dctx->channel != NULL) { spdk_put_io_channel(dctx->channel); }
     iodev->m_iodev_thread_ctx[thr->thread_idx].reset();
-}
 
-bool SpdkDriveInterface::add_to_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
-    if (thr->reactor->is_tight_loop_reactor()) {
-        return IOInterface::add_to_my_reactor(iodev, thr);
-    } else {
-        // If we are asked to initialize the thread context for non-spdk thread reactor, then create one spdk
-        // thread for sync IO which we will use to keep spinning.
-        create_temp_spdk_thread();
-        init_iodev_thread_ctx(iodev, thr);
-    }
-    return true;
-}
-
-bool SpdkDriveInterface::remove_from_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
-    if (thr->reactor->is_tight_loop_reactor()) {
-        return IOInterface::remove_from_my_reactor(iodev, thr);
-    } else {
-        clear_iodev_thread_ctx(iodev, thr);
-        destroy_temp_spdk_thread();
-    }
-    return true;
+    if (!thr->reactor->is_tight_loop_reactor()) { destroy_temp_spdk_thread(); }
 }
 
 static spdk_io_channel* get_io_channel(IODevice* iodev) {
@@ -348,6 +334,18 @@ static bool resubmit_io_on_err(void* b) {
 
 static void complete_io(SpdkIocb* iocb) { sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb); }
 
+static std::string explain_bdev_io_status(struct spdk_bdev_io* bdev_io) {
+    if (std::string(bdev_io->bdev->module->name) == "nvme") {
+        uint32_t cdw0;
+        int sct;
+        int sc;
+        spdk_bdev_io_get_nvme_status(bdev_io, &cdw0, &sct, &sc);
+        return fmt::format("cdw0={} sct={}, sc={}", cdw0, sct, sc);
+    } else {
+        return "unknown";
+    }
+}
+
 static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void* ctx) {
     SpdkIocb* iocb = (SpdkIocb*)ctx;
     assert(iocb->iodev->bdev_desc());
@@ -363,7 +361,8 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
         iocb->result = 0;
         LOGDEBUGMOD(iomgr, "(bdev_io={}) iocb complete: mode=actual, {}", (void*)bdev_io, iocb->to_string());
     } else {
-        LOGERRORMOD(iomgr, "(bdev_io={}) iocb failed: mode=actual, {}", (void*)bdev_io, iocb->to_string());
+        LOGERRORMOD(iomgr, "(bdev_io={}) iocb failed with status [{}]: mode=actual, {}", (void*)bdev_io,
+                    explain_bdev_io_status(bdev_io), iocb->to_string());
         COUNTER_INCREMENT(iocb->iface->get_metrics(), completion_errors, 1);
         if (resubmit_io_on_err(iocb)) { return; }
         iocb->result = -1;

@@ -109,9 +109,6 @@ public:
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
-    bool add_to_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
-    bool remove_from_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) override;
-
     io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
@@ -179,7 +176,8 @@ struct SpdkIocb {
     void set_iovs(const iovec* iovs, const int count) {
         iovcnt = count;
         if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
-        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs), count * sizeof(iovec));
+        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs),
+                    count * sizeof(iovec));
     }
 
     void set_data(char* data) { user_data = data; }
