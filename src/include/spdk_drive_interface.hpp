@@ -1,23 +1,36 @@
 #pragma once
 
-#include "drive_interface.hpp"
-#include <metrics/metrics.hpp>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
 #include <fds/buffer.hpp>
 #include <fds/vector_pool.hpp>
-#include <optional>
+#include <metrics/metrics.hpp>
 #include <spdk/bdev.h>
-#include "iomgr_msg.hpp"
 #include <utility/enum.hpp>
-#include <chrono>
 
+#include "drive_interface.hpp"
 #include "iomgr_config.hpp"
+#include "iomgr_msg.hpp"
 
 struct spdk_io_channel;
 struct spdk_thread;
 
 using namespace std::chrono_literals;
 namespace iomgr {
-struct SpdkDriveDeviceContext {
+struct SpdkDriveDeviceContext : public IODeviceThreadContext {
+    ~SpdkDriveDeviceContext() = default;
     struct spdk_io_channel* channel{NULL};
 };
 
@@ -57,6 +70,7 @@ class SpdkDriveInterface : public DriveInterface {
 public:
     SpdkDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     drive_interface_type interface_type() const override { return drive_interface_type::spdk; }
+    std::string name() const override { return "spdk_drive_interface"; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
 
@@ -95,16 +109,13 @@ public:
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
-    bool add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    bool remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-
     io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
-    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
@@ -165,7 +176,8 @@ struct SpdkIocb {
     void set_iovs(const iovec* iovs, const int count) {
         iovcnt = count;
         if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
-        ::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs), count * sizeof(iovec));
+        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs),
+                    count * sizeof(iovec));
     }
 
     void set_data(char* data) { user_data = data; }

@@ -1,42 +1,29 @@
 //
-// Created by Rishabh Mittal 04/20/2018
+// Created by Kadayam, Hari on 2021-08-16.
 //
 #pragma once
 
-#include <atomic>
-#include <cstdint>
-#include <functional>
-#include <limits>
-#include <memory>
-#include <mutex>
-#include <queue>
-#include <stack>
-#include <string>
-#include <vector>
-
-#ifdef __linux__
-#include <fcntl.h>
-#include <libaio.h>
-#include <sys/eventfd.h>
 #include <unistd.h>
-#endif
-
-#include <fds/buffer.hpp>
-#include <metrics/metrics.hpp>
-
+#include <string>
+#include <stack>
+#include <queue>
+#include <atomic>
+#include <mutex>
 #include "drive_interface.hpp"
+#include <metrics/metrics.hpp>
+#include <fds/buffer.hpp>
+
 #include "iomgr_types.hpp"
+#include <fcntl.h>
+#include <liburing.h>
+#include <sys/eventfd.h>
 
 namespace iomgr {
-constexpr unsigned MAX_OUTSTANDING_IO{200};  // if max outstanding IO is more than 200 then io_submit will fail.
-constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions to process in one shot
-
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
 static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
 static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
 
-#ifdef __linux__
 struct iocb_info_t : public iocb {
     bool is_read;
     char* user_data;
@@ -259,36 +246,42 @@ struct aio_thread_context {
     }
 };
 
-class AioDriveInterfaceMetrics : public sisl::MetricsGroup {
+struct UringThreadContext {};
+
+class UringDriveInterfaceMetrics : public sisl::MetricsGroup {
 public:
-    explicit AioDriveInterfaceMetrics(const char* inst_name = "AioDriveInterface") :
-            sisl::MetricsGroup("AioDriveInterface", inst_name) {
-        REGISTER_COUNTER(completion_errors, "Aio Completion errors");
-        REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
+    explicit UringDriveInterfaceMetrics(const char* inst_name = "UringDriveInterface") :
+            sisl::MetricsGroup("UringDriveInterface", inst_name) {
+        REGISTER_COUNTER(completion_errors, "Uring Completion errors");
+        REGISTER_COUNTER(write_io_submission_errors, "Uring write submission errors", "io_submission_errors",
                          {"io_direction", "write"});
-        REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
+        REGISTER_COUNTER(read_io_submission_errors, "Uring read submission errors", "io_submission_errors",
                          {"io_direction", "read"});
         REGISTER_COUNTER(retry_io_eagain_error, "Retry IOs count because of kernel eagain");
-        REGISTER_COUNTER(queued_aio_slots_full, "Count of IOs queued because of aio slots full");
-
-        // TODO: This shouldn't be a counter, but part of get_status(), but we haven't setup one for iomgr, so keeping
-        // as a metric as of now. Once added, will remove this counter/gauge.
-        REGISTER_COUNTER(retry_list_size, "Retry list size", sisl::_publish_as::publish_as_gauge);
 
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         register_me_to_farm();
     }
 
-    ~AioDriveInterfaceMetrics() { deregister_me_from_farm(); }
+    ~UringDriveInterfaceMetrics() { deregister_me_from_farm(); }
 };
 
-class AioDriveInterface : public DriveInterface {
+// Per thread structure which has all details for uring
+struct uring_drive_channel {
+    struct io_uring m_ring;
+    io_device_ptr m_ring_ev_iodev;
+    uint32_t m_batched_ios{0};
+};
+
+class UringDriveInterface : public DriveInterface {
 public:
-    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
-    ~AioDriveInterface();
-    drive_interface_type interface_type() const override { return drive_interface_type::aio; }
-    std::string name() const override { return "aio_drive_interface"; }
+    static constexpr uint32_t max_entries = 256;
+
+    UringDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
+    virtual ~UringDriveInterface() = default;
+    drive_interface_type interface_type() const override { return drive_interface_type::uring; }
+    std::string name() const override { return "uring_drive_interface"; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
     io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
@@ -341,19 +334,10 @@ private:
     void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
 
 private:
-    static thread_local aio_thread_context* t_aio_ctx;
-    std::mutex m_open_mtx;
-    std::unique_ptr< uint8_t, std::function<void(uint8_t* const)>> m_zero_buf{};
-    uint64_t m_max_write_zeros{std::numeric_limits<uint64_t>::max()};
-    AioDriveInterfaceMetrics m_metrics;
+    static thread_local uring_drive_channel* t_uring_ch;
+    uint8_t* m_zero_buf{nullptr};
+    uint64_t m_max_write_zeros{0};
+    UringDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
 };
-#else
-class AioDriveInterface : public DriveInterface {
-public:
-    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr) {}
-    void init_iface_thread_ctx(const io_thread_t& thr) override;
-    void clear_iface_thread_ctx(const io_thread_t& thr) override;
-};
-#endif
 } // namespace iomgr

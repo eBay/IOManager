@@ -15,7 +15,7 @@
 #include "iomgr_types.hpp"
 
 namespace iomgr {
-enum class drive_interface_type { aio, spdk, uioring };
+enum class drive_interface_type { aio, spdk, uring };
 
 struct drive_attributes {
     uint32_t phys_page_size = 4096;        // Physical page size of flash ssd/nvme. This is optimal size to do IO

@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "5.1.0"
+    version = "6.0.5"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -18,6 +18,7 @@ class IOMgrConan(ConanFile):
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "prerelease": ['True', 'False'],
         }
     default_options = (
         'shared=False',
@@ -25,16 +26,16 @@ class IOMgrConan(ConanFile):
         'coverage=False',
         'sanitize=False',
         'testing=full',
+        'prerelease=True',
         )
 
     requires = (
             "flip/[~=2, include_prerelease=True]@sds/master",
-            "sds_logging/[~=10, include_prerelease=True]@sds/master",
-            "sds_options/[~=1, include_prerelease=True]@sds/master",
             "sisl/[~=5, include_prerelease=True]@sisl/master",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
+            "grpc/1.37.0",
             ("fmt/7.1.3", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
@@ -43,6 +44,8 @@ class IOMgrConan(ConanFile):
             "openssl/1.1.1k",
             "isa-l/2.21.0",
             "semver/1.1.0",
+            "grpc_internal/1.37.0",
+            "liburing/0.7"
             )
     build_requires = (
                 "gtest/1.10.0",
@@ -57,6 +60,8 @@ class IOMgrConan(ConanFile):
             del self.options.coverage
 
     def configure(self):
+        self.options['sisl'].prerelease = self.options.prerelease
+        self.options['flip'].prerelease = self.options.prerelease
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")

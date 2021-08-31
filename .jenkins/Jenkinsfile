@@ -120,7 +120,7 @@ pipeline {
                             expression { "${BUILD_TYPE}" != 'sanitize' }
                         } }
                         steps {
-                            sh "conan create ${BUILD_MISSING} -o sds_logging:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
+                            sh "conan create ${BUILD_MISSING} -o ${PROJECT}:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
                         }
                     }
 
@@ -204,18 +204,6 @@ pipeline {
                     }
                     post {
                         failure { script { failed_pkg = "Homestore" } }
-                    }
-                }
-                stage('SCST Connector') {
-                    steps {
-                        script {
-                            built_chain = env.pkg_version
-                            def scst_res = build job: "SCST Connector/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
-                            built_chain = "${built_chain}" + ", " + "scst_res.buildVariables.pkg_version"
-                        }
-                    }
-                    post {
-                        failure { script { failed_pkg = "SCST Connector" } }
                     }
                 }
                 stage('NuBlox Logstore') {

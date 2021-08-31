@@ -122,10 +122,14 @@ struct io_thread {
 /****************** Device related *************************/
 inline backing_dev_t null_backing_dev() { return backing_dev_t{std::in_place_type< spdk_bdev_desc* >, nullptr}; }
 
+struct IODeviceThreadContext {
+    virtual ~IODeviceThreadContext() = default;
+};
+
 class IODevice {
 public:
     IODevice(const int pri, const thread_specifier scope);
-    ~IODevice() = default;
+    virtual ~IODevice() = default;
 
 public:
     ev_callback cb{nullptr};
@@ -137,7 +141,8 @@ public:
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
-    sisl::sparse_vector< void* > m_thread_local_ctx;
+    std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
+    sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_thread_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     iomgr_drive_type drive_type{iomgr_drive_type::unknown};
@@ -190,6 +195,7 @@ public:
     }
     virtual const io_thread_t& iothread_self() const;
     virtual reactor_idx_t reactor_idx() const { return m_reactor_num; }
+    virtual bool listen_once();
     virtual void listen() = 0;
 
     void start_io_thread(const io_thread_t& thr);
@@ -210,7 +216,6 @@ public:
     virtual const char* loop_type() const = 0;
     const io_thread_t& select_thread();
     io_thread_idx_t default_thread_idx() const;
-    void start_interface(IOInterface* iface);
     void set_poll_interval(const int interval) { m_poll_interval = interval; }
     int get_poll_interval() const { return m_poll_interval; }
     poll_cb_idx_t register_poll_interval_cb(std::function< void(void) >&& cb);
