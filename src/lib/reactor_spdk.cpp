@@ -6,7 +6,7 @@
 #include "include/iomgr.hpp"
 #include "include/iomgr_msg.hpp"
 #include "include/reactor_spdk.hpp"
-#include <fds/obj_allocator.hpp>
+#include <sisl/fds/obj_allocator.hpp>
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>

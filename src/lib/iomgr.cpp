@@ -41,8 +41,8 @@ extern "C" {
 #include "include/reactor_spdk.hpp"
 #include "include/iomgr_config.hpp"
 
-#include <utility/thread_factory.hpp>
-#include <fds/obj_allocator.hpp>
+#include <sisl/utility/thread_factory.hpp>
+#include <sisl/fds/obj_allocator.hpp>
 #include <random>
 #include <sds_logging/logging.h>
 #include <sisl/version.hpp>

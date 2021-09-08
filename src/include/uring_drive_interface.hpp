@@ -10,8 +10,8 @@
 #include <atomic>
 #include <mutex>
 #include "drive_interface.hpp"
-#include <metrics/metrics.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/metrics/metrics.hpp>
+#include <sisl/fds/buffer.hpp>
 
 #include "iomgr_types.hpp"
 #include <fcntl.h>

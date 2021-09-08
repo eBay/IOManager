@@ -11,7 +11,7 @@
 #include <fcntl.h>
 #endif
 
-#include <fds/utils.hpp>
+#include <sisl/fds/utils.hpp>
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
@@ -21,7 +21,6 @@
 using namespace iomgr;
 using namespace std::chrono_literals;
 
-THREAD_BUFFER_INIT;
 SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SDS_OPTION_GROUP(test_write_zeros,

@@ -2,8 +2,8 @@
 #include "include/iomgr.hpp"
 #include "include/spdk_drive_interface.hpp"
 #include <folly/Exception.h>
-#include <fds/obj_allocator.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/fds/buffer.hpp>
 #include <filesystem>
 #include <thread>
 // TODO: Remove this once the problem is fixed in flip

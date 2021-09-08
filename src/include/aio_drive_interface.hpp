@@ -21,14 +21,14 @@
 #include <unistd.h>
 #endif
 
-#include <fds/buffer.hpp>
-#include <metrics/metrics.hpp>
+#include <sisl/fds/buffer.hpp>
+#include <sisl/metrics/metrics.hpp>
 
 #include "drive_interface.hpp"
 #include "iomgr_types.hpp"
 
 namespace iomgr {
-constexpr unsigned MAX_OUTSTANDING_IO{200};  // if max outstanding IO is more than 200 then io_submit will fail.
+constexpr unsigned MAX_OUTSTANDING_IO{200}; // if max outstanding IO is more than 200 then io_submit will fail.
 constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
@@ -343,8 +343,8 @@ private:
 private:
     static thread_local aio_thread_context* t_aio_ctx;
     std::mutex m_open_mtx;
-    std::unique_ptr< uint8_t, std::function<void(uint8_t* const)>> m_zero_buf{};
-    uint64_t m_max_write_zeros{std::numeric_limits<uint64_t>::max()};
+    std::unique_ptr< uint8_t, std::function< void(uint8_t* const) > > m_zero_buf{};
+    uint64_t m_max_write_zeros{std::numeric_limits< uint64_t >::max()};
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
 };

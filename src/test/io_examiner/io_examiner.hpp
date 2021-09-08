@@ -5,8 +5,8 @@
 #include <sds_logging/logging.h>
 #include <isa-l/crc.h>
 
-#include <fds/bitset.hpp>
-#include <utility/enum.hpp>
+#include <sisl/fds/bitset.hpp>
+#include <sisl/utility/enum.hpp>
 #include "iomgr.hpp"
 
 namespace iomgr {

@@ -5,10 +5,10 @@
 #pragma once
 
 #include <sds_logging/logging.h>
-#include <metrics/metrics.hpp>
-#include <fds/sparse_vector.hpp>
-#include <utility/atomic_counter.hpp>
-#include <utility/enum.hpp>
+#include <sisl/metrics/metrics.hpp>
+#include <sisl/fds/sparse_vector.hpp>
+#include <sisl/utility/atomic_counter.hpp>
+#include <sisl/utility/enum.hpp>
 #include <chrono>
 #include "iomgr_types.hpp"
 #include "iomgr_timer.hpp"

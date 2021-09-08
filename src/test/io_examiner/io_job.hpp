@@ -5,13 +5,13 @@
 #include <random>
 #include <chrono>
 
-#include <fds/bitset.hpp>
+#include <sisl/fds/bitset.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <utility/enum.hpp>
+#include <sisl/utility/enum.hpp>
 #include <nlohmann/json.hpp>
 #include <fmt/format.h>
-#include <fds/buffer.hpp>
+#include <sisl/fds/buffer.hpp>
 
 #include "iomgr.hpp"
 #include "job.hpp"

@@ -12,8 +12,8 @@ extern "C" {
 #include <spdk/nvmf_transport.h>
 }
 #include <folly/Exception.h>
-#include <fds/obj_allocator.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/fds/buffer.hpp>
 
 namespace iomgr {
 

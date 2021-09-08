@@ -6,7 +6,7 @@
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <utility/thread_factory.hpp>
+#include <sisl/utility/thread_factory.hpp>
 
 extern "C" {
 #include <spdk/env.h>
@@ -14,8 +14,6 @@ extern "C" {
 }
 #include <stdexcept>
 using log_level = spdlog::level::level_enum;
-
-THREAD_BUFFER_INIT;
 
 SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
