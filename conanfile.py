@@ -102,6 +102,7 @@ class IOMgrConan(ConanFile):
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
         self.cpp_info.cxxflags.append("-fconcepts")
+        self.cpp_info.cppflags.append("-Wno-deprecated-declarations")
         if self.settings.build_type == "Debug":
             if  self.options.sanitize:
                 self.cpp_info.sharedlinkflags.append("-fsanitize=address")
