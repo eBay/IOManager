@@ -33,6 +33,7 @@ class IOMgrConan(ConanFile):
             "flip/[~=2, include_prerelease=True]@sds/master",
             "sisl/[~=5, include_prerelease=True]@sisl/develop",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
+            "sds_logging/[~=10, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
             "grpc/1.37.0",
