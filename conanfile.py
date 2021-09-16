@@ -33,11 +33,11 @@ class IOMgrConan(ConanFile):
             "flip/[~=2, include_prerelease=True]@sds/master",
             "sisl/[~=5, include_prerelease=True]@sisl/develop",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
-            "sds_logging/[~=10, include_prerelease=True]@sds/master",
+            "sds_logging/11.0.1-1@sds/develop",
 
             "boost/1.73.0",
             "grpc/1.37.0",
-            ("fmt/7.1.3", "override"),
+            ("fmt/8.0.1", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
@@ -103,7 +103,6 @@ class IOMgrConan(ConanFile):
     def package_info(self):
         self.cpp_info.libs = tools.collect_libs(self)
         self.cpp_info.cxxflags.append("-fconcepts")
-        self.cpp_info.cppflags.append("-Wno-deprecated-declarations")
         if self.settings.build_type == "Debug":
             if  self.options.sanitize:
                 self.cpp_info.sharedlinkflags.append("-fsanitize=address")

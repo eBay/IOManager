@@ -49,9 +49,6 @@ if(CCACHE_FOUND)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
 endif ()
 
-# FIXME : This is to make the `fmt::format_to(...)` which is deprecated work for now with fmt 8.0.1
-add_flags("-Wno-deprecated-declarations")
-
 add_subdirectory(src/)
 add_subdirectory(src/test)
 

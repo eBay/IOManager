@@ -28,10 +28,10 @@ namespace iomgr {
     {                                                                                                                  \
         LOG##level##MOD_FMT(BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                            \
                             ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                   \
-                                fmt::format_to(buf, "[{}:{}] ", file_name(__FILE__), __LINE__);                        \
-                                fmt::format_to(buf, "[IOThread {}.{}] ", m_reactor_num,                                \
+                                fmt::format_to(fmt::appender(buf), "[{}:{}] ", file_name(__FILE__), __LINE__);         \
+                                fmt::format_to(fmt::appender(buf), "[IOThread {}.{}] ", m_reactor_num,                 \
                                                (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr)));             \
-                                fmt::format_to(buf, __m, args...);                                                     \
+                                fmt::format_to(fmt::appender(buf), __m, args...);                                      \
                                 return true;                                                                           \
                             }),                                                                                        \
                             __l, ##__VA_ARGS__);                                                                       \
@@ -270,10 +270,10 @@ struct formatter< iomgr::io_thread > {
     template < typename FormatContext >
     auto format(const iomgr::io_thread& t, FormatContext& ctx) {
         if (std::holds_alternative< spdk_thread* >(t.thread_impl)) {
-            return format_to(ctx.out(), "[addr={} idx={} reactor={}]", (void*)std::get< spdk_thread* >(t.thread_impl),
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", (void*)std::get< spdk_thread* >(t.thread_impl),
                              t.thread_idx, t.reactor->reactor_idx());
         } else {
-            return format_to(ctx.out(), "[addr={} idx={} reactor={}]", std::get< iomgr::reactor_idx_t >(t.thread_impl),
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", std::get< iomgr::reactor_idx_t >(t.thread_impl),
                              t.thread_idx, t.reactor->reactor_idx());
         }
     }
