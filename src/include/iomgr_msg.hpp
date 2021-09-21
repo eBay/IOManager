@@ -7,11 +7,11 @@
 
 #include <iostream>
 #include <folly/Traits.h>
-#include <fds/buffer.hpp>
-#include <fds/obj_allocator.hpp>
-#include <utility/enum.hpp>
-#include <utility/atomic_counter.hpp>
-#include <utility/obj_life_counter.hpp>
+#include <sisl/fds/buffer.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/utility/enum.hpp>
+#include <sisl/utility/atomic_counter.hpp>
+#include <sisl/utility/obj_life_counter.hpp>
 #include "reactor.hpp"
 #include "iomgr_types.hpp"
 

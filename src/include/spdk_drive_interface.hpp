@@ -14,11 +14,11 @@
 #include <variant>
 #include <vector>
 
-#include <fds/buffer.hpp>
-#include <fds/vector_pool.hpp>
-#include <metrics/metrics.hpp>
+#include <sisl/fds/buffer.hpp>
+#include <sisl/fds/vector_pool.hpp>
+#include <sisl/metrics/metrics.hpp>
 #include <spdk/bdev.h>
-#include <utility/enum.hpp>
+#include <sisl/utility/enum.hpp>
 
 #include "drive_interface.hpp"
 #include "iomgr_config.hpp"

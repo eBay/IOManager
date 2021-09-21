@@ -30,13 +30,14 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
-            "flip/[~=2, include_prerelease=True]@sds/master",
-            "sisl/[~=5, include_prerelease=True]@sisl/master",
+            "flip/[~=2, include_prerelease=True]@sds/develop",
+            "sisl/[~=5, include_prerelease=True]@sisl/develop",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
+            "sds_logging/[~=11, include_prerelease=True]@sds/develop",
 
             "boost/1.73.0",
             "grpc/1.37.0",
-            ("fmt/7.1.3", "override"),
+            ("fmt/8.0.1", "override"),
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",

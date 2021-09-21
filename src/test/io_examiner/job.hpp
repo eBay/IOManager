@@ -6,9 +6,9 @@
 #include <memory>
 #include <sds_logging/logging.h>
 
-#include <fds/atomic_status_counter.hpp>
+#include <sisl/fds/atomic_status_counter.hpp>
 #include <atomic>
-#include <utility/enum.hpp>
+#include <sisl/utility/enum.hpp>
 #include "iomgr.hpp"
 #include "io_examiner.hpp"
 

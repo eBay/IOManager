@@ -7,8 +7,8 @@
 #include <functional>
 #include <boost/heap/binomial_heap.hpp>
 
-#include <utility/enum.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/utility/enum.hpp>
+#include <sisl/fds/buffer.hpp>
 
 struct spdk_thread;
 struct spdk_bdev_desc;

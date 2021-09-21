@@ -15,11 +15,11 @@ extern "C" {
 #include <memory>
 #include <random>
 #include <vector>
-#include <utility/thread_buffer.hpp>
-#include <utility/atomic_counter.hpp>
-#include <fds/sparse_vector.hpp>
-#include <fds/malloc_helper.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/utility/thread_buffer.hpp>
+#include <sisl/utility/atomic_counter.hpp>
+#include <sisl/fds/sparse_vector.hpp>
+#include <sisl/fds/malloc_helper.hpp>
+#include <sisl/fds/buffer.hpp>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -37,8 +37,8 @@ extern "C" {
 #include "iomgr_types.hpp"
 #include "drive_interface.hpp"
 #include <functional>
-#include <fds/id_reserver.hpp>
-#include <utility/enum.hpp>
+#include <sisl/fds/id_reserver.hpp>
+#include <sisl/utility/enum.hpp>
 #include <sds_logging/logging.h>
 #include <semver/semver200.h>
 
