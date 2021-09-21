@@ -52,6 +52,12 @@ public:
         REGISTER_COUNTER(completion_errors, "Spdk Drive Completion errors");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
 
+        REGISTER_COUNTER(total_outstanding_ops_cnt, "Total outstanding ops cnt"); //
+        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt");
+        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt");
+        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding write cnt");
+        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding read cnt");
+
         register_me_to_farm();
     }
 
