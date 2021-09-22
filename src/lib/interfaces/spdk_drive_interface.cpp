@@ -332,7 +332,28 @@ static bool resubmit_io_on_err(void* b) {
     return true;
 }
 
-static void complete_io(SpdkIocb* iocb) { sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb); }
+static void complete_io(SpdkIocb* iocb) {
+    /* update outstanding counters */
+    COUNTER_DECREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
+    switch (iocb->op_type) {
+    case SpdkDriveOpType::READ:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case SpdkDriveOpType::UNMAP:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE_ZERO:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
+    sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
+}
 
 static std::string explain_bdev_io_status(struct spdk_bdev_io* bdev_io) {
     if (std::string(bdev_io->bdev->module->name) == "nvme") {
@@ -374,24 +395,6 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
 
     bool started_by_this_thread = (iocb->owner_thread == nullptr);
 
-    COUNTER_DECREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
-    switch (iocb->op_type) {
-    case SpdkDriveOpType::READ:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
-        break;
-    case SpdkDriveOpType::WRITE:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
-        break;
-    case SpdkDriveOpType::UNMAP:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
-        break;
-    case SpdkDriveOpType::WRITE_ZERO:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
-        break;
-    default:
-        LOGDFATAL("Invalid operation type {}", iocb->op_type);
-    }
-
     auto& cb = iocb->comp_cb ? iocb->comp_cb : iocb->iface->get_completion_cb();
     cb(*iocb->result, (uint8_t*)iocb->user_cookie);
 
@@ -414,8 +417,6 @@ static void submit_io(void* b) {
     iocb->owns_by_spdk = true;
 #endif
 
-    COUNTER_INCREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
-
     LOGDEBUGMOD(iomgr, "iocb submit: mode=actual, {}", iocb->to_string());
     if (iocb->op_type == SpdkDriveOpType::READ) {
         if (iocb->has_iovs()) {
@@ -425,7 +426,6 @@ static void submit_io(void* b) {
             rc = spdk_bdev_read(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_data(), iocb->offset,
                                 iocb->size, process_completions, (void*)iocb);
         }
-        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
     } else if (iocb->op_type == SpdkDriveOpType::WRITE) {
         if (iocb->has_iovs()) {
             rc = spdk_bdev_writev(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_iovs(), iocb->iovcnt,
@@ -434,15 +434,12 @@ static void submit_io(void* b) {
             rc = spdk_bdev_write(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->get_data(), iocb->offset,
                                  iocb->size, process_completions, (void*)iocb);
         }
-        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
     } else if (iocb->op_type == SpdkDriveOpType::UNMAP) {
         rc = spdk_bdev_unmap(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
                              process_completions, (void*)iocb);
-        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
     } else if (iocb->op_type == SpdkDriveOpType::WRITE_ZERO) {
         rc = spdk_bdev_write_zeroes(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
                                     process_completions, (void*)iocb);
-        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
     } else {
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
         return;
@@ -464,6 +461,26 @@ static void submit_io(void* b) {
 
 inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
     bool ret = true;
+
+    /* update outstanding counters */
+    COUNTER_INCREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
+    switch (iocb->op_type) {
+    case SpdkDriveOpType::READ:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case SpdkDriveOpType::UNMAP:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE_ZERO:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
         submit_io(iocb);
