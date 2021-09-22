@@ -332,7 +332,27 @@ static bool resubmit_io_on_err(void* b) {
     return true;
 }
 
-static void complete_io(SpdkIocb* iocb) { sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb); }
+static void complete_io(SpdkIocb* iocb) {
+    /* update outstanding counters */
+    switch (iocb->op_type) {
+    case SpdkDriveOpType::READ:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case SpdkDriveOpType::UNMAP:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE_ZERO:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
+    sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
+}
 
 static std::string explain_bdev_io_status(struct spdk_bdev_io* bdev_io) {
     if (std::string(bdev_io->bdev->module->name) == "nvme") {
@@ -440,6 +460,25 @@ static void submit_io(void* b) {
 
 inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
     bool ret = true;
+
+    /* update outstanding counters */
+    switch (iocb->op_type) {
+    case SpdkDriveOpType::READ:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case SpdkDriveOpType::UNMAP:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case SpdkDriveOpType::WRITE_ZERO:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
         submit_io(iocb);
