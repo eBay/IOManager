@@ -138,8 +138,6 @@ private:
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
 };
 
-ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)
-
 struct SpdkBatchIocb {
     SpdkBatchIocb() {
         batch_io = sisl::VectorPool< SpdkIocb* >::alloc();
@@ -156,15 +154,57 @@ struct SpdkBatchIocb {
     std::vector< SpdkIocb* >* batch_io = nullptr;
 };
 
+struct SpdkIocb : public drive_iocb {
+    SpdkDriveInterface* iface;
+    io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
+    io_interface_comp_cb_t comp_cb = nullptr;
+    spdk_bdev_io_wait_entry io_wait_entry;
+    SpdkBatchIocb* batch_info_ptr = nullptr;
+#ifndef NDEBUG
+    bool owns_by_spdk{false};
+#endif
+
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
+             void* cookie) :
+            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
+        io_wait_entry.bdev = iodev->bdev();
+        io_wait_entry.cb_arg = (void*)this;
+        comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
+    }
+
+    std::string to_string() const {
+        std::string str;
+#ifndef NDEBUG
+        str = fmt::format("id={} ", iocb_id);
+#endif
+        str += fmt::format(
+            "addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, resubmit_cnt={} ",
+            (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
+            batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt);
+
+        if (has_iovs()) {
+            auto ivs = get_iovs();
+            for (auto i = 0; i < iovcnt; ++i) {
+                str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
+            }
+        } else {
+            str += fmt::format("buf={}", (void*)get_data());
+        }
+        return str;
+    }
+};
+
+#if 0
 struct SpdkIocb {
 #ifndef NDEBUG
     static std::atomic< uint64_t > _iocb_id_counter;
 #endif
+
     static constexpr int inlined_iov_count = 4;
     typedef std::array< iovec, inlined_iov_count > inline_iov_array;
     typedef std::unique_ptr< iovec[] > large_iov_array;
 
-    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint64_t size, uint64_t offset,
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
             iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
@@ -224,7 +264,7 @@ struct SpdkIocb {
 
     IODevice* iodev;
     SpdkDriveInterface* iface;
-    SpdkDriveOpType op_type;
+    DriveOpType op_type;
     uint64_t size;
     uint64_t offset;
     void* user_cookie = nullptr;
@@ -244,4 +284,5 @@ private:
     // Inline or additional memory
     std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
+#endif
 } // namespace iomgr

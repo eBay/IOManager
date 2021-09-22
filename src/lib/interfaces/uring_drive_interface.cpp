@@ -12,6 +12,7 @@
 #pragma GCC diagnostic pop
 #endif
 
+namespace iomgr {
 uring_drive_channel::uring_drive_channel() {
     // TODO: For now setup as interrupt mode instead of pollmode
     int ret = io_uring_queue_init(UringDriveInterface::max_entries, &m_ring, 0);
@@ -36,6 +37,66 @@ uring_drive_channel::~uring_drive_channel() {
     }
 }
 
+struct io_uring_sqe* uring_drive_channel::get_sqe_or_enqueue(drive_iocb* iocb) {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+    if (!sqe) {
+        // No available slots. Before enqueing we submit ios which were added as part of batch processing.
+        submit_ios();
+        m_iocb_waitq.push(iocb);
+        return nullptr;
+    }
+
+    return sqe;
+}
+
+void uring_drive_channel::submit_ios() {
+    if (m_prepared_ios != 0) {
+        io_uring_submit(&m_ring);
+        m_prepared_ios = 0;
+    }
+}
+
+void uring_drive_channel::submit_if_needed(drive_iocb* iocb, struct io_uring_sqe*, bool part_of_batch) {
+    io_uring_sqe_set_data(sqe, (void*)iocb);
+    ++m_prepared_ios;
+    if (!part_of_batch) { submit_ios(); }
+}
+
+static void prep_sqe_from_iocb(drive_iocb* iocb, struct io_uring_sqe* sqe) {
+    switch (iocb->op_type) {
+    case DriveOpType::WRITE:
+        if (iocb->has_iovs()) {
+            io_uring_prep_writev(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
+        } else {
+            io_uring_prep_write(sqe, iocb->iodev->fd(), (const void*)iocb->get_data(), iocb->size, iocb->offset);
+        }
+        break;
+
+    case DriveOpType::READ:
+        if (iocb->has_iovs()) {
+            io_uring_prep_readv(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
+        } else {
+            io_uring_prep_read(sqe, iocb->iodev->fd(), (void*)iocb->get_data(), iocb->size, iocb->offset);
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+void uring_drive_channel::drain_waitq() {
+    while (m_iocb_waitq.size() != 0) {
+        struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
+        if (sqe == nullptr) { assert(0); }
+
+        drive_iocb* iocb = pop_waitq();
+        prep_sqe_from_iocb(iocb, sqe);
+        submit_if_needed(iocb, sqe, false /* batch */);
+    }
+}
+
+///////////////////////////// UringDriveInterface /////////////////////////////////////////
 UringDriveInterface::UringDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb{cb} {}
 
 void UringDriveInterface::init_iface_thread_ctx(const io_thread_t& thr) {
@@ -97,49 +158,96 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
 
 void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
                                       uint8_t* cookie, bool part_of_batch) {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&t_uring_ch->m_ring);
-    if (!sqe) {
-        folly::throwSystemError("Unable to get submission queue entry for uring");
-        m_comp_cb(errno, cookie)
-    }
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
+    iocb->set_data(data);
+
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
 
     io_uring_prep_write(sqe, iodev->fd(), (const void*)data, size, offset);
-    t_uring_ch->submit_ios_if_needed(sqe, part_of_batch);
+    t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
 void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                        uint8_t* cookie, bool part_of_batch) {
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
+    iocb->set_iovs(iov, iovcnt);
 
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&t_uring_ch->m_ring);
-    if (!sqe) {
-        folly::throwSystemError("Unable to get submission queue entry for uring");
-        m_comp_cb(errno, cookie)
-    }
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
 
     io_uring_prep_writev(sqe, iodev->fd(), iov, iovcnt, offset);
-    t_uring_ch->submit_ios_if_needed(sqe, part_of_batch);
+    t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
 void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                      bool part_of_batch) {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&t_uring_ch->m_ring);
-    if (!sqe) {
-        folly::throwSystemError("Unable to get submission queue entry for uring");
-        m_comp_cb(errno, cookie)
-    }
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
+    iocb->set_data(data);
+
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
 
     io_uring_prep_read(sqe, iodev->fd(), (void*)data, size, offset);
-    t_uring_ch->submit_ios_if_needed(sqe, part_of_batch);
+    t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
 void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                       uint8_t* cookie, bool part_of_batch) {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&t_uring_ch->m_ring);
-    if (!sqe) {
-        folly::throwSystemError("Unable to get submission queue entry for uring");
-        m_comp_cb(errno, cookie)
-    }
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
+    iocb->set_iovs(iov, iovcnt);
+
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
 
     io_uring_prep_readv(sqe, iodev->fd(), iov, iovcnt, offset);
-    t_uring_ch->submit_ios_if_needed(sqe, part_of_batch);
+    t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
+
+void UringDriveInterface::submit_batch() override { t_uring_ch->submit_ios(); }
+
+void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]] void* cookie,
+                                                [[maybe_unused]] int event) {
+    uint64_t temp = 0;
+    [[maybe_unused]] auto rsize = read(iodev->fd(), &temp, sizeof(uint64_t));
+    LOGTRACEMOD(iomgr, "Received completion on ev_fd = {}", iodev->fd());
+
+    do {
+        struct io_uring_cqe* cqe;
+        int ret = io_uring_peek_cqe(&t_uring_ch->m_ring, &cqe);
+        if (ret < 0) {
+            if (ret != -EAGAIN) {
+                folly::throwSystemError(fmt::format("io_uring_wait_cqe throw error={}", strerror(errno)));
+            } else {
+                LOGTRACEMOD(iomgr, "Received EAGAIN on uring peek cqe");
+            }
+            break;
+        }
+        if (cqe == nullptr) { break; }
+
+        auto iocb = (drive_iocb*)io_uring_cqe_get_data(cqe);
+        iocb->result = cqe->res;
+        io_uring_cqe_seen(&t_uring_ch->m_ring, cqe);
+
+        // Don't access cqe beyond this point.
+        if (res >= 0) {
+            LOGTRACEMOD(iomgr, "Received completion event, iocb={} Result={}", (void*)iocb, iocb->result);
+            complete_io(iocb);
+        } else {
+            LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}", (void*)iocb, iocb->result);
+            if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                complete_io(iocb);
+            } else {
+                // Retry IO by pushing it to waitq which will get scheduled later.
+                t_uring_ch->m_iocb_waitq.push(iocb);
+            }
+        }
+        t_uring_ch->drain_waitq();
+    } while (true);
+}
+
+void UringDriveInterface::complete_io(drive_iocb* iocb) {
+    if (m_comp_cb) { m_comp_cb(iocb->result, iocb->user_cookie); }
+    sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
+}
+} // namespace iomgr

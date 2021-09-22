@@ -9,36 +9,23 @@
 #include <queue>
 #include <atomic>
 #include <mutex>
-#include "drive_interface.hpp"
-#include <sisl/metrics/metrics.hpp>
-#include <sisl/fds/buffer.hpp>
 
-#include "iomgr_types.hpp"
 #include <fcntl.h>
 #include <liburing.h>
 #include <sys/eventfd.h>
+
+#include <sisl/metrics/metrics.hpp>
+#include <sisl/fds/buffer.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+
+#include "drive_interface.hpp"
+#include "iomgr_types.hpp"
 
 namespace iomgr {
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
 static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
 static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
-
-struct iocb_info_t : public iocb {
-    bool is_read;
-    char* user_data;
-    uint32_t size;
-    uint64_t offset;
-    int fd;
-    iovec* iov_ptr = nullptr;
-    iovec iovs[max_batch_iov_cnt];
-    int iovcnt;
-    uint32_t resubmit_cnt = 0;
-
-    std::string to_string() const {
-        return fmt::format("is_read={}, size={}, offset={}, fd={}, iovcnt={}", is_read, size, offset, fd, iovcnt);
-    }
-};
 
 // inline iocb_info_t* to_iocb_info(user_io_info_t* p) { return container_of(p, iocb_info_t, user_io_info); }
 struct iocb_batch_t {
@@ -62,19 +49,6 @@ struct iocb_batch_t {
     struct iocb** get_iocb_list() {
         return (struct iocb**)&iocb_info[0];
     }
-};
-
-template < typename T, typename Container = std::deque< T > >
-class iterable_stack : public std::stack< T, Container > {
-    using std::stack< T, Container >::c;
-
-public:
-    // expose just the iterators of the underlying container
-    auto begin() { return std::begin(c); }
-    auto end() { return std::end(c); }
-
-    auto begin() const { return std::begin(c); }
-    auto end() const { return std::end(c); }
 };
 
 struct IODevice;
@@ -270,13 +244,26 @@ public:
 // Per thread structure which has all details for uring
 struct uring_drive_channel {
     struct io_uring m_ring;
+    std::queue< drive_iocb* > m_iocb_waitq;
     io_device_ptr m_ring_ev_iodev;
-    uint32_t m_batched_ios{0};
+    uint32_t m_prepared_ios{0};
+
+    drive_iocb* pop_waitq() {
+        if (m_iocb_waitq.size() == 0) { return nullptr; }
+        drive_iocb* iocb = m_iocb_waitq.front();
+        m_iocb_waitq.pop();
+        return iocb;
+    }
+
+    size_t waitq_size() const { return m_iocb_waitq.size(); }
+    struct io_uring_sqe* get_sqe_or_enqueue(drive_iocb* iocb);
+    void submit_ios();
+    void submit_if_needed(drive_iocb* iocb, struct io_uring_sqe*, bool part_of_batch);
 };
 
 class UringDriveInterface : public DriveInterface {
 public:
-    static constexpr uint32_t max_entries = 256;
+    static constexpr uint32_t per_thread_qdepth = 256;
 
     UringDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     virtual ~UringDriveInterface() = default;
@@ -316,15 +303,7 @@ private:
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
     void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
 
-    void handle_completions();
-
-    /* return true if it queues io.
-     * return false if it do completion callback for error.
-     */
-    bool handle_io_failure(struct iocb* iocb);
-    void retry_io();
-    void push_retry_list(struct iocb* iocb, const bool no_slot);
-    bool resubmit_iocb_on_err(struct iocb* iocb);
+    void complete_io(drive_iocb* iocb);
     ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
     ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
     ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
