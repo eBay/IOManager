@@ -334,7 +334,6 @@ static bool resubmit_io_on_err(void* b) {
 
 static void complete_io(SpdkIocb* iocb) {
     /* update outstanding counters */
-    COUNTER_DECREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
     switch (iocb->op_type) {
     case SpdkDriveOpType::READ:
         COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
@@ -463,7 +462,6 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     bool ret = true;
 
     /* update outstanding counters */
-    COUNTER_INCREMENT(iocb->iface->get_metrics(), total_outstanding_ops_cnt, 1);
     switch (iocb->op_type) {
     case SpdkDriveOpType::READ:
         COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
