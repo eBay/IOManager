@@ -141,6 +141,7 @@ public:
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
+    sisl::atomic_counter< int > opened_count{0};
     std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
     sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_thread_ctx;
     bool ready{false};
@@ -270,11 +271,11 @@ struct formatter< iomgr::io_thread > {
     template < typename FormatContext >
     auto format(const iomgr::io_thread& t, FormatContext& ctx) {
         if (std::holds_alternative< spdk_thread* >(t.thread_impl)) {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", (void*)std::get< spdk_thread* >(t.thread_impl),
-                             t.thread_idx, t.reactor->reactor_idx());
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
+                             (void*)std::get< spdk_thread* >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
         } else {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", std::get< iomgr::reactor_idx_t >(t.thread_impl),
-                             t.thread_idx, t.reactor->reactor_idx());
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
+                             std::get< iomgr::reactor_idx_t >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
         }
     }
 };

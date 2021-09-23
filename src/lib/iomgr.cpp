@@ -679,7 +679,6 @@ void IODevice::clear() {
     tinfo = nullptr;
     cookie = nullptr;
     m_iodev_thread_ctx.clear();
-    creator = nullptr;
 }
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size, const sisl::buftag tag) {
