@@ -141,12 +141,15 @@ public:
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
-    sisl::atomic_counter< int > opened_count{0};
     std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
     sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_thread_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     iomgr_drive_type drive_type{iomgr_drive_type::unknown};
+
+#ifdef REFCOUNTED_OPEN_DEV
+    sisl::atomic_counter< int > opened_count{0};
+#endif
 
 private:
     thread_specifier thread_scope{thread_regex::all_io};
