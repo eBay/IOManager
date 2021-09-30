@@ -233,6 +233,9 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_dri
                 open_dev_internal(iodev);
             }
         }
+#ifdef REFCOUNTED_OPEN_DEV
+        iodev->opened_count.increment(1);
+#endif
     });
     return iodev;
 }
@@ -284,6 +287,9 @@ void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
 }
 
 void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
+#ifdef REFCOUNTED_OPEN_DEV
+    if (!iodev->opened_count.decrement_testz()) { return; }
+#endif
     IOInterface::close_dev(iodev);
 
     assert(iodev->creator != nullptr);
@@ -821,7 +827,14 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
 }
 
 drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
+#ifdef REFCOUNTED_OPEN_DEV
+    auto iodev = open_dev(devname, drive_type, 0);
+    auto ret = get_attributes(iodev);
+    close_dev(iodev);
+    return ret;
+#else
     return get_attributes(open_dev(devname, drive_type, 0));
+#endif
 }
 
 } // namespace iomgr

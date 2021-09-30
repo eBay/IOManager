@@ -147,6 +147,10 @@ public:
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     iomgr_drive_type drive_type{iomgr_drive_type::unknown};
 
+#ifdef REFCOUNTED_OPEN_DEV
+    sisl::atomic_counter< int > opened_count{0};
+#endif
+
 private:
     thread_specifier thread_scope{thread_regex::all_io};
     int pri{1};
@@ -270,11 +274,11 @@ struct formatter< iomgr::io_thread > {
     template < typename FormatContext >
     auto format(const iomgr::io_thread& t, FormatContext& ctx) {
         if (std::holds_alternative< spdk_thread* >(t.thread_impl)) {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", (void*)std::get< spdk_thread* >(t.thread_impl),
-                             t.thread_idx, t.reactor->reactor_idx());
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
+                             (void*)std::get< spdk_thread* >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
         } else {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]", std::get< iomgr::reactor_idx_t >(t.thread_impl),
-                             t.thread_idx, t.reactor->reactor_idx());
+            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
+                             std::get< iomgr::reactor_idx_t >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
         }
     }
 };
