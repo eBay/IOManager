@@ -795,7 +795,7 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
         if (nsdata->nsfeat.ns_atomic_write_unit) {
             attr.atomic_phys_page_size = nsdata->nawupf * blk_size;
         } else {
-            const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_bdev_ctrlr->ctrlr);
+            const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_ns->ctrlr->ctrlr);
             attr.atomic_phys_page_size = cdata->awupf * blk_size;
         }
     }
