@@ -632,7 +632,7 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 }
 
 void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
-    iocb->comp_cb = [&](int64_t res, uint8_t* cookie) {
+    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
         iocb->result = res;
         m_sync_cv.notify_all();
