@@ -172,7 +172,7 @@ static void create_nvme_bdev(const std::shared_ptr< creat_ctx >& ctx) {
             spdk_nvme_host_id hostid{};
             uint32_t count{128};
             if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
-                                      (void*)ctx.get());
+                                      (void*)ctx.get(), nullptr);
                 0 != rc) {
                 LOGERROR("Failed creating NVMe BDEV from {}", trid.traddr);
                 ctx->err = std::make_error_condition(std::errc::io_error);
