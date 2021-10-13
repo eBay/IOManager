@@ -33,16 +33,19 @@ struct timer_info {
 };
 
 struct spdk_timer_info;
+typedef std::shared_ptr< spdk_timer_info > spdk_timer_ptr;
+
 struct spdk_thread_timer_info {
-    spdk_thread_timer_info(spdk_timer_info* sti);
+    spdk_thread_timer_info(const spdk_timer_ptr& sti);
     bool call_timer_cb_once();
 
     uint64_t term_num = 0;
     spdk_poller* poller = nullptr;
-    spdk_timer_info* tinfo = nullptr;
+    std::shared_ptr< spdk_timer_info > tinfo;
     io_thread_t owner_thread;
 };
 
+typedef std::shared_ptr< spdk_thread_timer_info > spdk_thread_timer_ptr;
 struct spdk_timer_info : public timer_info {
 public:
     spdk_timer_info(uint64_t nanos_after, void* cookie, timer_callback_t&& timer_fn, timer* t, bool multi_threads) :
@@ -51,19 +54,15 @@ public:
         is_multi_threaded = multi_threads;
     }
 
-    ~spdk_timer_info() {
-        for (auto p : thread_timer_list) {
-            delete p.second;
-        }
-    }
-
-    void add_thread_timer_info(spdk_thread_timer_info* stt_info);
-    spdk_thread_timer_info* get_thread_timer_info();
+    void add_thread_timer_info(const spdk_thread_timer_ptr& stt_info);
+    void delete_thread_timer_info();
+    spdk_thread_timer_ptr get_thread_timer_info();
 
     // Following fields are applicable only for SPDK Timer
     uint64_t timeout_nanos = 0;
     std::atomic< uint64_t > cur_term_num = 0; // Term # for timer (where single timer cb to be called among all threads)
-    std::map< uint32_t, spdk_thread_timer_info* > thread_timer_list;
+    std::map< uint32_t, spdk_thread_timer_ptr > thread_timer_list;
+    spdk_thread_timer_ptr single_thread_timer; // In case single thread timer
     bool is_multi_threaded = true;
     std::mutex timer_list_mtx;
 };
@@ -75,9 +74,9 @@ struct compare_timer {
 class timer;
 
 struct IODevice;
+
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_backing_handle_t =
-    std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, spdk_timer_info*, spdk_thread_timer_info* >;
+using timer_backing_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, spdk_timer_ptr >;
 using timer_handle_t = std::pair< timer*, timer_backing_handle_t >;
 // using timer_handle_t =
 //    std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, spdk_timer_info*, spdk_thread_timer_info* >;
@@ -116,13 +115,14 @@ public:
      * @param recurring Is the timer needs to be called in recurring fashion or one time only
      * @param cookie Any cookie that needs to be passed into the timer function
      * @param timer_fn Callback to be called by the timeout routine
+     * @param wait_to_schedule Wait for the schedule timer to be scheduled completely or it is done in async manner.
      *
      * @return timer_handle_t Returns a handle which it needs to use to cancel the timer. In case of recurring
      * timer, the caller needs to call cancel, failing which causes a memory leak.
      */
-    virtual timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie,
-                                    timer_callback_t&& timer_fn) = 0;
-    virtual void cancel(timer_handle_t thandle) = 0;
+    virtual timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn,
+                                    bool wait_to_schedule = false) = 0;
+    virtual void cancel(timer_handle_t thandle, bool wait_to_cancel = false) = 0;
 
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
     virtual void stop() = 0;
@@ -142,8 +142,9 @@ public:
     timer_epoll(const thread_specifier& scope);
     ~timer_epoll() override;
 
-    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) override;
-    void cancel(timer_handle_t thandle) override;
+    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn,
+                            bool wait_to_schedule = false) override;
+    void cancel(timer_handle_t thandle, bool wait_to_cancel = false) override;
 
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
     void stop() override;
@@ -151,7 +152,7 @@ public:
     static void on_timer_fd_notification(IODevice* iodev);
 
 private:
-    std::shared_ptr< IODevice > setup_timer_fd(bool is_recurring);
+    std::shared_ptr< IODevice > setup_timer_fd(bool is_recurring, bool wait_to_setup = false);
     void on_timer_armed(IODevice* iodev);
 
 private:
@@ -164,21 +165,22 @@ public:
     timer_spdk(const thread_specifier& scope);
     ~timer_spdk() override;
 
-    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn) override;
-    void cancel(timer_handle_t thandle) override;
+    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn,
+                            bool wait_to_schedule = false) override;
+    void cancel(timer_handle_t thandle, bool wait_to_cancel = false) override;
 
     /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
     void stop() override;
 
 private:
-    spdk_thread_timer_info* create_register_spdk_thread_timer(spdk_timer_info* const stinfo) const;
-    void unregister_spdk_thread_timer(spdk_thread_timer_info* const stinfo) const;
-    void cancel_thread_timer(spdk_thread_timer_info* const stt_info) const;
-    void cancel_global_timer(spdk_timer_info* const stinfo) const;
+    static spdk_thread_timer_ptr create_register_spdk_thread_timer(const spdk_timer_ptr& stinfo);
+    static void unregister_spdk_thread_timer(const spdk_thread_timer_ptr& stinfo);
+    void cancel_thread_timer(const spdk_timer_ptr& st_info, bool wait_to_cancel = false) const;
+    void cancel_global_timer(const spdk_timer_ptr& st_info) const;
 
 private:
-    std::unordered_set< spdk_timer_info* > m_active_global_timer_infos;
-    std::unordered_set< spdk_thread_timer_info* > m_active_thread_timer_infos;
+    std::unordered_set< spdk_timer_ptr > m_active_global_timer_infos;
+    std::unordered_set< spdk_timer_ptr > m_active_thread_timer_infos;
 };
 
 } // namespace iomgr

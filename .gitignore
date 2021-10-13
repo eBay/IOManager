@@ -11,3 +11,6 @@ cmake-build*
 debug/*
 release/*
 nosanitize/*
+
+build
+.cache

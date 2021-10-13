@@ -13,7 +13,7 @@ extern "C" {
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
 #include "include/iomgr_config.hpp"
-#include <fds/obj_allocator.hpp>
+#include <sisl/fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -51,16 +51,8 @@ void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_
     }
 
     if (!m_user_controlled_loop && m_keep_running) {
-        while (true) {
-            listen();
-
-            if (m_keep_running) {
-                auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
-                if (sentinel_cb) { sentinel_cb(); }
-            } else {
-                break;
-            }
-        }
+        while (listen_once())
+            ;
     }
 }
 
@@ -87,9 +79,15 @@ void IOReactor::init() {
 
     // Notify the caller registered to iomanager for it.
     iomanager.reactor_started(shared_from_this());
+}
 
-    // For IOMgr created reactors, we want the notification to go only after all reactors are started and system init.
-    if (!is_worker()) { iomanager.this_reactor()->notify_thread_state(true); }
+bool IOReactor::listen_once() {
+    listen();
+    if (m_keep_running) {
+        auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
+        if (sentinel_cb) { sentinel_cb(); }
+    }
+    return m_keep_running;
 }
 
 void IOReactor::stop() {
@@ -101,9 +99,6 @@ void IOReactor::stop() {
     m_metrics.reset();
 
     iomanager.reactor_stopped();
-
-    // Notify the caller registered to iomanager for it
-    notify_thread_state(false /* started */);
 }
 
 bool IOReactor::can_add_iface(const std::shared_ptr< IOInterface >& iface) const {
@@ -125,47 +120,40 @@ void IOReactor::start_io_thread(const io_thread_t& thr) {
 
     // Notify all the interfaces about new thread, which in turn will add all relevant devices to current reactor.
     uint32_t added_iface{0};
-    {
-        auto iface_list = iomanager.iface_rlock();
-        for (auto& iface : *iface_list) {
-            if (can_add_iface(iface)) {
-                iface->on_io_thread_start(thr);
-                ++added_iface;
-            } else {
-                REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOInterface with scope={} ignored to add", iface->scope());
-            }
+    iomanager.foreach_interface([this, thr, &added_iface](std::shared_ptr< IOInterface > iface) {
+        if (can_add_iface(iface)) {
+            iface->on_io_thread_start(thr);
+            ++added_iface;
+        } else {
+            REACTOR_LOG(INFO, iomgr, thr->thread_addr, "{} with scope={} ignored to add", iface->name(),
+                        iface->scope());
         }
-        m_io_thread_count.increment();
-        REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOThreadContext started in this reactor, added {} interfaces",
-                    added_iface);
-    }
+    });
+    m_io_thread_count.increment();
+    REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOThreadContext started in this reactor, added {} interfaces",
+                added_iface);
 }
 
 void IOReactor::stop_io_thread(const io_thread_t& thr) {
-    // LOGMSG_ASSERT_EQ(m_io_threads[thr->thread_addr].get(), thr.get(), "Expected io thread {} to present in the list",
+    // LOGMSG_ASSERT_EQ(m_io_threads[thr->thread_addr].get(), thr.get(), "Expected io thread {} to present in the
+    // list",
     //                 *(thr.get()));
-    // iomanager.foreach_interface([&](IOInterface* iface) { iface->on_io_thread_stopped(thr); });
-
     uint32_t removed_iface{0};
-    {
-        auto iface_list = iomanager.iface_rlock();
-        for (auto& iface : *iface_list) {
-            if (can_add_iface(iface)) {
-                iface->on_io_thread_stopped(thr);
-                ++removed_iface;
-            } else {
-                REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOInterface with scope={} ignored to remove",
-                            iface->scope());
-            }
+    iomanager.foreach_interface([this, thr, &removed_iface](std::shared_ptr< IOInterface > iface) {
+        if (can_add_iface(iface)) {
+            iface->on_io_thread_stopped(thr);
+            ++removed_iface;
+        } else {
+            REACTOR_LOG(INFO, iomgr, thr->thread_addr, "{} with scope={} ignored to remove", iface->name(),
+                        iface->scope());
         }
-        m_io_thread_count.decrement();
-    }
+    });
+    m_io_thread_count.decrement();
     REACTOR_LOG(INFO, iomgr, thr->thread_addr, "IOThreadContext stopped in this reactor, removed {} interfaces",
                 removed_iface);
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
     if (!m_user_controlled_loop) { reactor_specific_exit_thread(thr); }
-
     m_io_threads[thr->thread_addr] = nullptr;
 }
 
@@ -181,18 +169,11 @@ int IOReactor::remove_iodev(const io_device_const_ptr& iodev, const io_thread_t&
     return ret;
 }
 
-// This method assumes that interface lock is already held by the caller or message passer
-void IOReactor::start_interface(IOInterface* iface) {
-    for (auto& thr : m_io_threads) {
-        iface->on_io_thread_start(thr);
-    }
-}
-
 const io_thread_t& IOReactor::iothread_self() const { return m_io_threads[0]; };
 
 bool IOReactor::deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor) {
     msg->m_dest_thread = taddr;
-    if (msg->has_sem_block()) { msg->m_msg_sem->pending(); }
+    msg->set_pending();
 
     // If the sender and receiver are same thread, take a shortcut to directly handle the message. Of course, this
     // will cause out-of-order delivery of messages. However, there is no good way to prevent deadlock
@@ -208,6 +189,11 @@ const io_thread_t& IOReactor::msg_thread(iomgr_msg* msg) { return addr_to_thread
 
 void IOReactor::handle_msg(iomgr_msg* msg) {
     ++m_metrics->msg_recvd_count;
+
+    if (msg->m_is_reply) {
+        iomgr_msg::completed(msg);
+        return;
+    }
 
     // If the message is for a different module, pass it on to their handler
     if (msg->m_dest_module != iomanager.m_internal_msg_module_id) {
@@ -265,8 +251,7 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
         }
     }
 
-    if (msg->has_sem_block()) { msg->m_msg_sem->done(); }
-    iomgr_msg::free(msg);
+    iomgr_msg::completed(msg);
 }
 
 bool IOReactor::is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const {

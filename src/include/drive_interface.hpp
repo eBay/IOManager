@@ -15,7 +15,8 @@
 #include "iomgr_types.hpp"
 
 namespace iomgr {
-enum class drive_interface_type { aio, spdk, uioring };
+enum class drive_interface_type { aio, spdk, uring };
+ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)
 
 struct drive_attributes {
     uint32_t phys_page_size = 4096;        // Physical page size of flash ssd/nvme. This is optimal size to do IO
@@ -36,6 +37,83 @@ struct drive_attributes {
         json["atomic_phys_page_size"] = atomic_phys_page_size;
         return json;
     }
+};
+
+struct drive_iocb {
+#ifndef NDEBUG
+    static std::atomic< uint64_t > _iocb_id_counter;
+#endif
+    static constexpr int inlined_iov_count = 4;
+    typedef std::array< iovec, inlined_iov_count > inline_iov_array;
+    typedef std::unique_ptr< iovec[] > large_iov_array;
+
+    drive_iocb(IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset, void* cookie) :
+            iodev(iodev), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
+#ifndef NDEBUG
+        iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
+#endif
+        user_data.emplace< 0 >();
+    }
+
+    virtual ~drive_iocb() = default;
+
+    void set_iovs(const iovec* iovs, const int count) {
+        iovcnt = count;
+        if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
+        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs),
+                    count * sizeof(iovec));
+    }
+
+    void set_data(char* data) { user_data = data; }
+
+    iovec* get_iovs() const {
+        if (std::holds_alternative< inline_iov_array >(user_data)) {
+            return const_cast< iovec* >(&(std::get< inline_iov_array >(user_data)[0]));
+        } else if (std::holds_alternative< large_iov_array >(user_data)) {
+            return std::get< large_iov_array >(user_data).get();
+        } else {
+            assert(0);
+            return nullptr;
+        }
+    }
+
+    char* get_data() const { return std::get< char* >(user_data); }
+    bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
+
+    std::string to_string() const {
+        std::string str;
+#ifndef NDEBUG
+        str = fmt::format("id={} ", iocb_id);
+#endif
+        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={} ", (void*)this, enum_name(op_type), size,
+                           offset, iovcnt);
+
+        if (has_iovs()) {
+            auto ivs = get_iovs();
+            for (auto i = 0; i < iovcnt; ++i) {
+                str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
+            }
+        } else {
+            str += fmt::format("buf={}", (void*)get_data());
+        }
+        return str;
+    }
+
+    IODevice* iodev;
+    DriveOpType op_type;
+    uint64_t size;
+    uint64_t offset;
+    void* user_cookie = nullptr;
+    int iovcnt = 0;
+    std::optional< int > result;
+    uint32_t resubmit_cnt = 0;
+#ifndef NDEBUG
+    uint64_t iocb_id;
+#endif
+
+private:
+    // Inline or additional memory
+    std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
 
 class DriveInterface : public IOInterface {
