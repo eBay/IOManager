@@ -4,7 +4,7 @@ pipeline {
     environment {
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
         CONAN_USER = 'sds'
-        MASTER_BRANCH = 'develop'
+        TARGET_BRANCH = 'develop'
         TESTING_BRANCH = 'testing/v*'
         STABLE_BRANCH = 'stable/v*'
         LAST_COMMITS = ''
@@ -155,11 +155,11 @@ pipeline {
                             stage("Adjust Sonar Branch") {
                                 when {
                                     not {
-                                        branch "${MASTER_BRANCH}"
+                                        branch "${TARGET_BRANCH}"
                                     }
                                 }
                                 steps {
-                                    sh "echo \"sonar.branch.target=${MASTER_BRANCH}\" >> sonar-project.properties"
+                                    sh "echo \"sonar.branch.target=${TARGET_BRANCH}\" >> sonar-project.properties"
                                 }
                             }
                             stage("Code Coverage") {
@@ -189,7 +189,7 @@ pipeline {
 
         stage("Downstream Build") {
             when { allOf {
-               expression { (env.BRANCH_NAME == "${MASTER_BRANCH}") }
+               expression { (env.BRANCH_NAME == "${TARGET_BRANCH}") }
                expression { (!"${upstream_triggered}") || ("${upstream_triggered}" == "") }
             } }
         
@@ -198,7 +198,7 @@ pipeline {
                     steps {
                         script {
                             built_chain = env.pkg_version
-                            def hs_res = build job: "Homestore/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def hs_res = build job: "Homestore/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "$hs_res.buildVariables.pkg_version"
                         }
                     }
@@ -209,7 +209,7 @@ pipeline {
                 stage('NuBlox Logstore') {
                     steps {
                         script {
-                            def nls_res = build job: "Nublox Logstore/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def nls_res = build job: "Nublox Logstore/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "nls_res.buildVariables.pkg_version"
                         }
                     }
@@ -220,7 +220,7 @@ pipeline {
                 stage('Homestore BDev') {
                     steps {
                         script {
-                            def hsbdev_res = build job: "Homestore Bdev/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def hsbdev_res = build job: "Homestore Bdev/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "$hsbdev_res.buildVariables.pkg_version"
                         }
                     }
@@ -231,7 +231,7 @@ pipeline {
                 stage('SPDK Connector') {
                     steps {
                         script {
-                            def spdk_res = build job: "SPDK Connector/${MASTER_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def spdk_res = build job: "SPDK Connector/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "$spdk_res.buildVariables.pkg_version"
                         }
                     }
