@@ -6,7 +6,7 @@
 #include "include/iomgr.hpp"
 #include "include/iomgr_msg.hpp"
 #include "include/reactor_spdk.hpp"
-#include <fds/obj_allocator.hpp>
+#include <sisl/fds/obj_allocator.hpp>
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>
@@ -56,7 +56,7 @@ bool IOReactorSPDK::is_iodev_addable(const io_device_const_ptr& iodev, const io_
 }
 
 void IOReactorSPDK::deliver_msg_direct(spdk_thread* to_thread, iomgr_msg* msg) {
-    if (msg->has_sem_block()) { msg->m_msg_sem->pending(); }
+    msg->set_pending();
     spdk_thread_send_msg(to_thread, _handle_thread_msg, msg);
 }
 } // namespace iomgr

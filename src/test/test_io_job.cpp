@@ -2,11 +2,10 @@
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <fds/atomic_status_counter.hpp>
+#include <sisl/fds/atomic_status_counter.hpp>
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;
-THREAD_BUFFER_INIT;
 SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SDS_OPTION_GROUP(test_io,

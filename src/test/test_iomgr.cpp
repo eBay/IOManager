@@ -6,7 +6,7 @@
 #include <iomgr.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <utility/thread_factory.hpp>
+#include <sisl/utility/thread_factory.hpp>
 
 extern "C" {
 #include <spdk/env.h>
@@ -14,8 +14,6 @@ extern "C" {
 }
 #include <stdexcept>
 using log_level = spdlog::level::level_enum;
-
-THREAD_BUFFER_INIT;
 
 SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
@@ -35,10 +33,12 @@ static constexpr int read_pct = 50;
 static constexpr size_t each_thread_size = total_dev_size / nthreads;
 // static constexpr size_t max_ios_per_thread = 10000000;
 static constexpr size_t max_ios_per_thread = 10000;
+static const std::string dev_path = "/tmp/f1";
 
 #define g_drive_iface iomanager.default_drive_interface()
 
-io_device_ptr g_iodev = nullptr;
+static io_device_ptr g_iodev = nullptr;
+static iomgr::drive_attributes g_driveattr;
 
 std::atomic< size_t > next_available_range = 0;
 
@@ -71,21 +71,34 @@ struct Workload {
     int available_qs = 8;
 };
 
+struct io_req {
+    bool is_write{false};
+    uint8_t* buf;
+    std::array< size_t, io_size / sizeof(size_t) >* buf_arr;
+
+    io_req() {
+        buf = iomanager.iobuf_alloc(g_driveattr.align_size, io_size);
+        buf_arr = (std::array< size_t, io_size / sizeof(size_t) >*)buf;
+    }
+
+    ~io_req() { iomanager.iobuf_free(buf); }
+};
+
 static thread_local Workload work;
 static Runner runner;
 
 static void do_write_io(size_t offset) {
-    std::array< size_t, io_size / sizeof(size_t) > wbuf;
-    wbuf.fill(offset);
+    auto req = new io_req();
+    req->buf_arr->fill(offset);
 
     // memset(wbuf, offset, io_size);
-    g_drive_iface->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_drive_iface->async_write(g_iodev.get(), (const char*)req->buf, io_size, offset, (uint8_t*)req);
     // LOGINFO("Write on Offset {}", offset);
 }
 
 static void do_read_io(size_t offset) {
-    std::array< size_t, io_size / sizeof(size_t) > rbuf;
-    g_drive_iface->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
+    auto req = new io_req();
+    g_drive_iface->async_read(g_iodev.get(), (char*)req->buf, io_size, offset, (uint8_t*)req);
     // LOGINFO("Read on Offset {}", offset);
 }
 
@@ -117,13 +130,14 @@ static void do_verify() {
     auto sthread = sisl::named_thread("verify_thread", []() mutable {
         iomanager.run_io_loop(false, nullptr, [](bool is_started) {
             if (is_started) {
-                std::array< size_t, io_size / sizeof(size_t) > rbuf;
+                uint8_t* rbuf = iomanager.iobuf_alloc(g_driveattr.align_size, io_size);
                 for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
-                    g_drive_iface->sync_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset);
-                    for (auto i = 0u; i < rbuf.size(); ++i) {
+                    g_drive_iface->sync_read(g_iodev.get(), (char*)rbuf, io_size, offset);
+                    for (auto i = 0u; i < io_size; ++i) {
                         assert(rbuf[i] == offset);
                     }
                 }
+                iomanager.iobuf_free(rbuf);
                 LOGINFO("Verification successful for this thread");
                 runner.job_done();
             }
@@ -134,7 +148,9 @@ static void do_verify() {
 
 static void on_io_completion(int64_t res, uint8_t* cookie) {
     // LOGINFO("An IO is completed");
-    assert(cookie == (uint8_t*)&work);
+    io_req* req = (io_req*)cookie;
+    delete req;
+
     ++work.available_qs;
     if (work.is_preload_phase) {
         issue_preload();
@@ -183,9 +199,23 @@ int main(int argc, char* argv[]) {
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());
     g_drive_iface->attach_completion_cb(on_io_completion);
-    g_iodev = g_drive_iface->open_dev("/tmp/f1", iomgr_drive_type::file, O_CREAT | O_RDWR);
 
-    uint8_t* buf = iomanager.iobuf_alloc(512, 8192);
+    bool created = false;
+    if (!std::filesystem::exists(std::filesystem::path{dev_path})) {
+        LOGINFO("Device {} doesn't exists, creating a file for size {}", dev_path, total_dev_size);
+        auto fd = ::open(dev_path.c_str(), O_RDWR | O_CREAT, 0666);
+        assert(fd > 0);
+
+        [[maybe_unused]] const auto ret = fallocate(fd, 0, 0, total_dev_size);
+        assert(ret == 0);
+
+        created = true;
+    }
+
+    g_iodev = g_drive_iface->open_dev(dev_path, iomgr_drive_type::file, O_CREAT | O_RDWR);
+    g_driveattr = g_drive_iface->get_attributes(dev_path, iomgr_drive_type::unknown);
+
+    uint8_t* buf = iomanager.iobuf_alloc(g_driveattr.align_size, 8192);
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
@@ -196,8 +226,14 @@ int main(int argc, char* argv[]) {
 
     LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
 
+    g_drive_iface->close_dev(g_iodev);
+
     // Stop the IOManage for clean exit
     iomanager.stop();
 
+    if (created) {
+        LOGINFO("Device {} was created by this test, deleting the file", dev_path);
+        std::filesystem::remove(std::filesystem::path{dev_path});
+    }
     return 0;
 }

@@ -15,11 +15,11 @@ extern "C" {
 #include <memory>
 #include <random>
 #include <vector>
-#include <utility/thread_buffer.hpp>
-#include <utility/atomic_counter.hpp>
-#include <fds/sparse_vector.hpp>
-#include <fds/malloc_helper.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/utility/thread_buffer.hpp>
+#include <sisl/utility/atomic_counter.hpp>
+#include <sisl/fds/sparse_vector.hpp>
+#include <sisl/fds/malloc_helper.hpp>
+#include <sisl/fds/buffer.hpp>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -37,8 +37,8 @@ extern "C" {
 #include "iomgr_types.hpp"
 #include "drive_interface.hpp"
 #include <functional>
-#include <fds/id_reserver.hpp>
-#include <utility/enum.hpp>
+#include <sisl/fds/id_reserver.hpp>
+#include <sisl/utility/enum.hpp>
 #include <sds_logging/logging.h>
 #include <semver/semver200.h>
 
@@ -56,6 +56,7 @@ struct timer_info;
 static constexpr int inbuilt_interface_count = 1;
 
 class DriveInterface;
+class GrpcInterface;
 
 ENUM(iomgr_state, uint16_t,
      stopped,        // Stopped - this is the initial state
@@ -245,28 +246,28 @@ public:
      *         2. sleep -  Wait by sleeping till the thread that executing completed running the method
      *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
      *                     the running method, then program will be deadlocked.
-     *         3. spin  -  Wait by spinning, this method is not supported, but once supported will be able to handle
-     *                     any incoming events while spinning
+     *         3. spin  -  Wait by spinning till the thread that executing completed running the method. While
+     *                     waiting, it can process other messages. So potentially stack could grow. If the calling
+     *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
      *         4. Closure - Closure to be called after method is run in the caller thread.
      *
      * @return 1 for able to schedule the method to run, 0 otherwise
      */
-    int run_on(const io_thread_t& thread, const auto& fn,
-               const std::variant< wait_type_t, run_on_closure_t >& wait_type = wait_type_t::no_wait) {
+    int run_on(const io_thread_t& thread, const auto& fn, const wait_type_t wtype = wait_type_t::no_wait,
+               const run_on_closure_t& cb_wait_closure = nullptr) {
         bool sent{false};
-        if (std::holds_alternative< wait_type_t >(wait_type)) {
-            const wait_type_t wtype = std::get< wait_type_t >(wait_type);
-            if (wtype == wait_type_t::no_wait) {
-                sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-            } else if (wtype == wait_type_t::sleep) {
-                sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-                sent = send_msg_and_wait(thread, smsg);
-            } else {
-                DEBUG_ASSERT(0, "run_on with spin wait_type not supported yet");
-            }
-        } else {
+        if (wtype == wait_type_t::no_wait) {
+            sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+        } else if (wtype == wait_type_t::callback) {
             DEBUG_ASSERT(0, "run_on direct thread with async closure is not supported yet");
+        } else if ((wtype == wait_type_t::spin) && IOManager::instance().am_i_io_reactor()) {
+            auto smsg = spin_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent = send_msg_and_wait(thread, std::dynamic_pointer_cast< sync_msg_base >(smsg));
+        } else {
+            auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent = send_msg_and_wait(thread, std::dynamic_pointer_cast< sync_msg_base >(smsg));
         }
+
         return (sent ? 1 : 0);
     }
 
@@ -281,52 +282,49 @@ public:
      *         2. sleep -  Wait by sleeping till all threads that executing completed running the method
      *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
      *                     the running method, then program will be deadlocked.
-     *         3. spin  -  Wait by spinning, this method is not supported yet, but once supported will be able to handle
-     *                     any incoming events while spinning
+     *         3. spin  -  Wait by spinning till all threads that executing completed running the method. While
+     *                     waiting, it can process other messages. So potentially stack could grow. If the calling
+     *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
      *         4. Closure - Closure to be called after method is run on all the threads. NOTE that this closure can be
      *                      called on any thread, not neccessarily issuing thread only.
      *
      * @return number of threads this method was run.
      */
-    int run_on(const thread_regex r, const auto& fn,
-               const std::variant< wait_type_t, run_on_closure_t >& wait_type = wait_type_t::no_wait) {
+    int run_on(const thread_regex r, const auto& fn, const wait_type_t wtype = wait_type_t::no_wait,
+               const run_on_closure_t& cb_wait_closure = nullptr) {
         int sent_count{0};
-        wait_type_t wtype{wait_type_t::no_wait};
 
-        if (std::holds_alternative< run_on_closure_t >(wait_type)) {
-            // If the closure is not provided, its same as no_wait, so switch to no_wait
-            auto closure = std::get< run_on_closure_t >(wait_type);
-            if (closure != nullptr) {
-                auto pending_count = new std::atomic< int >(0);
-                auto temp_cb = [fn, closure, pending_count](io_thread_addr_t addr) {
-                    fn(addr);
-                    if (pending_count->fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                        closure();
-                        delete pending_count;
-                    }
-                };
-
-                sent_count =
-                    multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
-                if ((pending_count->fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count)) {
-                    closure();
+        if ((wtype == wait_type_t::callback) && cb_wait_closure) {
+            auto pending_count = new std::atomic< int >(0);
+            auto temp_cb = [fn, cb_wait_closure, pending_count](io_thread_addr_t addr) {
+                fn(addr);
+                if (pending_count->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                    cb_wait_closure();
                     delete pending_count;
                 }
-                return sent_count;
+            };
+
+            sent_count =
+                multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
+            if ((pending_count->fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count)) {
+                cb_wait_closure();
+                delete pending_count;
             }
-        } else {
-            wtype = std::get< wait_type_t >(wait_type);
+            return sent_count;
         }
 
-        if (wtype == wait_type_t::no_wait) {
+        // If the closure is not provided, its same as no_wait, so switch to no_wait
+        if ((wtype == wait_type_t::no_wait) || (wtype == wait_type_t::callback)) {
             sent_count = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-        } else if (wtype == wait_type_t::sleep) {
-            sync_iomgr_msg smsg(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent_count = multicast_msg_and_wait(r, smsg);
+        } else if ((wtype == wait_type_t::spin) && IOManager::instance().am_i_io_reactor()) {
+            auto smsg = spin_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent_count = multicast_msg_and_wait(r, std::dynamic_pointer_cast< sync_msg_base >(smsg));
         } else {
-            DEBUG_ASSERT(0, "run_on with spin wait_type not supported yet");
+            auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
+            sent_count = multicast_msg_and_wait(r, std::dynamic_pointer_cast< sync_msg_base >(smsg));
         }
 
+        if (cb_wait_closure) { cb_wait_closure(); }
         return sent_count;
     }
 
@@ -354,6 +352,8 @@ public:
 
     DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
+    GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
+
     bool am_i_io_reactor() const {
         auto r = this_reactor();
         return r && r->is_io_reactor();
@@ -413,9 +413,9 @@ public:
 
     /******** Message related infra ********/
     bool send_msg(const io_thread_t& thread, iomgr_msg* msg);
-    bool send_msg_and_wait(const io_thread_t& thread, sync_iomgr_msg& smsg);
+    bool send_msg_and_wait(const io_thread_t& thread, const std::shared_ptr< sync_msg_base >& smsg);
     int multicast_msg(thread_regex r, iomgr_msg* msg);
-    int multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg);
+    int multicast_msg_and_wait(thread_regex r, const std::shared_ptr< sync_msg_base >& smsg);
 
     msg_module_id_t register_msg_module(const msg_handler_t& handler);
     msg_handler_t& get_msg_module(msg_module_id_t id);
@@ -433,8 +433,10 @@ public:
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn);
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                         timer_callback_t&& timer_fn);
-    void cancel_timer(timer_handle_t thdl) { return thdl.first->cancel(thdl); }
+                                         timer_callback_t&& timer_fn, bool wait_to_schedule = false);
+    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false) {
+        return thdl.first->cancel(thdl, wait_to_cancel);
+    }
     void set_poll_interval(const int interval);
     int get_poll_interval() const;
 
@@ -442,7 +444,7 @@ private:
     IOManager();
     ~IOManager();
 
-    void foreach_interface(const auto& iface_cb);
+    void foreach_interface(const interface_cb_t& iface_cb);
 
     void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
@@ -462,8 +464,6 @@ private:
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
 
-    [[nodiscard]] auto iface_wlock() { return m_iface_list.wlock(); }
-    [[nodiscard]] auto iface_rlock() { return m_iface_list.rlock(); }
     [[nodiscard]] bool is_spdk_inited() const;
 
 private:
@@ -473,11 +473,13 @@ private:
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
     uint32_t m_num_workers = 0;
 
-    folly::Synchronized< std::vector< std::shared_ptr< IOInterface > > > m_iface_list;
-    folly::Synchronized< std::vector< std::shared_ptr< DriveInterface > > > m_drive_ifaces;
+    std::shared_mutex m_iface_list_mtx;
+    std::vector< std::shared_ptr< IOInterface > > m_iface_list;
+    std::vector< std::shared_ptr< DriveInterface > > m_drive_ifaces;
 
     std::shared_ptr< DriveInterface > m_default_drive_iface;
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
+    std::shared_ptr< GrpcInterface > m_default_grpc_iface;
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
