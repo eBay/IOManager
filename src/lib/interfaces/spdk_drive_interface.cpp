@@ -362,24 +362,7 @@ static bool resubmit_io_on_err(void* b) {
 }
 
 static void complete_io(SpdkIocb* iocb) {
-    /* update outstanding counters */
-    switch (iocb->op_type) {
-    case DriveOpType::READ:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
-        break;
-    case DriveOpType::WRITE:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
-        break;
-    case DriveOpType::UNMAP:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
-        break;
-    case DriveOpType::WRITE_ZERO:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
-        break;
-    default:
-        LOGDFATAL("Invalid operation type {}", iocb->op_type);
-    }
-
+    SpdkDriveInterface::decrement_outstanding_counter(iocb);
     sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
 }
 
@@ -487,9 +470,7 @@ static void submit_io(void* b) {
     }
 }
 
-inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
-    bool ret = true;
-
+void SpdkDriveInterface::increment_outstanding_counter(const SpdkIocb* iocb) {
     /* update outstanding counters */
     switch (iocb->op_type) {
     case DriveOpType::READ:
@@ -507,6 +488,30 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
+}
+
+void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
+    /* decrement */
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::UNMAP:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case DriveOpType::WRITE_ZERO:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+}
+
+inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
+    bool ret = true;
 
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
@@ -519,6 +524,10 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
         COUNTER_INCREMENT(m_metrics, force_sync_io_non_spdk_thread, 1);
         ret = false;
     }
+
+    // update coutner in async path;
+    if (ret) { increment_outstanding_counter(iocb); }
+
     return ret;
 }
 
@@ -616,6 +625,9 @@ ssize_t SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int io
 ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb) {
     iocb->io_wait_entry.cb_fn = submit_io;
     iocb->owner_thread = _non_io_thread;
+
+    // update counter in sync path
+    increment_outstanding_counter(iocb);
 
     const auto& reactor = iomanager.this_reactor();
     if (reactor && reactor->is_io_reactor() && !reactor->is_tight_loop_reactor()) {

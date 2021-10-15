@@ -54,8 +54,8 @@ public:
 
         REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
         REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding unmap cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding write zero cnt", sisl::_publish_as::publish_as_gauge);
 
         register_me_to_farm();
     }
@@ -124,6 +124,8 @@ private:
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
+    static void increment_outstanding_counter(const SpdkIocb* iocb);
+    static void decrement_outstanding_counter(const SpdkIocb* iocb);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
     void submit_sync_io_to_tloop_thread(SpdkIocb* iocb);
