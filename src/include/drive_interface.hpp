@@ -105,7 +105,7 @@ struct drive_iocb {
     uint64_t offset;
     void* user_cookie = nullptr;
     int iovcnt = 0;
-    std::optional< int > result;
+    std::optional< int64_t > result;
     uint32_t resubmit_cnt = 0;
 #ifndef NDEBUG
     uint64_t iocb_id;

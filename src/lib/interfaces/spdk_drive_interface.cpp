@@ -656,7 +656,7 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
 
     {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        m_sync_cv.wait(lk, [&]() { return iocb->result; });
+        m_sync_cv.wait(lk, [&]() { return iocb->result.has_value(); });
     }
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=sync, {}", iocb->to_string());
@@ -674,7 +674,7 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
         if (cur_wait_us > min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
-    } while (!iocb->result);
+    } while (!iocb->result.has_value());
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
