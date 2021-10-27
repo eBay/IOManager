@@ -125,6 +125,7 @@ class IOManager {
 public:
     friend class IOReactor;
     friend class IOReactorEPoll;
+    friend class IOReactorSPDK;
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
@@ -463,6 +464,7 @@ private:
     void _pick_reactors(thread_regex r, const auto& cb);
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
+    IOReactor* round_robin_reactor() const;
 
     [[nodiscard]] bool is_spdk_inited() const;
 

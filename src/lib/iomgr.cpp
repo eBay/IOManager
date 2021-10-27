@@ -239,8 +239,8 @@ void IOManager::start_spdk() {
 
         spdk_unaffinitize_thread();
 
-        // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
-        rc = spdk_thread_lib_init(NULL, 0);
+        rc = spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread,
+                                      IOReactorSPDK::reactor_thread_op_supported, 0);
         if (rc != 0) {
             LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
             throw std::runtime_error("SPDK Thread Lib Init failed");
@@ -622,6 +622,14 @@ void IOManager::specific_reactor(int thread_num, const auto& cb) {
         m_reactors.access_specific_thread(thread_num,
                                           [&cb](std::shared_ptr< IOReactor >* preactor) { cb(preactor->get()); });
     }
+}
+
+IOReactor* IOManager::round_robin_reactor() const {
+    static uint64_t s_idx{0};
+    do {
+        const auto idx = s_idx++ % m_worker_reactors.size();
+        if (m_worker_reactors[idx].second) { return m_worker_reactors[idx].second.get(); }
+    } while (true);
 }
 
 msg_module_id_t IOManager::register_msg_module(const msg_handler_t& handler) {

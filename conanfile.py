@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "7.0.3"
+    version = "7.0.4"
 
     revision_mode = "scm"
     license = "Proprietary"
