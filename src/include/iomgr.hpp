@@ -147,13 +147,12 @@ public:
      * @param num_threads Total number of worker reactors to start with. Expected to be > 0
      * @param is_spdk Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
      * automatically started as spdk worker reactors.
-     * @param is_cpu_pinned Is the IOManager reactor threads need to be cpu pinned.
      * @param notifier [OPTONAL] A callback every time a new reactor is started or stopped. This will be called from the
      * reactor thread which is starting or stopping.
      * @param iface_adder [OPTIONAL] Callback to add interface by the caller during iomanager start. If null, then
      * iomanager will add all the default interfaces essential to do the IO.
      */
-    void start(size_t num_threads, bool is_spdk = false, bool is_cpu_pinned = false, const thread_state_notifier_t& notifier = nullptr,
+    void start(size_t num_threads, bool is_spdk = false, const thread_state_notifier_t& notifier = nullptr,
                const interface_adder_t& iface_adder = nullptr);
 
     /**
@@ -446,14 +445,14 @@ private:
     ~IOManager();
 
     void foreach_interface(const interface_cb_t& iface_cb);
-    void start_reactors(bool is_cpu_pinned);
+    void start_reactors();
     void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
 
     void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
-    void start_spdk(bool is_cpu_pinned);
+    void start_spdk();
     void stop_spdk();
 
     void hugetlbfs_umount();
@@ -504,6 +503,7 @@ private:
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};
     bool m_spdk_reinit_needed{false};
+    bool m_is_cpu_pinning_enabled{false};
 
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
     size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};

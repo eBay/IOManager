@@ -72,11 +72,31 @@ static void set_thread_name(const char* thread_name) {
 #endif
 }
 
+static bool is_cpu_pinning_enabled() {
+    if (auto quota_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"); quota_file.is_open()) {
+        double quota, period, shares;
+        quota_file >> quota;
+        if (auto period_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.cfs_period_us"); period_file.is_open()) {
+            period_file >> period;
+            if (auto shares_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.shares"); shares_file.is_open()) {
+                shares_file >> shares;
+                LOGINFOMOD(iomgr, "cfs_quota={} cfs_period={} shares={}", quota, period, shares);
+                if ((quota / period) == (shares / 1024)) {
+                    LOGINFOMOD(iomgr, "CPU Pinning is enabled in this host");
+                    return true;
+                }
+            }
+        }
+    }
+    LOGCRITICAL("WARNING: CPU Pinning is NOT enabled in this host, running multiple spdk threads could cause deadlock");
+    return false;
+}
+
 IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.reserve(inbuilt_interface_count + 5); }
 
 IOManager::~IOManager() = default;
 
-void IOManager::start(size_t const num_threads, bool is_spdk, bool is_cpu_pinned, const thread_state_notifier_t& notifier,
+void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
 
     if (get_state() == iomgr_state::running) {
@@ -102,7 +122,8 @@ void IOManager::start(size_t const num_threads, bool is_spdk, bool is_cpu_pinned
     bool init_bdev{false};
     if (is_spdk) {
         init_bdev = !is_spdk_inited();
-        start_spdk(is_cpu_pinned);
+        m_is_cpu_pinning_enabled = is_cpu_pinning_enabled();
+        start_spdk();
     } else {
         sisl::AlignedAllocator::instance().set_allocator(std::move(new IOMgrAlignedAllocImpl()));
     }
@@ -124,7 +145,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, bool is_cpu_pinned
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-    start_reactors(is_cpu_pinned);
+    start_reactors();
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -179,7 +200,7 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
 }
 
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
-void IOManager::start_spdk(bool is_cpu_pinned) {
+void IOManager::start_spdk() {
     /* Check if /mnt/huge already exists. Create otherwise */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
@@ -232,7 +253,7 @@ void IOManager::start_spdk(bool is_cpu_pinned) {
 
             // Set CPU mask (if CPU pinning is active)
             std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
-            if (is_cpu_pinned && std::filesystem::exists(cpuset_path)) {
+            if (m_is_cpu_pinning_enabled && std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 std::ifstream ifs(cpuset_path);
                 corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
@@ -241,7 +262,7 @@ void IOManager::start_spdk(bool is_cpu_pinned) {
                 LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
                 opts.core_mask = corelist.c_str();
             } else {
-                LOGINFO("DPDK will not set CPU mask since CPU pinning is not done or chosen not to configure");
+                LOGINFO("DPDK will not set CPU mask since CPU pinning is not enabled");
             }
             p_opts = &opts;
         }
@@ -342,8 +363,8 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
-void IOManager::start_reactors(bool is_cpu_pinned) {
-    if (m_is_spdk && is_cpu_pinned) {
+void IOManager::start_reactors() {
+    if (m_is_spdk && m_is_cpu_pinning_enabled) {
         const auto current_core = spdk_env_get_current_core();
         auto lcore = spdk_env_get_first_core();
         uint32_t worker{0};
