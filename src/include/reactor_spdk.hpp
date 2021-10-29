@@ -14,6 +14,7 @@ public:
 
     bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const override;
     static void deliver_msg_direct(spdk_thread* to_thread, iomgr_msg* msg);
+    static spdk_thread* create_spdk_thread();
 
 private:
     const char* loop_type() const override { return "SPDK"; }

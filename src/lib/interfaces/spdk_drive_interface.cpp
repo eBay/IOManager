@@ -1,6 +1,7 @@
 #include <sds_logging/logging.h>
 #include "include/iomgr.hpp"
 #include "include/spdk_drive_interface.hpp"
+#include "include/reactor_spdk.hpp"
 #include <folly/Exception.h>
 #include <sisl/fds/obj_allocator.hpp>
 #include <sisl/fds/buffer.hpp>
@@ -73,7 +74,7 @@ static spdk_thread* create_temp_spdk_thread() {
     if (s_temp_thread_ref_count == 0) {
         if (sthread != nullptr) { return sthread; } // We are already tight loop reactor
 
-        sthread = spdk_thread_create(NULL, NULL);
+        sthread = IOReactorSPDK::create_spdk_thread();
         if (sthread == NULL) { throw std::runtime_error("SPDK Thread Create failed"); }
         spdk_set_thread(sthread);
     }

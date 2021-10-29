@@ -15,9 +15,22 @@
 namespace iomgr {
 static void _handle_thread_msg(void* _msg) { iomanager.this_reactor()->handle_msg((iomgr_msg*)_msg); }
 
+spdk_thread* IOReactorSPDK::create_spdk_thread() {
+    struct spdk_cpuset cpu_mask;
+    struct spdk_cpuset* pcpu_mask{nullptr};
+
+    const auto lcore = spdk_env_get_current_core();
+    if (lcore != std::numeric_limits< uint32_t >::max()) {
+        pcpu_mask = &cpu_mask;
+        spdk_cpuset_zero(pcpu_mask);
+        spdk_cpuset_set_cpu(pcpu_mask, lcore, true);
+    }
+    return spdk_thread_create(NULL, pcpu_mask);
+}
+
 bool IOReactorSPDK::reactor_specific_init_thread(const io_thread_t& thr) {
     // Create SPDK LW thread for this io thread
-    auto sthread = spdk_thread_create(NULL, NULL);
+    auto sthread = create_spdk_thread();
     if (sthread == nullptr) {
         throw std::runtime_error("SPDK Thread Create failed");
         return false;

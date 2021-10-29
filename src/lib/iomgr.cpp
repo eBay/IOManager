@@ -34,6 +34,15 @@ extern "C" {
 #include <fcntl.h>
 #include <fstream>
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <sys/eventfd.h>
+#endif
+
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
+
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
 #include "include/iomgr.hpp"
@@ -53,11 +62,21 @@ SDS_OPTION_GROUP(iomgr,
 
 namespace iomgr {
 
+static void set_thread_name(const char* thread_name) {
+#if defined(__linux__)
+    prctl(PR_SET_NAME, thread_name, 0, 0, 0);
+#elif defined(__FreeBSD__)
+    pthread_set_name_np(pthread_self(), thread_name);
+#else
+    pthread_setname_np(pthread_self(), thread_name);
+#endif
+}
+
 IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.reserve(inbuilt_interface_count + 5); }
 
 IOManager::~IOManager() = default;
 
-void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
+void IOManager::start(size_t const num_threads, bool is_spdk, bool is_cpu_pinned, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
 
     if (get_state() == iomgr_state::running) {
@@ -83,7 +102,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     bool init_bdev{false};
     if (is_spdk) {
         init_bdev = !is_spdk_inited();
-        start_spdk();
+        start_spdk(is_cpu_pinned);
     } else {
         sisl::AlignedAllocator::instance().set_allocator(std::move(new IOMgrAlignedAllocImpl()));
     }
@@ -105,13 +124,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-    for (auto i = 0u; i < num_threads; i++) {
-        m_worker_reactors.push_back(reactor_info_t(
-            sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr),
-            nullptr));
-        LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
-        // t.detach();
-    }
+    start_reactors(is_cpu_pinned);
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -166,7 +179,7 @@ static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
 }
 
 constexpr std::string_view hugetlbfs_path = "/mnt/huge";
-void IOManager::start_spdk() {
+void IOManager::start_spdk(bool is_cpu_pinned) {
     /* Check if /mnt/huge already exists. Create otherwise */
     if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
         std::error_code ec;
@@ -219,7 +232,7 @@ void IOManager::start_spdk() {
 
             // Set CPU mask (if CPU pinning is active)
             std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
-            if (std::filesystem::exists(cpuset_path)) {
+            if (is_cpu_pinned && std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 std::ifstream ifs(cpuset_path);
                 corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
@@ -228,7 +241,7 @@ void IOManager::start_spdk() {
                 LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
                 opts.core_mask = corelist.c_str();
             } else {
-                LOGINFO("DPDK will set CPU mask since CPU pinning not done.");
+                LOGINFO("DPDK will not set CPU mask since CPU pinning is not done or chosen not to configure");
             }
             p_opts = &opts;
         }
@@ -298,8 +311,11 @@ void IOManager::stop() {
 
     try {
         // Join all the iomanager threads
-        for (auto& t : m_worker_reactors) {
-            if (t.first.joinable()) t.first.join();
+        for (auto& r : m_worker_reactors) {
+            if (std::holds_alternative< std::thread >(r.first)) {
+                auto& t = std::get< std::thread >(r.first);
+                if (t.joinable()) { t.join(); }
+            }
         }
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during thread join", e.what()); }
 
@@ -324,6 +340,47 @@ void IOManager::stop_spdk() {
     spdk_thread_lib_fini();
     spdk_env_fini();
     m_spdk_reinit_needed = true;
+}
+
+void IOManager::start_reactors(bool is_cpu_pinned) {
+    if (m_is_spdk && is_cpu_pinned) {
+        const auto current_core = spdk_env_get_current_core();
+        auto lcore = spdk_env_get_first_core();
+        uint32_t worker{0};
+
+        while (worker < m_num_workers) {
+            RELEASE_ASSERT_NE(lcore, std::numeric_limits< uint32_t >::max(),
+                              "System has less cores than iomgr threads={}", m_num_workers);
+            // Skip starting the thread loop on current core
+            if (lcore != current_core) {
+                int* p = new int{(int)worker};
+                const auto rc = spdk_env_thread_launch_pinned(
+                    lcore,
+                    [](void* arg) -> int {
+                        IOManager& p_this = IOManager::instance();
+                        const int* p = (const int*)arg;
+                        const int reactor_num = *p;
+                        delete p;
+                        set_thread_name("iomgr_thread");
+                        p_this._run_io_loop(reactor_num, p_this.m_is_spdk, nullptr, nullptr);
+                        return 0;
+                    },
+                    (void*)p);
+                RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
+                m_worker_reactors.push_back(reactor_info_t(lcore, nullptr));
+                LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", worker);
+                ++worker;
+            }
+            lcore = spdk_env_get_next_core(lcore);
+        }
+    } else {
+        for (auto i = 0u; i < m_num_workers; ++i) {
+            m_worker_reactors.push_back(reactor_info_t(sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop,
+                                                                            this, (int)i, m_is_spdk, nullptr, nullptr),
+                                                       nullptr));
+            LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
+        }
+    }
 }
 
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }

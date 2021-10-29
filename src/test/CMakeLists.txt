@@ -50,6 +50,6 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
         SET_TESTS_PROPERTIES(TestWriteZero-Spdk PROPERTIES DEPENDS TestTimer-Spdk)
 
         add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true)
-        SET_TESTS_PROPERTIES(TestMsg-Spdk PROPERTIES DEPENDS TestTimer-Spdk)
+        SET_TESTS_PROPERTIES(TestMsg-Spdk PROPERTIES DEPENDS TestWriteZero-Spdk)
     endif()
 endif()
