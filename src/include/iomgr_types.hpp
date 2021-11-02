@@ -48,7 +48,7 @@ ENUM(thread_regex, uint8_t,
 );
 typedef uint32_t eal_core_id_t;
 typedef std::variant< thread_regex, io_thread_t > thread_specifier;
-typedef std::pair< std::variant< std::thread, eal_core_id_t >, std::shared_ptr< IOReactor > > reactor_info_t;
+typedef std::variant< std::thread, eal_core_id_t > sys_thread_id_t;
 
 typedef std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* > backing_dev_t;
 typedef uint32_t poll_cb_idx_t;

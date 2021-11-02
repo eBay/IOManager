@@ -26,7 +26,7 @@ SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
 using namespace iomgr;
 
 // Constants
-static constexpr size_t nthreads = 1;
+static constexpr size_t nthreads = 2;
 static constexpr size_t total_dev_size = 512 * 1024 * 1024;
 static constexpr size_t io_size = 4096;
 static constexpr int read_pct = 50;

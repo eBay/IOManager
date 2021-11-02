@@ -113,6 +113,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     // m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(num_threads);
     m_worker_reactors.reserve(num_threads * 2); // Have preallocate for iomgr slots
+    m_worker_threads.reserve(num_threads * 2);
 
     // One common module and other internal handler
     m_common_thread_state_notifier = notifier;
@@ -152,8 +153,6 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_global_user_timer = std::make_unique< timer_epoll >(thread_regex::all_user);
     m_global_worker_timer = is_spdk ? std::unique_ptr< timer >(new timer_spdk(thread_regex::all_worker))
                                     : std::unique_ptr< timer >(new timer_epoll(thread_regex::all_worker));
-    m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
-
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     if (is_spdk && init_bdev) {
@@ -332,9 +331,9 @@ void IOManager::stop() {
 
     try {
         // Join all the iomanager threads
-        for (auto& r : m_worker_reactors) {
-            if (std::holds_alternative< std::thread >(r.first)) {
-                auto& t = std::get< std::thread >(r.first);
+        for (auto& thr : m_worker_threads) {
+            if (std::holds_alternative< std::thread >(thr)) {
+                auto& t = std::get< std::thread >(thr);
                 if (t.joinable()) { t.join(); }
             }
         }
@@ -342,6 +341,7 @@ void IOManager::stop() {
 
     try {
         m_worker_reactors.clear();
+        m_worker_threads.clear();
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
         m_default_drive_iface.reset();
@@ -364,6 +364,10 @@ void IOManager::stop_spdk() {
 }
 
 void IOManager::start_reactors() {
+    for (uint32_t i{0}; i < m_num_workers; ++i) {
+        m_worker_reactors.push_back(nullptr);
+    }
+
     if (m_is_spdk && m_is_cpu_pinning_enabled) {
         const auto current_core = spdk_env_get_current_core();
         auto lcore = spdk_env_get_first_core();
@@ -388,7 +392,7 @@ void IOManager::start_reactors() {
                     },
                     (void*)p);
                 RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
-                m_worker_reactors.push_back(reactor_info_t(lcore, nullptr));
+                m_worker_threads.emplace_back(sys_thread_id_t{lcore});
                 LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", worker);
                 ++worker;
             }
@@ -396,9 +400,8 @@ void IOManager::start_reactors() {
         }
     } else {
         for (auto i = 0u; i < m_num_workers; ++i) {
-            m_worker_reactors.push_back(reactor_info_t(sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop,
-                                                                            this, (int)i, m_is_spdk, nullptr, nullptr),
-                                                       nullptr));
+            m_worker_threads.emplace_back(sys_thread_id_t(sisl::thread_factory(
+                "iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr)));
             LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
         }
     }
@@ -489,7 +492,7 @@ void IOManager::stop_io_loop() { this_reactor()->stop(); }
 void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
     m_yet_to_stop_nreactors.increment();
     if (reactor->is_worker()) {
-        m_worker_reactors[reactor->m_worker_slot_num].second = reactor;
+        m_worker_reactors[reactor->m_worker_slot_num] = reactor;
 
         // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
         if (m_yet_to_start_nreactors.decrement_testz()) {
@@ -547,7 +550,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
         static thread_local std::random_device s_rd{};
         static thread_local std::default_random_engine s_re{s_rd()};
 
-        auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)].second;
+        auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
         sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
@@ -583,7 +586,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
         for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
-            cb(m_worker_reactors[i].second.get(), (i == (m_worker_reactors.size() - 1)));
+            cb(m_worker_reactors[i].get(), (i == (m_worker_reactors.size() - 1)));
         }
     } else {
         all_reactors(cb);

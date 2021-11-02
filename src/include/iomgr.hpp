@@ -487,7 +487,8 @@ private:
     mutable std::mutex m_cv_mtx;
     std::condition_variable m_cv;
 
-    sisl::sparse_vector< reactor_info_t > m_worker_reactors;
+    std::vector< std::shared_ptr< IOReactor > > m_worker_reactors;
+    std::vector< sys_thread_id_t > m_worker_threads;
     std::uniform_int_distribution< size_t > m_rand_worker_distribution;
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
