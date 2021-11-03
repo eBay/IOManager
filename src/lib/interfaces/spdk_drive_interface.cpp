@@ -312,7 +312,11 @@ iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) 
     auto devname_c = devname.c_str();
 
     auto rc = spdk_nvme_transport_id_parse(&trid, devname_c);
-    if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
+    // if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
+    if (rc == 0) {
+        // assume trid.trtype is PCIE, this if should be reverted after we remove dev_type from caller completely;
+        return iomgr_drive_type::raw_nvme;
+    }
 
     auto bdev = spdk_bdev_get_by_name(devname_c);
     if (bdev) { return iomgr_drive_type::spdk_bdev; }
