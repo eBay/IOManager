@@ -377,7 +377,7 @@ static std::string explain_bdev_io_status(struct spdk_bdev_io* bdev_io) {
         int sct;
         int sc;
         spdk_bdev_io_get_nvme_status(bdev_io, &cdw0, &sct, &sc);
-        return fmt::format("cdw0={} sct={}, sc={}", cdw0, sct, sc);
+        return fmt::format("cdw0={} sct={}, sc={} internal_status={}", cdw0, sct, sc, bdev_io->internal.status);
     } else {
         return "unknown";
     }
@@ -394,6 +394,10 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
     if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { success = false; }
 #endif
 
+#ifndef NDEBUG
+    iocb->owns_by_spdk = false;
+#endif
+
     if (success) {
         iocb->result = 0;
         LOGDEBUGMOD(iomgr, "(bdev_io={}) iocb complete: mode=actual, {}", (void*)bdev_io, iocb->to_string());
@@ -404,10 +408,6 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
         if (resubmit_io_on_err(iocb)) { return; }
         iocb->result = -1;
     }
-
-#ifndef NDEBUG
-    iocb->owns_by_spdk = false;
-#endif
 
     bool started_by_this_thread = (iocb->owner_thread == nullptr);
 
