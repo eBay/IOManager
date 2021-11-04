@@ -60,9 +60,22 @@ bool IOReactorSPDK::is_iomgr_created_spdk_thread(const spdk_thread* sthread) {
                          s_spdk_thread_name_prefix.size()) == 0);
 }
 
+spdk_thread* IOReactorSPDK::create_spdk_thread() {
+    struct spdk_cpuset cpu_mask;
+    struct spdk_cpuset* pcpu_mask{nullptr};
+
+    const auto lcore = spdk_env_get_current_core();
+    if (lcore != std::numeric_limits< uint32_t >::max()) {
+        pcpu_mask = &cpu_mask;
+        spdk_cpuset_zero(pcpu_mask);
+        spdk_cpuset_set_cpu(pcpu_mask, lcore, true);
+    }
+    return spdk_thread_create(gen_spdk_thread_name().c_str(), pcpu_mask);
+}
+
 bool IOReactorSPDK::reactor_specific_init_thread(const io_thread_t& thr) {
     // Create SPDK LW thread for this io thread
-    auto sthread = spdk_thread_create(gen_spdk_thread_name().c_str(), NULL);
+    auto sthread = create_spdk_thread();
     if (sthread == nullptr) {
         throw std::runtime_error("SPDK Thread Create failed");
         return false;

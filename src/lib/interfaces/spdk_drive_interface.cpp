@@ -74,7 +74,7 @@ static spdk_thread* create_temp_spdk_thread() {
     if (s_temp_thread_ref_count == 0) {
         if (sthread != nullptr) { return sthread; } // We are already tight loop reactor
 
-        sthread = spdk_thread_create(IOReactorSPDK::gen_spdk_thread_name().c_str(), NULL);
+        sthread = IOReactorSPDK::create_spdk_thread();
         if (sthread == NULL) { throw std::runtime_error("SPDK Thread Create failed"); }
         spdk_set_thread(sthread);
     }
@@ -312,7 +312,11 @@ iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) 
     auto devname_c = devname.c_str();
 
     auto rc = spdk_nvme_transport_id_parse(&trid, devname_c);
-    if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
+    // if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
+    if (rc == 0) {
+        // assume trid.trtype is PCIE, this if should be reverted after we remove dev_type from caller completely;
+        return iomgr_drive_type::raw_nvme;
+    }
 
     auto bdev = spdk_bdev_get_by_name(devname_c);
     if (bdev) { return iomgr_drive_type::spdk_bdev; }
@@ -363,24 +367,7 @@ static bool resubmit_io_on_err(void* b) {
 }
 
 static void complete_io(SpdkIocb* iocb) {
-    /* update outstanding counters */
-    switch (iocb->op_type) {
-    case DriveOpType::READ:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
-        break;
-    case DriveOpType::WRITE:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
-        break;
-    case DriveOpType::UNMAP:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
-        break;
-    case DriveOpType::WRITE_ZERO:
-        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
-        break;
-    default:
-        LOGDFATAL("Invalid operation type {}", iocb->op_type);
-    }
-
+    SpdkDriveInterface::decrement_outstanding_counter(iocb);
     sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
 }
 
@@ -425,7 +412,7 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
     bool started_by_this_thread = (iocb->owner_thread == nullptr);
 
     auto& cb = iocb->comp_cb ? iocb->comp_cb : iocb->iface->get_completion_cb();
-    cb(*iocb->result, (uint8_t*)iocb->user_cookie);
+    cb(iocb->result, (uint8_t*)iocb->user_cookie);
 
     if (started_by_this_thread) {
         // If the iocb has been issued by this thread, we need to complete io, else that different thread will do so
@@ -488,9 +475,7 @@ static void submit_io(void* b) {
     }
 }
 
-inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
-    bool ret = true;
-
+void SpdkDriveInterface::increment_outstanding_counter(const SpdkIocb* iocb) {
     /* update outstanding counters */
     switch (iocb->op_type) {
     case DriveOpType::READ:
@@ -508,6 +493,30 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
+}
+
+void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
+    /* decrement */
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::UNMAP:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case DriveOpType::WRITE_ZERO:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+}
+
+inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
+    bool ret = true;
 
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
@@ -520,6 +529,10 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
         COUNTER_INCREMENT(m_metrics, force_sync_io_non_spdk_thread, 1);
         ret = false;
     }
+
+    // update coutner in async path;
+    if (ret) { increment_outstanding_counter(iocb); }
+
     return ret;
 }
 
@@ -618,6 +631,9 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
     iocb->io_wait_entry.cb_fn = submit_io;
     iocb->owner_thread = _non_io_thread;
 
+    // update counter in sync path
+    increment_outstanding_counter(iocb);
+
     const auto& reactor = iomanager.this_reactor();
     if (reactor && reactor->is_io_reactor() && !reactor->is_tight_loop_reactor()) {
         submit_sync_io_in_this_thread(iocb);
@@ -625,8 +641,8 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
         submit_sync_io_to_tloop_thread(iocb);
     }
 
-    auto ret = (*iocb->result == 0) ? iocb->size : 0;
-    if (comp_cb) comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie);
+    auto ret = (iocb->result == 0) ? iocb->size : 0;
+    if (comp_cb) comp_cb(iocb->result, (uint8_t*)iocb->user_cookie);
     complete_io(iocb);
 
     return ret;
@@ -635,7 +651,7 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
     iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        iocb->result = res;
+        iocb->sync_io_completed = true;
         m_sync_cv.notify_all();
     };
 
@@ -645,7 +661,7 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
 
     {
         std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        m_sync_cv.wait(lk, [&]() { return iocb->result; });
+        m_sync_cv.wait(lk, [&]() { return iocb->sync_io_completed; });
     }
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=sync, {}", iocb->to_string());
@@ -654,7 +670,7 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
 void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb submit: mode=local_sync, {}", iocb->to_string());
 
-    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {}; // A Dummy method to differentiate with local submit
+    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) { iocb->sync_io_completed = true; };
     submit_io((void*)iocb);
 
     auto sthread = spdk_get_thread();
@@ -663,7 +679,7 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
         if (cur_wait_us > min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
-    } while (!iocb->result);
+    } while (!iocb->sync_io_completed);
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
@@ -762,7 +778,7 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     case spdk_msg_type::ASYNC_IO_DONE: {
         auto iocb = (SpdkIocb*)msg->data_buf().bytes;
         LOGDEBUGMOD(iomgr, "iocb complete: mode=user_reactor, {}", iocb->to_string());
-        if (m_comp_cb) m_comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie);
+        if (m_comp_cb) m_comp_cb(iocb->result, (uint8_t*)iocb->user_cookie);
         complete_io(iocb);
         break;
     }
@@ -770,7 +786,7 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     case spdk_msg_type::ASYNC_BATCH_IO_DONE: {
         auto batch_info = (SpdkBatchIocb*)(msg->data_buf().bytes);
         for (auto& iocb : *(batch_info->batch_io)) {
-            if (m_comp_cb) { m_comp_cb(*iocb->result, (uint8_t*)iocb->user_cookie); }
+            if (m_comp_cb) { m_comp_cb(iocb->result, (uint8_t*)iocb->user_cookie); }
             complete_io(iocb);
         }
 

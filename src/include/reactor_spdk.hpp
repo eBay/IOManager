@@ -19,6 +19,7 @@ public:
     static bool reactor_thread_op_supported(enum spdk_thread_op op);
     static std::string gen_spdk_thread_name();
     static bool is_iomgr_created_spdk_thread(const spdk_thread* thread);
+    static spdk_thread* create_spdk_thread();
 
 private:
     const char* loop_type() const override { return "SPDK"; }

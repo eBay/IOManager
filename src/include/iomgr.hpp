@@ -446,7 +446,7 @@ private:
     ~IOManager();
 
     void foreach_interface(const interface_cb_t& iface_cb);
-
+    void start_reactors();
     void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
 
@@ -489,7 +489,8 @@ private:
     mutable std::mutex m_cv_mtx;
     std::condition_variable m_cv;
 
-    sisl::sparse_vector< reactor_info_t > m_worker_reactors;
+    std::vector< std::shared_ptr< IOReactor > > m_worker_reactors;
+    std::vector< sys_thread_id_t > m_worker_threads;
     std::uniform_int_distribution< size_t > m_rand_worker_distribution;
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
@@ -505,6 +506,7 @@ private:
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};
     bool m_spdk_reinit_needed{false};
+    bool m_is_cpu_pinning_enabled{false};
 
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
     size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};
