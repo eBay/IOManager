@@ -14,6 +14,7 @@ extern "C" {
 #include <spdk/thread.h>
 #include <spdk/bdev.h>
 #include <spdk/env_dpdk.h>
+#include <spdk/init.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
 #include <rte_malloc.h>
@@ -156,10 +157,10 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     if (is_spdk && init_bdev) {
-        LOGINFO("Initializing bdev subsystem");
+        LOGINFO("Initializing all spdk subsystems");
         iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
-            spdk_bdev_initialize(
-                [](void* cb_arg, int rc) {
+            spdk_subsystem_init(
+                [](int rc, void* cb_arg) {
                     IOManager* pthis = (IOManager*)cb_arg;
                     pthis->mempool_metrics_populate();
                     pthis->set_state_and_notify(iomgr_state::running);
@@ -271,8 +272,8 @@ void IOManager::start_spdk() {
 
         spdk_unaffinitize_thread();
 
-        // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
-        rc = spdk_thread_lib_init(NULL, 0);
+        rc = spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread,
+                                      IOReactorSPDK::reactor_thread_op_supported, 0);
         if (rc != 0) {
             LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
             throw std::runtime_error("SPDK Thread Lib Init failed");
@@ -295,7 +296,7 @@ void IOManager::stop() {
 
     if (m_is_spdk) {
         iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
-            spdk_bdev_finish(
+            spdk_subsystem_fini(
                 [](void* cb_arg) {
                     IOManager* pthis = (IOManager*)cb_arg;
                     pthis->set_state_and_notify(iomgr_state::stopping);
@@ -702,6 +703,14 @@ void IOManager::specific_reactor(int thread_num, const auto& cb) {
         m_reactors.access_specific_thread(thread_num,
                                           [&cb](std::shared_ptr< IOReactor >* preactor) { cb(preactor->get()); });
     }
+}
+
+IOReactor* IOManager::round_robin_reactor() const {
+    static uint64_t s_idx{0};
+    do {
+        const auto idx = s_idx++ % m_worker_reactors.size();
+        if (m_worker_reactors[idx] != nullptr) { return m_worker_reactors[idx].get(); }
+    } while (true);
 }
 
 msg_module_id_t IOManager::register_msg_module(const msg_handler_t& handler) {

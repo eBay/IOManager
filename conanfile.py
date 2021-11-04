@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "6.0.19"
+    version = "7.0.5"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -41,7 +41,7 @@ class IOMgrConan(ConanFile):
             "folly/2020.05.04.00",
             "nlohmann_json/3.8.0",
             "libevent/2.1.11",
-            "spdk/20.07.y",
+            "spdk/21.07.x",
             "openssl/1.1.1k",
             "isa-l/2.21.0",
             "semver/1.1.0",

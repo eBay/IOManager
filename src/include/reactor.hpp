@@ -114,6 +114,7 @@ struct io_thread {
 
     friend class IOManager;
 
+    bool is_spdk_thread_impl() const { return std::holds_alternative< spdk_thread* >(thread_impl); }
     spdk_thread* spdk_thread_impl() const { return std::get< spdk_thread* >(thread_impl); }
     io_thread(IOReactor* reactor);
     io_thread() = default;

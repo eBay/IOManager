@@ -173,7 +173,7 @@ static void create_nvme_bdev(const std::shared_ptr< creat_ctx >& ctx) {
             spdk_nvme_host_id hostid{};
             uint32_t count{128};
             if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
-                                      (void*)ctx.get());
+                                      (void*)ctx.get(), nullptr);
                 0 != rc) {
                 LOGERROR("Failed creating NVMe BDEV from {}", trid.traddr);
                 ctx->err = std::make_error_condition(std::errc::io_error);
@@ -818,7 +818,7 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
         if (nsdata->nsfeat.ns_atomic_write_unit) {
             attr.atomic_phys_page_size = nsdata->nawupf * blk_size;
         } else {
-            const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_bdev_ctrlr->ctrlr);
+            const struct spdk_nvme_ctrlr_data* cdata = spdk_nvme_ctrlr_get_data(n_bdev->nvme_ns->ctrlr->ctrlr);
             attr.atomic_phys_page_size = cdata->awupf * blk_size;
         }
     }
