@@ -177,6 +177,9 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     // Notify all the reactors that they are ready to make callback about thread started
     iomanager.run_on(thread_regex::all_io,
                      [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); });
+
+    m_io_wd = std::make_unique< IOWatchDog >();
+
 } // namespace iomgr
 
 static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {

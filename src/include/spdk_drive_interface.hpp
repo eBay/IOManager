@@ -69,6 +69,34 @@ struct SpdkIocb;
 
 // static_assert(SPDK_BATCH_IO_NUM > 1);
 
+class IOWatchDog {
+    using io_wd_ptr_t = SpdkIocb*;
+
+public:
+    IOWatchDog();
+    ~IOWatchDog();
+
+    void add_io(const io_wd_ptr_t& iocb);
+    void complete_io(const io_wd_ptr_t& iocb);
+
+    void io_timer();
+
+    bool is_on();
+
+    IOWatchDog(const IOWatchDog&) = delete;
+    IOWatchDog(IOWatchDog&&) noexcept = delete;
+    IOWatchDog& operator=(const IOWatchDog&) = delete;
+    IOWatchDog& operator=(IOWatchDog&&) noexcept = delete;
+
+private:
+    bool m_wd_on{false};
+    iomgr::timer_handle_t m_timer_hdl;
+    std::mutex m_mtx;
+    std::map< uint64_t, SpdkIocb* > m_outstanding_ios;
+    uint64_t m_wd_pass_cnt{0}; // total watchdog check passed count
+    uint64_t m_unique_id{0};
+};
+
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;
 
@@ -165,6 +193,9 @@ struct SpdkIocb : public drive_iocb {
 #ifndef NDEBUG
     bool owns_by_spdk{false};
 #endif
+    // used by io watchdog
+    uint64_t unique_id{0};
+    Clock::time_point op_start_time;
 
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
@@ -172,6 +203,8 @@ struct SpdkIocb : public drive_iocb {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
+
+        op_start_time = Clock::now();
     }
 
     std::string to_string() const {

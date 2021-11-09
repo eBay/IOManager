@@ -220,6 +220,74 @@ static void create_dev_internal(const std::shared_ptr< creat_ctx >& ctx) {
     }
 }
 
+IOWatchDog::IOWatchDog() {
+    m_wd_on = IM_DYNAMIC_CONFIG(spdk->io_watchdog_timer_on);
+
+    if (m_wd_on) {
+        m_timer_hdl = iomanager.schedule_global_timer(
+            IM_DYNAMIC_CONFIG(spdk->io_watchdog_timer_sec) * 1000ul * 1000ul * 1000ul, true, nullptr,
+            iomgr::thread_regex::all_worker, [this](void* cookie) { io_timer(); });
+    }
+
+    LOGINFOMOD(io_wd, "io watchdog turned {}.", m_wd_on ? "ON" : "OFF");
+}
+
+IOWatchDog::~IOWatchDog() { m_outstanding_ios.clear(); }
+
+void IOWatchDog::add_io(const io_wd_ptr_t& iocb) {
+    {
+        std::unique_lock< std::mutex > lk(m_mtx);
+        iocb->unique_id = ++m_unique_id;
+
+        const auto result = m_outstanding_ios.insert_or_assign(iocb->unique_id, iocb);
+        LOGTRACEMOD(io_wd, "add_io: {}, {}", iocb->unique_id, iocb->to_string());
+        RELEASE_ASSERT_EQ(result.second, true, "expecting to insert instead of update");
+    }
+}
+
+void IOWatchDog::complete_io(const io_wd_ptr_t& iocb) {
+    {
+        std::unique_lock< std::mutex > lk(m_mtx);
+        const auto result = m_outstanding_ios.erase(iocb->unique_id);
+        LOGTRACEMOD(io_wd, "complete_io: {}, {}", iocb->unique_id, iocb->to_string());
+        RELEASE_ASSERT_EQ(result, 1, "expecting to erase 1 element");
+    }
+}
+
+bool IOWatchDog::is_on() { return m_wd_on; }
+
+void IOWatchDog::io_timer() {
+    {
+        std::unique_lock< std::mutex > lk(m_mtx);
+        std::vector< io_wd_ptr_t > timeout_reqs;
+        // the 1st io iteratred in map will be the oldeset one, because we add io
+        // to map when vol_child_req is being created, e.g. op_start_time is from oldeset to latest;
+        for (const auto& io : m_outstanding_ios) {
+            const auto this_io_dur_us = get_elapsed_time_us(io.second->op_start_time);
+            if (this_io_dur_us >= IM_DYNAMIC_CONFIG(spdk->io_timeout_limit_sec) * 1000ul * 1000ul) {
+                // coolect all timeout requests
+                timeout_reqs.push_back(io.second);
+            } else {
+                // no need to search for newer requests stored in the map;
+                break;
+            }
+        }
+
+        if (timeout_reqs.size()) {
+            LOGCRITICAL_AND_FLUSH(
+                "Total num timeout requests: {}, the oldest io req that timeout duration is: {},  iocb: {}",
+                timeout_reqs.size(), get_elapsed_time_us(timeout_reqs[0]->op_start_time), timeout_reqs[0]->to_string());
+
+            RELEASE_ASSERT(false, "IO watchdog timeout! timeout_limit: {}, watchdog_timer: {}",
+                           IM_DYNAMIC_CONFIG(spdk->io_timeout_limit_sec),
+                           IM_DYNAMIC_CONFIG(spdk->io_watchdog_timer_sec));
+        } else {
+            LOGDEBUGMOD(io_wd, "io_timer passed {}, no timee out IO found. Total outstanding_io_cnt: {}",
+                        ++m_wd_pass_cnt, m_outstanding_ios.size());
+        }
+    }
+}
+
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_drive_type drive_type,
                                            [[maybe_unused]] int oflags) {
     io_device_ptr iodev{nullptr};
@@ -368,6 +436,9 @@ static bool resubmit_io_on_err(void* b) {
 
 static void complete_io(SpdkIocb* iocb) {
     SpdkDriveInterface::decrement_outstanding_counter(iocb);
+
+    if (iomanager.get_io_wd()->is_on()) { iomanager.get_io_wd()->complete_io(iocb); }
+
     sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
 }
 
@@ -533,6 +604,8 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     // update coutner in async path;
     if (ret) { increment_outstanding_counter(iocb); }
 
+    if (iomanager.get_io_wd()->is_on()) { IOManager::instance().get_io_wd()->add_io(iocb); }
+
     return ret;
 }
 
@@ -633,6 +706,8 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 
     // update counter in sync path
     increment_outstanding_counter(iocb);
+
+    if (iomanager.get_io_wd()->is_on()) { IOManager::instance().get_io_wd()->add_io(iocb); }
 
     const auto& reactor = iomanager.this_reactor();
     if (reactor && reactor->is_io_reactor() && !reactor->is_tight_loop_reactor()) {

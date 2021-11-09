@@ -121,6 +121,7 @@ public:
  */
 extern const version::Semver200_version get_version();
 
+class IOWatchDog;
 class IOManager {
 public:
     friend class IOReactor;
@@ -441,6 +442,8 @@ public:
     void set_poll_interval(const int interval);
     int get_poll_interval() const;
 
+    IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
+
 private:
     IOManager();
     ~IOManager();
@@ -512,6 +515,8 @@ private:
     size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};
     size_t m_mem_soft_threshold_size{m_mem_size_limit};
     size_t m_mem_aggressive_threshold_size{m_mem_size_limit};
+
+    std::unique_ptr< IOWatchDog > m_io_wd{nullptr};
 };
 
 struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {

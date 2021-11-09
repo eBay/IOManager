@@ -117,6 +117,8 @@ private:
     std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
 
+class IOWatchDog;
+
 class DriveInterface : public IOInterface {
 public:
     virtual drive_interface_type interface_type() const = 0;
@@ -124,7 +126,6 @@ public:
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) = 0;
     virtual io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
-
     virtual ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) = 0;
     virtual ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
     virtual ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
