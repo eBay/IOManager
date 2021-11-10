@@ -212,10 +212,11 @@ struct SpdkIocb : public drive_iocb {
 #ifndef NDEBUG
         str = fmt::format("id={} ", iocb_id);
 #endif
-        str += fmt::format(
-            "addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, resubmit_cnt={} ",
-            (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
-            batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt);
+        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, "
+                           "resubmit_cnt={}, unique_id={}, elapsed_time_ms(op_start_time)={}",
+                           (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
+                           batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt, unique_id,
+                           get_elapsed_time_ms(op_start_time));
 
         if (has_iovs()) {
             auto ivs = get_iovs();
