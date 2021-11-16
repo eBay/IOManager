@@ -24,7 +24,7 @@
 #include <sisl/fds/buffer.hpp>
 #include <sisl/metrics/metrics.hpp>
 
-#include "drive_interface.hpp"
+#include "kernel_drive_interface.hpp"
 #include "iomgr_types.hpp"
 
 namespace iomgr {
@@ -33,8 +33,6 @@ constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions 
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
-static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
-static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
 
 #ifdef __linux__
 struct iocb_info_t : public iocb {
@@ -283,20 +281,16 @@ public:
     ~AioDriveInterfaceMetrics() { deregister_me_from_farm(); }
 };
 
-class AioDriveInterface : public DriveInterface {
+class AioDriveInterface : public KernelDriveInterface {
 public:
     AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     ~AioDriveInterface();
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
     std::string name() const override { return "aio_drive_interface"; }
 
-    void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-    io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
+    io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
-    ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
-    ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
-    ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+
     void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -307,13 +301,9 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
-    virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
-    void on_event_notification(IODevice* iodev, void* cookie, int event);
-
-    size_t get_size(IODevice* iodev) override;
     virtual void submit_batch() override;
-    drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
 
+    void on_event_notification(IODevice* iodev, void* cookie, int event);
     static std::vector< int > s_poll_interval_table;
     static void init_poll_interval_table();
 
@@ -332,21 +322,11 @@ private:
     void retry_io();
     void push_retry_list(struct iocb* iocb, const bool no_slot);
     bool resubmit_iocb_on_err(struct iocb* iocb);
-    ssize_t _sync_write(int fd, const char* data, uint32_t size, uint64_t offset);
-    ssize_t _sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
-    ssize_t _sync_read(int fd, char* data, uint32_t size, uint64_t offset);
-    ssize_t _sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset);
-
-    void write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
-    void write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie);
 
 private:
     static thread_local aio_thread_context* t_aio_ctx;
     std::mutex m_open_mtx;
-    std::unique_ptr< uint8_t, std::function< void(uint8_t* const) > > m_zero_buf{};
-    uint64_t m_max_write_zeros{std::numeric_limits< uint64_t >::max()};
     AioDriveInterfaceMetrics m_metrics;
-    io_interface_comp_cb_t m_comp_cb;
 };
 #else
 class AioDriveInterface : public DriveInterface {

@@ -154,7 +154,7 @@ public:
                 {m_cfg.io_dist[io_type_t::write], m_cfg.io_dist[io_type_t::read], m_cfg.io_dist[io_type_t::unmap]}} {
         // Integrated mode is not supported until lambdas or per request completion routine can be passed to iomgr.
         // Otherwise the completion of client iomgr will go back to homestore layer.
-        drive_iface()->attach_completion_cb(bind_this(IOJob::on_completion, 2));
+        examiner->attach_completion_cb(bind_this(IOJob::on_completion, 2));
     }
 
     virtual ~IOJob() override = default;
@@ -398,8 +398,9 @@ private:
                  m_outstanding_ios.load(std::memory_order_relaxed) + 1);
         COUNTER_INCREMENT(m_metrics, iojob_write_count, 1);
         req->start_time = Clock::now();
-        drive_iface()->async_write(req->vol_info->m_vol_dev.get(), reinterpret_cast< const char* >(req->buffer), size,
-                                   lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        auto& vol_dev = req->vol_info->m_vol_dev;
+        vol_dev->drive_interface()->async_write(vol_dev.get(), reinterpret_cast< const char* >(req->buffer), size,
+                                                lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
@@ -418,8 +419,9 @@ private:
                  m_outstanding_ios.load(std::memory_order_relaxed) + 1);
         COUNTER_INCREMENT(m_metrics, iojob_read_count, 1);
         req->start_time = Clock::now();
-        drive_iface()->async_read(req->vol_info->m_vol_dev.get(), reinterpret_cast< char* >(req->buffer), size,
-                                  lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        auto& vol_dev = req->vol_info->m_vol_dev;
+        vol_dev->drive_interface()->async_read(vol_dev.get(), reinterpret_cast< char* >(req->buffer), size,
+                                               lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         m_output.read_cnt.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -436,8 +438,9 @@ private:
                  m_outstanding_ios.load(std::memory_order_relaxed) + 1);
         COUNTER_INCREMENT(m_metrics, iojob_unmap_count, 1);
         req->start_time = Clock::now();
-        drive_iface()->async_unmap(req->vol_info->m_vol_dev.get(), nlbas * req->vol_info->m_page_size,
-                                   lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        auto& vol_dev = req->vol_info->m_vol_dev;
+        vol_dev->drive_interface()->async_unmap(vol_dev.get(), nlbas * req->vol_info->m_page_size,
+                                                lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
 
         return true;

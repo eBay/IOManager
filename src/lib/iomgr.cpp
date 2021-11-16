@@ -34,6 +34,24 @@ extern "C" {
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <fstream>
+#include <random>
+
+#include <liburing.h>
+#include <liburing/io_uring.h>
+
+#include <sisl/utility/thread_factory.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <sds_logging/logging.h>
+#include <sisl/version.hpp>
+
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <sys/eventfd.h>
+#endif
+
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
 
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -46,16 +64,11 @@ extern "C" {
 
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
+#include "include/uring_drive_interface.hpp"
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
 #include "include/reactor_spdk.hpp"
 #include "include/iomgr_config.hpp"
-
-#include <sisl/utility/thread_factory.hpp>
-#include <sisl/fds/obj_allocator.hpp>
-#include <random>
-#include <sds_logging/logging.h>
-#include <sisl/version.hpp>
 
 SDS_OPTION_GROUP(iomgr,
                  (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -97,6 +110,24 @@ IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.re
 
 IOManager::~IOManager() = default;
 
+static bool check_uring_capability() {
+    std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
+                              IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
+
+    bool supported{true};
+    struct io_uring_probe* probe = io_uring_get_probe();
+    if (probe == nullptr) { return false; }
+
+    for (auto& op : ops) {
+        if (!io_uring_opcode_supported(probe, op)) {
+            supported = false;
+            break;
+        }
+    }
+    free(probe);
+    return supported;
+}
+
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
 
@@ -130,6 +161,9 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         sisl::AlignedAllocator::instance().set_allocator(std::move(new IOMgrAlignedAllocImpl()));
     }
 
+    m_is_uring_capable = check_uring_capability();
+    LOGINFOMOD(iomgr, "System has uring_capability={}", m_is_uring_capable);
+
     // Create all in-built interfaces here
     set_state(iomgr_state::interface_init);
     m_default_general_iface = std::make_shared< GenericIOInterface >();
@@ -139,10 +173,15 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     if (iface_adder) {
         iface_adder();
     } else {
-        add_drive_interface(
-            is_spdk ? std::dynamic_pointer_cast< iomgr::DriveInterface >(std::make_shared< SpdkDriveInterface >())
-                    : std::dynamic_pointer_cast< iomgr::DriveInterface >(std::make_shared< AioDriveInterface >()),
-            true);
+        if (m_is_uring_capable) {
+            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< UringDriveInterface >()));
+        } else {
+            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
+        }
+
+        if (is_spdk) {
+            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< SpdkDriveInterface >()));
+        }
     }
 
     // Start all reactor threads
@@ -280,7 +319,8 @@ void IOManager::start_spdk() {
         }
     }
 
-    // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned allocations
+    // Set the sisl::allocator with spdk allocator, so that all sisl libraries start to use spdk for aligned
+    // allocations
     sisl::AlignedAllocator::instance().set_allocator(std::move(new SpdkAlignedAllocImpl()));
 }
 
@@ -345,7 +385,6 @@ void IOManager::stop() {
         m_worker_threads.clear();
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
-        m_default_drive_iface.reset();
         m_default_general_iface.reset();
         // m_default_grpc_iface.reset();
         m_drive_ifaces.clear();
@@ -410,14 +449,27 @@ void IOManager::start_reactors() {
 
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
 
-void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
-                                    thread_regex iface_scope) {
+void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
     {
         std::unique_lock lg(m_iface_list_mtx);
         m_drive_ifaces.push_back(iface);
-        if (default_iface) m_default_drive_iface = iface;
     }
+}
+
+std::shared_ptr< DriveInterface > IOManager::get_drive_interface(const drive_interface_type type) {
+    if ((type == drive_interface_type::spdk) && !m_is_spdk) {
+        LOGERRORMOD(iomgr, "Attempting to access spdk's drive interface on non-spdk mode");
+        return nullptr;
+    }
+    {
+        std::unique_lock lg(m_iface_list_mtx);
+        for (auto& iface : m_drive_ifaces) {
+            if (iface->interface_type() == type) { return iface; }
+        }
+    }
+    LOGERRORMOD(iomgr, "Unable to find drive interfaces of type {}", type);
+    return nullptr;
 }
 
 void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope) {
@@ -739,7 +791,7 @@ bool IOManager::is_spdk_inited() const {
     return (m_is_spdk && !m_spdk_reinit_needed && !spdk_env_dpdk_external_init());
 }
 
-/****** IODevice related ********/
+/////////////////// IODevice class implementation ///////////////////////////////////
 IODevice::IODevice(const int p, const thread_specifier scope) : thread_scope{scope}, pri{p} {
     m_iodev_thread_ctx.reserve(IOManager::max_io_threads);
     creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
@@ -771,6 +823,9 @@ void IODevice::clear() {
     m_iodev_thread_ctx.clear();
 }
 
+DriveInterface* IODevice::drive_interface() { return static_cast< DriveInterface* >(io_interface); }
+
+/////////////////// IOManager Memory Management APIs ///////////////////////////////////
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size, const sisl::buftag tag) {
     return sisl::AlignedAllocator::allocator().aligned_alloc(align, size, tag);
 }

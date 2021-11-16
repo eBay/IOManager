@@ -77,12 +77,10 @@ public:
     drive_interface_type interface_type() const override { return drive_interface_type::spdk; }
     std::string name() const override { return "spdk_drive_interface"; }
 
-    void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
-
-    io_device_ptr open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) override;
+    io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
 
-    size_t get_size(IODevice* iodev) override;
+    size_t get_dev_size(IODevice* iodev) override;
     virtual void submit_batch();
 
     ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
@@ -104,17 +102,17 @@ public:
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
 
     SpdkDriveInterfaceMetrics& get_metrics() { return m_metrics; }
-    drive_attributes get_attributes(const std::string& devname, const iomgr_drive_type drive_type) override;
+    drive_attributes get_attributes(const std::string& devname, const drive_type drive_type) override;
 
-    iomgr_drive_type get_drive_type(const std::string& devname) const override;
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
+    static drive_type detect_drive_type(const std::string& devname);
     static constexpr auto max_wait_sync_io_us = 5us;
     static constexpr auto min_wait_sync_io_us = 0us;
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
-    io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
+    io_device_ptr create_open_dev_internal(const std::string& devname, drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
@@ -132,7 +130,6 @@ private:
     void submit_sync_io_in_this_thread(SpdkIocb* iocb);
 
 private:
-    io_interface_comp_cb_t m_comp_cb;
     msg_module_id_t m_my_msg_modid;
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;

@@ -213,8 +213,8 @@ public:
      * thread_regex::random_user or thread_regex::any_worker.
      */
     void add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope = thread_regex::all_io);
-    void add_drive_interface(std::shared_ptr< DriveInterface > iface, bool is_default,
-                             thread_regex iface_scope = thread_regex::all_io);
+    void add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope = thread_regex::all_io);
+    std::shared_ptr< DriveInterface > get_drive_interface(const drive_interface_type type);
 
     /***
      * @brief Remove the IOInterface from the iomanager. Once removed, it will remove all the devices added to that
@@ -351,7 +351,6 @@ public:
     const io_thread_t& iothread_self() const;
     IOReactor* this_reactor() const;
 
-    DriveInterface* default_drive_interface() { return m_default_drive_iface.get(); }
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
 
@@ -370,6 +369,8 @@ public:
         return r && r->is_worker();
     }
     [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
+    [[nodiscard]] bool is_spdk_mode() const { return m_is_spdk; }
+    [[nodiscard]] bool is_uring_capable() const { return m_is_uring_capable; }
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -479,7 +480,6 @@ private:
     std::vector< std::shared_ptr< IOInterface > > m_iface_list;
     std::vector< std::shared_ptr< DriveInterface > > m_drive_ifaces;
 
-    std::shared_ptr< DriveInterface > m_default_drive_iface;
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
     std::shared_ptr< GrpcInterface > m_default_grpc_iface;
     folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
@@ -506,6 +506,7 @@ private:
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};
     bool m_spdk_reinit_needed{false};
+    bool m_is_uring_capable{false};
     bool m_is_cpu_pinning_enabled{false};
 
     folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
