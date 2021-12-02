@@ -14,11 +14,11 @@
 #include <variant>
 #include <vector>
 
-#include <fds/buffer.hpp>
-#include <fds/vector_pool.hpp>
-#include <metrics/metrics.hpp>
+#include <sisl/fds/buffer.hpp>
+#include <sisl/fds/vector_pool.hpp>
+#include <sisl/metrics/metrics.hpp>
 #include <spdk/bdev.h>
-#include <utility/enum.hpp>
+#include <sisl/utility/enum.hpp>
 
 #include "drive_interface.hpp"
 #include "iomgr_config.hpp"
@@ -29,7 +29,8 @@ struct spdk_thread;
 
 using namespace std::chrono_literals;
 namespace iomgr {
-struct SpdkDriveDeviceContext {
+struct SpdkDriveDeviceContext : public IODeviceThreadContext {
+    ~SpdkDriveDeviceContext() = default;
     struct spdk_io_channel* channel{NULL};
 };
 
@@ -51,6 +52,11 @@ public:
         REGISTER_COUNTER(completion_errors, "Spdk Drive Completion errors");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
 
+        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding unmap cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding write zero cnt", sisl::_publish_as::publish_as_gauge);
+
         register_me_to_farm();
     }
 
@@ -63,12 +69,41 @@ struct SpdkIocb;
 
 // static_assert(SPDK_BATCH_IO_NUM > 1);
 
+class IOWatchDog {
+    using io_wd_ptr_t = SpdkIocb*;
+
+public:
+    IOWatchDog();
+    ~IOWatchDog();
+
+    void add_io(const io_wd_ptr_t& iocb);
+    void complete_io(const io_wd_ptr_t& iocb);
+
+    void io_timer();
+
+    bool is_on();
+
+    IOWatchDog(const IOWatchDog&) = delete;
+    IOWatchDog(IOWatchDog&&) noexcept = delete;
+    IOWatchDog& operator=(const IOWatchDog&) = delete;
+    IOWatchDog& operator=(IOWatchDog&&) noexcept = delete;
+
+private:
+    bool m_wd_on{false};
+    iomgr::timer_handle_t m_timer_hdl;
+    std::mutex m_mtx;
+    std::map< uint64_t, SpdkIocb* > m_outstanding_ios;
+    uint64_t m_wd_pass_cnt{0}; // total watchdog check passed count
+    uint64_t m_unique_id{0};
+};
+
 class SpdkDriveInterface : public DriveInterface {
     friend struct SpdkIocb;
 
 public:
     SpdkDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
     drive_interface_type interface_type() const override { return drive_interface_type::spdk; }
+    std::string name() const override { return "spdk_drive_interface"; }
 
     void attach_completion_cb(const io_interface_comp_cb_t& cb) override { m_comp_cb = cb; }
 
@@ -107,19 +142,18 @@ public:
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
-    bool add_to_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    bool remove_from_my_reactor(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-
     io_device_ptr create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
     void init_iface_thread_ctx(const io_thread_t& thr) override {}
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
-    void init_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    void clear_iodev_thread_ctx(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
+    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
+    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
+    static void increment_outstanding_counter(const SpdkIocb* iocb);
+    static void decrement_outstanding_counter(const SpdkIocb* iocb);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
     void submit_sync_io_to_tloop_thread(SpdkIocb* iocb);
@@ -133,8 +167,6 @@ private:
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
 };
-
-ENUM(SpdkDriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)
 
 struct SpdkBatchIocb {
     SpdkBatchIocb() {
@@ -152,15 +184,63 @@ struct SpdkBatchIocb {
     std::vector< SpdkIocb* >* batch_io = nullptr;
 };
 
+struct SpdkIocb : public drive_iocb {
+    SpdkDriveInterface* iface;
+    io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
+    io_interface_comp_cb_t comp_cb = nullptr;
+    spdk_bdev_io_wait_entry io_wait_entry;
+    SpdkBatchIocb* batch_info_ptr = nullptr;
+#ifndef NDEBUG
+    bool owns_by_spdk{false};
+#endif
+    // used by io watchdog
+    uint64_t unique_id{0};
+    Clock::time_point op_start_time;
+
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
+             void* cookie) :
+            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
+        io_wait_entry.bdev = iodev->bdev();
+        io_wait_entry.cb_arg = (void*)this;
+        comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
+
+        op_start_time = Clock::now();
+    }
+
+    std::string to_string() const {
+        std::string str;
+#ifndef NDEBUG
+        str = fmt::format("id={} ", iocb_id);
+#endif
+        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, "
+                           "resubmit_cnt={}, unique_id={}, elapsed_time_ms(op_start_time)={}",
+                           (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
+                           batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt, unique_id,
+                           get_elapsed_time_ms(op_start_time));
+
+        if (has_iovs()) {
+            auto ivs = get_iovs();
+            for (auto i = 0; i < iovcnt; ++i) {
+                str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
+            }
+        } else {
+            str += fmt::format("buf={}", (void*)get_data());
+        }
+        return str;
+    }
+};
+
+#if 0
 struct SpdkIocb {
 #ifndef NDEBUG
     static std::atomic< uint64_t > _iocb_id_counter;
 #endif
+
     static constexpr int inlined_iov_count = 4;
     typedef std::array< iovec, inlined_iov_count > inline_iov_array;
     typedef std::unique_ptr< iovec[] > large_iov_array;
 
-    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, SpdkDriveOpType op_type, uint64_t size, uint64_t offset,
+    SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
             iodev(iodev), iface(iface), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
         io_wait_entry.bdev = iodev->bdev();
@@ -177,7 +257,8 @@ struct SpdkIocb {
     void set_iovs(const iovec* iovs, const int count) {
         iovcnt = count;
         if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
-        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs), count * sizeof(iovec));
+        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs),
+                    count * sizeof(iovec));
     }
 
     void set_data(char* data) { user_data = data; }
@@ -219,7 +300,7 @@ struct SpdkIocb {
 
     IODevice* iodev;
     SpdkDriveInterface* iface;
-    SpdkDriveOpType op_type;
+    DriveOpType op_type;
     uint64_t size;
     uint64_t offset;
     void* user_cookie = nullptr;
@@ -239,4 +320,5 @@ private:
     // Inline or additional memory
     std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
+#endif
 } // namespace iomgr

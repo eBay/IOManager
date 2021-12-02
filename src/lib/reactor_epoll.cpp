@@ -13,7 +13,7 @@ extern "C" {
 #include "include/iomgr.hpp"
 #include "include/reactor_epoll.hpp"
 #include "include/iomgr_config.hpp"
-#include <fds/obj_allocator.hpp>
+#include <sisl/fds/obj_allocator.hpp>
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -93,8 +93,7 @@ void IOReactorEPoll::reactor_specific_exit_thread(const io_thread_t& thr) {
     auto dropped = 0u;
     iomgr_msg* msg;
     while (m_msg_q.try_dequeue(msg)) {
-        if (msg->has_sem_block()) { msg->m_msg_sem->done(); }
-        iomgr_msg::free(msg);
+        iomgr_msg::completed(msg);
     }
     if (dropped) { LOGINFO("Exiting the reactor with {} messages yet to handle, dropping them", dropped); }
 }

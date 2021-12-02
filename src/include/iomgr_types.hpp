@@ -7,8 +7,8 @@
 #include <functional>
 #include <boost/heap/binomial_heap.hpp>
 
-#include <utility/enum.hpp>
-#include <fds/buffer.hpp>
+#include <sisl/utility/enum.hpp>
+#include <sisl/fds/buffer.hpp>
 
 struct spdk_thread;
 struct spdk_bdev_desc;
@@ -46,8 +46,9 @@ ENUM(thread_regex, uint8_t,
      least_busy_user,   // Represents least busy user io thread
      all_tloop          // Represents all tight loop threads (could be either worker or user)
 );
+typedef uint32_t eal_core_id_t;
 typedef std::variant< thread_regex, io_thread_t > thread_specifier;
-typedef std::pair< std::thread, std::shared_ptr< IOReactor > > reactor_info_t;
+typedef std::variant< std::thread, eal_core_id_t > sys_thread_id_t;
 
 typedef std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* > backing_dev_t;
 typedef uint32_t poll_cb_idx_t;
@@ -65,12 +66,14 @@ struct reschedule_data_t {
 };
 typedef std::variant< sisl::blob, reschedule_data_t, run_method_t > msg_data_t;
 
-ENUM(wait_type_t, uint8_t, no_wait, sleep, spin);
+ENUM(wait_type_t, uint8_t, no_wait, sleep, spin, callback);
 
 /////////////////// Types for all IOInterfaces ////////////////////////
+class IOInterface;
 typedef std::function< void(int64_t res, uint8_t* cookie) > io_interface_comp_cb_t;
 typedef std::function< void(void) > listen_sentinel_cb_t;
 typedef std::function< void(void) > interface_adder_t;
+typedef std::function< void(const std::shared_ptr< IOInterface >&) > interface_cb_t;
 typedef uint32_t io_interface_id_t;
 
 ENUM(iomgr_drive_type, uint8_t,

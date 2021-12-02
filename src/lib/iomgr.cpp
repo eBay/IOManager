@@ -14,6 +14,7 @@ extern "C" {
 #include <spdk/thread.h>
 #include <spdk/bdev.h>
 #include <spdk/env_dpdk.h>
+#include <spdk/init.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
 #include <rte_malloc.h>
@@ -34,6 +35,15 @@ extern "C" {
 #include <fcntl.h>
 #include <fstream>
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <sys/eventfd.h>
+#endif
+
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
+
 #include "include/aio_drive_interface.hpp"
 #include "include/spdk_drive_interface.hpp"
 #include "include/iomgr.hpp"
@@ -41,9 +51,9 @@ extern "C" {
 #include "include/reactor_spdk.hpp"
 #include "include/iomgr_config.hpp"
 
-#include <utility/thread_factory.hpp>
-#include <fds/obj_allocator.hpp>
-#include <experimental/random>
+#include <sisl/utility/thread_factory.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <random>
 #include <sds_logging/logging.h>
 #include <sisl/version.hpp>
 
@@ -53,9 +63,37 @@ SDS_OPTION_GROUP(iomgr,
 
 namespace iomgr {
 
-IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
-    m_iface_list.wlock()->reserve(inbuilt_interface_count + 5);
+static void set_thread_name(const char* thread_name) {
+#if defined(__linux__)
+    prctl(PR_SET_NAME, thread_name, 0, 0, 0);
+#elif defined(__FreeBSD__)
+    pthread_set_name_np(pthread_self(), thread_name);
+#else
+    pthread_setname_np(pthread_self(), thread_name);
+#endif
 }
+
+static bool is_cpu_pinning_enabled() {
+    if (auto quota_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"); quota_file.is_open()) {
+        double quota, period, shares;
+        quota_file >> quota;
+        if (auto period_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.cfs_period_us"); period_file.is_open()) {
+            period_file >> period;
+            if (auto shares_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.shares"); shares_file.is_open()) {
+                shares_file >> shares;
+                LOGINFOMOD(iomgr, "cfs_quota={} cfs_period={} shares={}", quota, period, shares);
+                if ((quota / period) == (shares / 1024)) {
+                    LOGINFOMOD(iomgr, "CPU Pinning is enabled in this host");
+                    return true;
+                }
+            }
+        }
+    }
+    LOGCRITICAL("WARNING: CPU Pinning is NOT enabled in this host, running multiple spdk threads could cause deadlock");
+    return false;
+}
+
+IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.reserve(inbuilt_interface_count + 5); }
 
 IOManager::~IOManager() = default;
 
@@ -76,6 +114,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     // m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(num_threads);
     m_worker_reactors.reserve(num_threads * 2); // Have preallocate for iomgr slots
+    m_worker_threads.reserve(num_threads * 2);
 
     // One common module and other internal handler
     m_common_thread_state_notifier = notifier;
@@ -85,6 +124,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     bool init_bdev{false};
     if (is_spdk) {
         init_bdev = !is_spdk_inited();
+        m_is_cpu_pinning_enabled = is_cpu_pinning_enabled();
         start_spdk();
     } else {
         sisl::AlignedAllocator::instance().set_allocator(std::move(new IOMgrAlignedAllocImpl()));
@@ -107,13 +147,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-    for (auto i = 0u; i < num_threads; i++) {
-        m_worker_reactors.push_back(reactor_info_t(
-            sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr),
-            nullptr));
-        LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
-        // t.detach();
-    }
+    start_reactors();
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -123,10 +157,10 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     if (is_spdk && init_bdev) {
-        LOGINFO("Initializing bdev subsystem");
+        LOGINFO("Initializing all spdk subsystems");
         iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
-            spdk_bdev_initialize(
-                [](void* cb_arg, int rc) {
+            spdk_subsystem_init(
+                [](int rc, void* cb_arg) {
                     IOManager* pthis = (IOManager*)cb_arg;
                     pthis->mempool_metrics_populate();
                     pthis->set_state_and_notify(iomgr_state::running);
@@ -143,7 +177,10 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     // Notify all the reactors that they are ready to make callback about thread started
     iomanager.run_on(thread_regex::all_io,
                      [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); });
-}
+
+    m_io_wd = std::make_unique< IOWatchDog >();
+
+} // namespace iomgr
 
 static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
     switch (lvl) {
@@ -219,7 +256,7 @@ void IOManager::start_spdk() {
 
             // Set CPU mask (if CPU pinning is active)
             std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
-            if (std::filesystem::exists(cpuset_path)) {
+            if (m_is_cpu_pinning_enabled && std::filesystem::exists(cpuset_path)) {
                 LOGDEBUG("Read cpuset from {}", cpuset_path);
                 std::ifstream ifs(cpuset_path);
                 corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
@@ -228,7 +265,7 @@ void IOManager::start_spdk() {
                 LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
                 opts.core_mask = corelist.c_str();
             } else {
-                LOGINFO("DPDK will set CPU mask since CPU pinning not done.");
+                LOGINFO("DPDK will not set CPU mask since CPU pinning is not enabled");
             }
             p_opts = &opts;
         }
@@ -238,8 +275,8 @@ void IOManager::start_spdk() {
 
         spdk_unaffinitize_thread();
 
-        // TODO: Do spdk_thread_lib_init_ext to handle spdk thread switching etc..
-        rc = spdk_thread_lib_init(NULL, 0);
+        rc = spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread,
+                                      IOReactorSPDK::reactor_thread_op_supported, 0);
         if (rc != 0) {
             LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
             throw std::runtime_error("SPDK Thread Lib Init failed");
@@ -262,7 +299,7 @@ void IOManager::stop() {
 
     if (m_is_spdk) {
         iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
-            spdk_bdev_finish(
+            spdk_subsystem_fini(
                 [](void* cb_arg) {
                     IOManager* pthis = (IOManager*)cb_arg;
                     pthis->set_state_and_notify(iomgr_state::stopping);
@@ -283,8 +320,8 @@ void IOManager::stop() {
     m_global_worker_timer.reset(nullptr);
 
     // Send all the threads to reliquish its io thread status
-    sync_iomgr_msg smsg(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id);
-    multicast_msg_and_wait(thread_regex::all_io, smsg);
+    auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RELINQUISH_IO_THREAD, m_internal_msg_module_id);
+    multicast_msg_and_wait(thread_regex::all_io, std::dynamic_pointer_cast< sync_msg_base >(smsg));
 
     // Now decrement and check if all io threads have already reliquished the io thread status.
     if (m_yet_to_stop_nreactors.decrement_testz()) {
@@ -298,18 +335,24 @@ void IOManager::stop() {
 
     try {
         // Join all the iomanager threads
-        for (auto& t : m_worker_reactors) {
-            if (t.first.joinable()) t.first.join();
+        for (auto& thr : m_worker_threads) {
+            if (std::holds_alternative< std::thread >(thr)) {
+                auto& t = std::get< std::thread >(thr);
+                if (t.joinable()) { t.join(); }
+            }
         }
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during thread join", e.what()); }
 
     try {
         m_worker_reactors.clear();
+        m_worker_threads.clear();
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
         m_default_drive_iface.reset();
-        m_drive_ifaces.wlock()->clear();
-        m_iface_list.wlock()->clear();
+        m_default_general_iface.reset();
+        // m_default_grpc_iface.reset();
+        m_drive_ifaces.clear();
+        m_iface_list.clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
     assert(get_state() == iomgr_state::stopped);
 
@@ -324,21 +367,72 @@ void IOManager::stop_spdk() {
     m_spdk_reinit_needed = true;
 }
 
+void IOManager::start_reactors() {
+    for (uint32_t i{0}; i < m_num_workers; ++i) {
+        m_worker_reactors.push_back(nullptr);
+    }
+
+    if (m_is_spdk && m_is_cpu_pinning_enabled) {
+        const auto current_core = spdk_env_get_current_core();
+        auto lcore = spdk_env_get_first_core();
+        uint32_t worker{0};
+
+        while (worker < m_num_workers) {
+            RELEASE_ASSERT_NE(lcore, std::numeric_limits< uint32_t >::max(),
+                              "System has less cores than iomgr threads={}", m_num_workers);
+            // Skip starting the thread loop on current core
+            if (lcore != current_core) {
+                int* p = new int{(int)worker};
+                const auto rc = spdk_env_thread_launch_pinned(
+                    lcore,
+                    [](void* arg) -> int {
+                        IOManager& p_this = IOManager::instance();
+                        const int* p = (const int*)arg;
+                        const int reactor_num = *p;
+                        delete p;
+                        set_thread_name("iomgr_thread");
+                        p_this._run_io_loop(reactor_num, p_this.m_is_spdk, nullptr, nullptr);
+                        return 0;
+                    },
+                    (void*)p);
+                RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
+                m_worker_threads.emplace_back(sys_thread_id_t{lcore});
+                LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", worker);
+                ++worker;
+            }
+            lcore = spdk_env_get_next_core(lcore);
+        }
+    } else {
+        for (auto i = 0u; i < m_num_workers; ++i) {
+            m_worker_threads.emplace_back(sys_thread_id_t(sisl::thread_factory(
+                "iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr)));
+            LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
+        }
+    }
+}
+
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, bool default_iface,
                                     thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
-    m_drive_ifaces.wlock()->push_back(iface);
-    if (default_iface) m_default_drive_iface = iface;
+    {
+        std::unique_lock lg(m_iface_list_mtx);
+        m_drive_ifaces.push_back(iface);
+        if (default_iface) m_default_drive_iface = iface;
+    }
 }
 
 void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope) {
     LOGINFOMOD(iomgr, "Adding new interface={} to thread_scope={}", (void*)iface.get(), enum_name(iface_scope));
 
     // Setup the reactor io threads to do any registration for interface specific registration
-    auto iface_list = m_iface_list.wlock();
+    {
+        std::unique_lock lg(m_iface_list_mtx);
+        m_iface_list.push_back(iface);
+    }
     iface->set_scope(iface_scope);
+
     const auto sent_count = iomanager.run_on(
         iface_scope,
         [this, iface](io_thread_addr_t taddr) {
@@ -346,16 +440,20 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
         },
         wait_type_t::sleep);
 
-    iface_list->push_back(iface);
-    if (iface->is_spdk_interface()) { mempool_metrics_populate(); }
-
+    if (iface->is_spdk_interface()) {
+        static std::once_flag flag1;
+        std::call_once(flag1, [this] { mempool_metrics_populate(); });
+    }
     LOGINFOMOD(iomgr, "Interface={} added to {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
-               iface_list->size());
+               m_iface_list.size());
 }
 
 void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
     LOGINFOMOD(iomgr, "Removing interface={} from thread_scope={}", (void*)iface.get(), enum_name(iface->scope()));
-    auto iface_list = m_iface_list.wlock();
+    {
+        std::unique_lock lg(m_iface_list_mtx);
+        m_iface_list.erase(std::remove(m_iface_list.begin(), m_iface_list.end(), iface), m_iface_list.end());
+    }
 
     const auto sent_count = iomanager.run_on(
         iface->scope(),
@@ -363,10 +461,9 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
             iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
         },
         wait_type_t::sleep);
-    iface_list->erase(std::remove(iface_list->begin(), iface_list->end(), iface), iface_list->end());
 
     LOGINFOMOD(iomgr, "Interface={} removed from {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
-               iface_list->size());
+               m_iface_list.size());
 }
 
 void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
@@ -399,18 +496,24 @@ void IOManager::stop_io_loop() { this_reactor()->stop(); }
 void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
     m_yet_to_stop_nreactors.increment();
     if (reactor->is_worker()) {
-        m_worker_reactors[reactor->m_worker_slot_num].second = reactor;
+        m_worker_reactors[reactor->m_worker_slot_num] = reactor;
 
         // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
         if (m_yet_to_start_nreactors.decrement_testz()) {
             LOGINFO("All Worker reactors started, moving iomanager to sys_init state");
             set_state_and_notify(iomgr_state::sys_init);
         }
+    } else {
+        // For IOMgr created reactors, the notification be called after all reactors are started and system init.
+        reactor->notify_thread_state(true);
     }
 }
 
 void IOManager::reactor_stopped() {
     if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
+
+    // Notify the caller registered to iomanager for it
+    this_reactor()->notify_thread_state(false /* started */);
 }
 
 void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
@@ -443,11 +546,15 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     IOReactor* min_reactor = nullptr;
     IOReactor* sender_reactor = iomanager.this_reactor();
 
+    static thread_local std::random_device s_rd{};
+    static thread_local std::default_random_engine s_re{s_rd()};
+
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
         static thread_local std::random_device s_rd{};
         static thread_local std::default_random_engine s_re{s_rd()};
-        auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)].second;
+
+        auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
         sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
@@ -476,23 +583,24 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
         });
     }
 
-    if (cloned || !sent_to) { iomgr_msg::free(msg); }
+    if ((cloned || (sent_to == 0)) && !msg->is_sync_msg()) { iomgr_msg::free(msg); }
     return sent_to;
 }
 
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
         for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
-            cb(m_worker_reactors[i].second.get(), (i == (m_worker_reactors.size() - 1)));
+            cb(m_worker_reactors[i].get(), (i == (m_worker_reactors.size() - 1)));
         }
     } else {
         all_reactors(cb);
     }
 }
 
-int IOManager::multicast_msg_and_wait(thread_regex r, sync_iomgr_msg& smsg) {
-    auto sent_to = multicast_msg(r, smsg.base_msg);
-    if (sent_to != 0) smsg.wait();
+int IOManager::multicast_msg_and_wait(thread_regex r, const std::shared_ptr< sync_msg_base >& smsg) {
+    auto sent_to = multicast_msg(r, smsg->base_msg());
+    if (sent_to != 0) { smsg->wait(); }
+    smsg->free_base_msg();
     return sent_to;
 }
 
@@ -515,14 +623,43 @@ bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
                          });
     }
 
-    if (!ret) { iomgr_msg::free(msg); }
+    if (!ret && !msg->is_sync_msg()) { iomgr_msg::free(msg); }
     return ret;
 }
 
-bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, sync_iomgr_msg& smsg) {
-    auto sent = send_msg(to_thread, smsg.base_msg);
-    if (sent) smsg.wait();
+bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, const std::shared_ptr< sync_msg_base >& smsg) {
+    auto sent = send_msg(to_thread, smsg->base_msg());
+    if (sent) { smsg->wait(); }
+    smsg->free_base_msg();
     return sent;
+}
+
+void sync_msg_base::free_base_msg() { iomgr_msg::free(m_base_msg); }
+
+void spin_iomgr_msg::set_sender_thread() {
+    if (!iomanager.am_i_io_reactor()) {
+        LOGDFATAL("Spin messages can only be issued from io thread");
+        return;
+    }
+    m_sender_thread = iomanager.iothread_self();
+}
+
+void spin_iomgr_msg::one_completion() {
+    if (m_pending.decrement_testz()) {
+        // Send reply msg here
+        m_base_msg->m_is_reply = true;
+        iomanager.send_msg(m_sender_thread, m_base_msg);
+    }
+}
+
+void spin_iomgr_msg::wait() {
+    // Check if messages delivered to all threads before wait called, then no need to spin
+    if (!m_pending.decrement_testz()) {
+        // Spin until we receive some reply message
+        while (!m_reply_rcvd) {
+            iomanager.this_reactor()->listen();
+        }
+    }
 }
 
 timer_handle_t IOManager::schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
@@ -531,7 +668,7 @@ timer_handle_t IOManager::schedule_thread_timer(uint64_t nanos_after, bool recur
 }
 
 timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                                timer_callback_t&& timer_fn) {
+                                                timer_callback_t&& timer_fn, bool wait_to_schedule) {
     timer* t = nullptr;
     if (r == thread_regex::all_worker) {
         t = m_global_worker_timer.get();
@@ -542,18 +679,17 @@ timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recur
         return null_timer_handle;
     }
 
-    return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn));
+    return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn), wait_to_schedule);
 }
 
 void IOManager::set_poll_interval(const int interval) { this_reactor()->set_poll_interval(interval); }
 int IOManager::get_poll_interval() const { return this_reactor()->get_poll_interval(); }
 
-void IOManager::foreach_interface(const auto& iface_cb) {
-    m_iface_list.withRLock([&](auto& iface_list) {
-        for (auto iface : iface_list) {
-            iface_cb(iface.get());
-        }
-    });
+void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
+    std::shared_lock lg(m_iface_list_mtx);
+    for (auto& iface : m_iface_list) {
+        iface_cb(iface);
+    }
 }
 
 IOReactor* IOManager::this_reactor() const { return IOReactor::this_reactor; }
@@ -564,8 +700,20 @@ void IOManager::all_reactors(const auto& cb) {
 }
 
 void IOManager::specific_reactor(int thread_num, const auto& cb) {
-    m_reactors.access_specific_thread(thread_num,
-                                      [&cb](std::shared_ptr< IOReactor >* preactor) { cb(preactor->get()); });
+    if ((thread_num == (int)sisl::ThreadLocalContext::my_thread_num()) && (this_reactor() != nullptr)) {
+        cb(iomanager.this_reactor());
+    } else {
+        m_reactors.access_specific_thread(thread_num,
+                                          [&cb](std::shared_ptr< IOReactor >* preactor) { cb(preactor->get()); });
+    }
+}
+
+IOReactor* IOManager::round_robin_reactor() const {
+    static uint64_t s_idx{0};
+    do {
+        const auto idx = s_idx++ % m_worker_reactors.size();
+        if (m_worker_reactors[idx] != nullptr) { return m_worker_reactors[idx].get(); }
+    } while (true);
 }
 
 msg_module_id_t IOManager::register_msg_module(const msg_handler_t& handler) {
@@ -596,7 +744,7 @@ bool IOManager::is_spdk_inited() const {
 
 /****** IODevice related ********/
 IODevice::IODevice(const int p, const thread_specifier scope) : thread_scope{scope}, pri{p} {
-    m_thread_local_ctx.reserve(IOManager::max_io_threads);
+    m_iodev_thread_ctx.reserve(IOManager::max_io_threads);
     creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
 }
 
@@ -623,8 +771,7 @@ void IODevice::clear() {
     dev = -1;
     tinfo = nullptr;
     cookie = nullptr;
-    m_thread_local_ctx.clear();
-    creator = nullptr;
+    m_iodev_thread_ctx.clear();
 }
 
 uint8_t* IOManager::iobuf_alloc(size_t align, size_t size, const sisl::buftag tag) {
@@ -727,4 +874,5 @@ void IOMempoolMetrics::on_gather() {
     GAUGE_UPDATE(*this, iomempool_free_count, spdk_mempool_count(m_mp));
     GAUGE_UPDATE(*this, iomempool_alloced_count, rte_mempool_in_use_count((const struct rte_mempool*)m_mp));
 }
+
 } // namespace iomgr

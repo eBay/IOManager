@@ -5,13 +5,13 @@
 #include <random>
 #include <chrono>
 
-#include <fds/bitset.hpp>
+#include <sisl/fds/bitset.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
-#include <utility/enum.hpp>
+#include <sisl/utility/enum.hpp>
 #include <nlohmann/json.hpp>
 #include <fmt/format.h>
-#include <fds/buffer.hpp>
+#include <sisl/fds/buffer.hpp>
 
 #include "iomgr.hpp"
 #include "job.hpp"
@@ -98,16 +98,16 @@ public:
     void print(const char* work_type, bool metrics_dump = false) const {
         uint64_t v;
         fmt::memory_buffer buf;
-        if ((v = write_cnt.load())) fmt::format_to(buf, "write_cnt={} ", v);
-        if ((v = read_cnt.load())) fmt::format_to(buf, "read_cnt={} ", v);
-        if ((v = unmap_cnt.load())) fmt::format_to(buf, "unmap_cnt={} ", v);
-        if ((v = read_err_cnt.load())) fmt::format_to(buf, "read_err_cnt={} ", v);
-        if ((v = data_match_cnt.load())) fmt::format_to(buf, "data_match_cnt={} ", v);
-        if ((v = csum_match_cnt.load())) fmt::format_to(buf, "csum_match_cnt={} ", v);
-        if ((v = hdr_only_match_cnt.load())) fmt::format_to(buf, "hdr_only_match_cnt={} ", v);
-        if ((v = vol_create_cnt.load())) fmt::format_to(buf, "vol_create_cnt={} ", v);
-        if ((v = vol_del_cnt.load())) fmt::format_to(buf, "vol_del_cnt={} ", v);
-        if ((v = vol_mounted_cnt.load())) fmt::format_to(buf, "vol_mounted_cnt={} ", v);
+        if ((v = write_cnt.load())) fmt::format_to(fmt::appender(buf), "write_cnt={} ", v);
+        if ((v = read_cnt.load())) fmt::format_to(fmt::appender(buf), "read_cnt={} ", v);
+        if ((v = unmap_cnt.load())) fmt::format_to(fmt::appender(buf), "unmap_cnt={} ", v);
+        if ((v = read_err_cnt.load())) fmt::format_to(fmt::appender(buf), "read_err_cnt={} ", v);
+        if ((v = data_match_cnt.load())) fmt::format_to(fmt::appender(buf), "data_match_cnt={} ", v);
+        if ((v = csum_match_cnt.load())) fmt::format_to(fmt::appender(buf), "csum_match_cnt={} ", v);
+        if ((v = hdr_only_match_cnt.load())) fmt::format_to(fmt::appender(buf), "hdr_only_match_cnt={} ", v);
+        if ((v = vol_create_cnt.load())) fmt::format_to(fmt::appender(buf), "vol_create_cnt={} ", v);
+        if ((v = vol_del_cnt.load())) fmt::format_to(fmt::appender(buf), "vol_del_cnt={} ", v);
+        if ((v = vol_mounted_cnt.load())) fmt::format_to(fmt::appender(buf), "vol_mounted_cnt={} ", v);
 
         LOGINFO("{} Output: [{}]", work_type, buf.data());
         if (metrics_dump) LOGINFO("Metrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(2));
