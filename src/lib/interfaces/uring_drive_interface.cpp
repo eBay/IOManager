@@ -2,20 +2,32 @@
 // Created by Kadayam, Hari on 2021-08-16.
 //
 #include "uring_drive_interface.hpp"
+#include "iomgr.hpp"
+
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wattributes"
 #endif
 #include <folly/Exception.h>
 #include "iomgr_config.hpp"
+#include <sisl/fds/obj_allocator.hpp>
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic pop
 #endif
 
+#ifdef __linux__
+#include <sys/epoll.h>
+#endif
+
+#include <sisl/fds/utils.hpp>
+#include <sds_logging/logging.h>
+
 namespace iomgr {
-uring_drive_channel::uring_drive_channel() {
+thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};
+
+uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) {
     // TODO: For now setup as interrupt mode instead of pollmode
-    int ret = io_uring_queue_init(UringDriveInterface::max_entries, &m_ring, 0);
+    int ret = io_uring_queue_init(UringDriveInterface::per_thread_qdepth, &m_ring, 0);
     if (ret) { folly::throwSystemError(fmt::format("Unable to create uring queue created ret={}", ret)); }
 
     int ev_fd = eventfd(0, EFD_NONBLOCK);
@@ -25,8 +37,10 @@ uring_drive_channel::uring_drive_channel() {
     if (ret == -1) { folly::throwSystemError("Unable to register event fd to uring queue"); }
 
     // Create io device and add it local thread
+    using namespace std::placeholders;
     m_ring_ev_iodev = iomanager.generic_interface()->make_io_device(
-        backing_dev_t(ev_fd), EPOLLIN, 0, nullptr, true, bind_this(UringDriveInterface::on_event_notification, 3));
+        backing_dev_t(ev_fd), EPOLLIN, 0, nullptr, true,
+        std::bind(&UringDriveInterface::on_event_notification, iface, _1, _2, _3));
 }
 
 uring_drive_channel::~uring_drive_channel() {
@@ -56,7 +70,7 @@ void uring_drive_channel::submit_ios() {
     }
 }
 
-void uring_drive_channel::submit_if_needed(drive_iocb* iocb, struct io_uring_sqe*, bool part_of_batch) {
+void uring_drive_channel::submit_if_needed(drive_iocb* iocb, struct io_uring_sqe* sqe, bool part_of_batch) {
     io_uring_sqe_set_data(sqe, (void*)iocb);
     ++m_prepared_ios;
     if (!part_of_batch) { submit_ios(); }
@@ -97,10 +111,10 @@ void uring_drive_channel::drain_waitq() {
 }
 
 ///////////////////////////// UringDriveInterface /////////////////////////////////////////
-UringDriveInterface::UringDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb{cb} {}
+UringDriveInterface::UringDriveInterface(const io_interface_comp_cb_t& cb) : KernelDriveInterface(cb) {}
 
 void UringDriveInterface::init_iface_thread_ctx(const io_thread_t& thr) {
-    if (t_uring_ch == nullptr) { t_uring_ch = new uring_drive_channel(); }
+    if (t_uring_ch == nullptr) { t_uring_ch = new uring_drive_channel(this); }
 }
 
 void UringDriveInterface::clear_iface_thread_ctx(const io_thread_t& thr) {
@@ -110,27 +124,11 @@ void UringDriveInterface::clear_iface_thread_ctx(const io_thread_t& thr) {
     }
 }
 
-io_device_ptr UringDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
-    if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
-
-    LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
+io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_type dev_type, int oflags) {
+    LOGMSG_ASSERT(((dev_type == drive_type::block_nvme) || (dev_type == drive_type::block_hdd) ||
+                   (dev_type == drive_type::file_on_hdd) || (dev_type == drive_type::file_on_nvme)),
                   "Unexpected dev type to open {}", dev_type);
-
-#ifdef __linux__
-    if ((dev_type == iomgr_drive_type::block) && IM_DYNAMIC_CONFIG(uring.zeros_by_ioctl)) {
-        static std::once_flag flag1;
-        std::call_once(flag1, [this, &devname]() { m_max_write_zeros = get_max_write_zeros(devname); });
-    }
-#endif
-
-    if (m_max_write_zeros == 0) {
-        static std::once_flag flag2;
-        std::call_once(flag2, [this, &devname, &dev_type]() {
-            m_zero_buf = sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
-                                                                           max_buf_size, sisl::buftag::common);
-            std::memset(m_zero_buf, 0, max_buf_size);
-        });
-    }
+    init_write_zero_buf(devname, dev_type);
 
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -142,11 +140,11 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, iomgr_dr
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
-    iodev->drive_type = dev_type;
+    iodev->dtype = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an
     // event fd and read/write use this device fd to control with iocb.
-    LOGINFO("Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
+    LOGINFOMOD(iomgr, "Device={} of type={} opened with flags={} successfully, fd={}", devname, dev_type, oflags, fd);
     return iodev;
 }
 
@@ -159,7 +157,7 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
 void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
                                       uint8_t* cookie, bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
-    iocb->set_data(data);
+    iocb->set_data((char*)data);
 
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
@@ -204,7 +202,12 @@ void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iov
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
-void UringDriveInterface::submit_batch() override { t_uring_ch->submit_ios(); }
+void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
+                                      bool part_of_batch) {
+    RELEASE_ASSERT(0, "async_unmap is not supported for uring yet");
+}
+
+void UringDriveInterface::submit_batch() { t_uring_ch->submit_ios(); }
 
 void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]] void* cookie,
                                                 [[maybe_unused]] int event) {
@@ -230,7 +233,7 @@ void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]
         io_uring_cqe_seen(&t_uring_ch->m_ring, cqe);
 
         // Don't access cqe beyond this point.
-        if (res >= 0) {
+        if (iocb->result >= 0) {
             LOGTRACEMOD(iomgr, "Received completion event, iocb={} Result={}", (void*)iocb, iocb->result);
             complete_io(iocb);
         } else {
@@ -247,7 +250,10 @@ void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]
 }
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
-    if (m_comp_cb) { m_comp_cb(iocb->result, iocb->user_cookie); }
+    if (m_comp_cb) {
+        auto res = (iocb->result > 0) ? 0 : iocb->result;
+        m_comp_cb(res, (uint8_t*)iocb->user_cookie);
+    }
     sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
 }
 } // namespace iomgr

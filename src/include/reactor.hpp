@@ -105,6 +105,7 @@ public:
 /******************* Thread Related ************************/
 class IOReactor;
 class IOInterface;
+class DriveInterface;
 
 struct io_thread {
     backing_thread_t thread_impl; // What type of thread it is backed by
@@ -146,7 +147,7 @@ public:
     sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_thread_ctx;
     bool ready{false};
     std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
-    iomgr_drive_type drive_type{iomgr_drive_type::unknown};
+    drive_type dtype{drive_type::unknown};
 
 #ifdef REFCOUNTED_OPEN_DEV
     sisl::atomic_counter< int > opened_count{0};
@@ -173,6 +174,7 @@ public:
     inline int priority() const { return pri; }
     std::string dev_id() const;
     void clear();
+    DriveInterface* drive_interface();
 };
 
 /****************** Reactor related ************************/

@@ -66,67 +66,18 @@ using namespace std;
 thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
 std::vector< int > AioDriveInterface::s_poll_interval_table;
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) { init_poll_interval_table(); }
+AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : KernelDriveInterface(cb) {
+    init_poll_interval_table();
+}
 
 AioDriveInterface::~AioDriveInterface() {}
 
-#ifdef __linux__
-static std::string get_major_minor(const std::string& devname) {
-    struct stat statbuf;
-    const int ret{::stat(devname.c_str(), &statbuf)};
-    if (ret != 0) {
-        LOGERROR("Unable to stat the path {}, ignoring to get major/minor", devname.c_str());
-        return "";
-    }
-    return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
-}
-
-static uint64_t get_max_write_zeros(const std::string& devname) {
-    uint64_t max_zeros{0};
-    const auto maj_min{get_major_minor(devname)};
-    if (!maj_min.empty()) {
-        const auto p{fmt::format("/sys/dev/block/{}/queue/write_zeroes_max_bytes", maj_min)};
-        if (auto max_zeros_file = std::ifstream(p); max_zeros_file.is_open()) {
-            max_zeros_file >> max_zeros;
-        } else {
-            LOGERROR("Unable to open sys path={} to get write_zeros_max_bytes, assuming 0", p);
-        }
-    }
-    return max_zeros;
-}
-#endif
-
-io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_drive_type dev_type, int oflags) {
+io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type dev_type, int oflags) {
     std::lock_guard lock{m_open_mtx};
-
-    if (dev_type == iomgr_drive_type::unknown) { dev_type = get_drive_type(devname); }
-
-    LOGMSG_ASSERT(((dev_type == iomgr_drive_type::block) || (dev_type == iomgr_drive_type::file)),
+    LOGMSG_ASSERT(((dev_type == drive_type::block_nvme) || (dev_type == drive_type::block_hdd) ||
+                   (dev_type == drive_type::file_on_hdd) || (dev_type == drive_type::file_on_nvme)),
                   "Unexpected dev type to open {}", dev_type);
-
-#ifdef __linux__
-    if ((dev_type == iomgr_drive_type::block) && IM_DYNAMIC_CONFIG(aio.zeros_by_ioctl)) {
-        if (m_max_write_zeros == std::numeric_limits< uint64_t >::max()) {
-            m_max_write_zeros = get_max_write_zeros(devname);
-        }
-    } else {
-        m_max_write_zeros = 0;
-    }
-#elif
-    m_max_write_zeros = 0;
-#endif
-
-    if (m_max_write_zeros == 0) {
-        if (!m_zero_buf) {
-            m_zero_buf = std::unique_ptr< uint8_t, std::function<void(uint8_t* const)> >{
-                sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
-                                                                  max_buf_size, sisl::buftag::common),
-                [](uint8_t* const ptr) {
-                    if (ptr) sisl::AlignedAllocator::allocator().aligned_free(ptr, sisl::buftag::common);
-                }};
-            if (m_zero_buf) std::memset(m_zero_buf.get(), 0, max_buf_size);
-        };
-    }
+    init_write_zero_buf(devname, dev_type);
 
     auto fd = ::open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -138,7 +89,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
-    iodev->drive_type = dev_type;
+    iodev->dtype = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an
     // event fd and read/write use this device fd to control with iocb.
@@ -176,9 +127,7 @@ void AioDriveInterface::clear_iface_thread_ctx([[maybe_unused]] const io_thread_
     iomanager.this_reactor()->unregister_poll_interval_cb(t_aio_ctx->poll_cb_idx);
 
     int err = io_destroy(t_aio_ctx->ioctx);
-    if (err) {
-        LOGERROR("io_destroy failed with ret status={} errno={}", err, errno);
-    }
+    if (err) { LOGERROR("io_destroy failed with ret status={} errno={}", err, errno); }
 
     iomanager.generic_interface()->remove_io_device(t_aio_ctx->ev_io_dev);
     close(t_aio_ctx->ev_fd);
@@ -279,75 +228,8 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
     }
 }
 
-void AioDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if ((iodev->drive_type == iomgr_drive_type::block) && (m_max_write_zeros != 0)) {
-        write_zero_ioctl(iodev, size, offset, cookie);
-    } else {
-        write_zero_writev(iodev, size, offset, cookie);
-    }
-}
-
-void AioDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    assert(m_max_write_zeros != 0);
-
-#ifdef __linux__
-    uint64_t range[2];
-    int ret{0};
-    while (size > 0) {
-        uint64_t this_size = std::min(size, m_max_write_zeros);
-        range[0] = offset;
-        range[1] = this_size;
-        ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-        if (ret != 0) {
-            LOGERROR("Error in writing zeros at offset={} size={} errno={}", offset, this_size, errno);
-            break;
-        }
-        offset += this_size;
-        size -= this_size;
-    }
-    if (m_comp_cb) { m_comp_cb(((ret != 0) ? errno : 0), cookie); }
-#endif
-}
-
-void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
-    if (size == 0 || !m_zero_buf) {
-        assert(false);
-        return;
-    }
-
-    uint64_t total_sz_written = 0;
-    while (total_sz_written < size) {
-        const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
-                                                                                   : (size - total_sz_written)};
-
-        const auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
-
-        std::vector< iovec > iov(iovcnt);
-        for (uint32_t i = 0; i < iovcnt; ++i) {
-            iov[i].iov_base = m_zero_buf.get();
-            iov[i].iov_len = max_buf_size;
-        }
-
-        iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
-        try {
-            // returned written sz already asserted in sync_writev;
-            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
-        } catch (std::exception& e) {
-            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
-                           iodev->devname, size);
-        }
-
-        total_sz_written += sz_to_write;
-    }
-
-    assert(total_sz_written == size);
-
-    if (m_comp_cb) { m_comp_cb(errno, cookie); }
-}
-
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                    bool part_of_batch) {
-
     if (!t_aio_ctx->can_submit_aio()) {
         auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
         push_retry_list(iocb, true /* no_slot */);
@@ -372,7 +254,6 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
 
 void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                      uint8_t* cookie, bool part_of_batch) {
-
     if (!t_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
         || flip::Flip::instance().test_flip("io_write_iocb_empty_flip")
@@ -402,7 +283,6 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
 
 void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
                                     uint8_t* cookie, bool part_of_batch) {
-
     if (!t_aio_ctx->can_submit_aio()
 #ifdef _PRERELEASE
         || flip::Flip::instance().test_flip("io_read_iocb_empty_flip")
@@ -495,127 +375,6 @@ bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
         if (m_comp_cb) m_comp_cb(errno, (uint8_t*)iocb->data);
     }
     return ret;
-}
-
-ssize_t AioDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
-    return _sync_write(iodev->fd(), data, size, offset);
-}
-
-ssize_t AioDriveInterface::_sync_write(int fd, const char* data, uint32_t size, uint64_t offset) {
-    ssize_t written_size = 0;
-    uint32_t resubmit_cnt = 0;
-    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
-        written_size = pwrite(fd, data, (ssize_t)size, (off_t)offset);
-#ifdef _PRERELEASE
-        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
-        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { written_size = 0; }
-#endif
-        ++resubmit_cnt;
-    }
-    if (written_size != size) {
-        folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
-                                            offset, size, written_size, errno, fd));
-    }
-
-    return written_size;
-}
-
-ssize_t AioDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    return _sync_writev(iodev->fd(), iov, iovcnt, size, offset);
-}
-
-ssize_t AioDriveInterface::_sync_writev(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    ssize_t written_size = 0;
-    uint32_t resubmit_cnt = 0;
-    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
-        written_size = pwritev(fd, iov, iovcnt, offset);
-#ifdef _PRERELEASE
-        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
-        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { written_size = 0; }
-#endif
-        ++resubmit_cnt;
-    }
-    if (written_size != size) {
-        folly::throwSystemError(
-            fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
-                        size, written_size, iovcnt, errno, fd));
-    }
-
-    return written_size;
-}
-
-ssize_t AioDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
-    return _sync_read(iodev->fd(), data, size, offset);
-}
-
-ssize_t AioDriveInterface::_sync_read(int fd, char* data, uint32_t size, uint64_t offset) {
-    ssize_t read_size = 0;
-    uint32_t resubmit_cnt = 0;
-    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
-        read_size = pread(fd, data, (ssize_t)size, (off_t)offset);
-#ifdef _PRERELEASE
-        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
-        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { read_size = 0; }
-#endif
-        ++resubmit_cnt;
-    }
-    if (read_size != size) {
-        folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
-                                            offset, size, read_size, errno, fd));
-    }
-
-    return read_size;
-}
-
-ssize_t AioDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    return _sync_readv(iodev->fd(), iov, iovcnt, size, offset);
-}
-
-ssize_t AioDriveInterface::_sync_readv(int fd, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    ssize_t read_size = 0;
-    uint32_t resubmit_cnt = 0;
-    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
-        read_size = preadv(fd, iov, iovcnt, (off_t)offset);
-#ifdef _PRERELEASE
-        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
-        if (flip_resubmit_cnt != boost::none && resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { read_size = 0; }
-#endif
-        ++resubmit_cnt;
-    }
-    if (read_size != size) {
-        folly::throwSystemError(
-            fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,
-                        size, read_size, iovcnt, errno, fd));
-    }
-
-    return read_size;
-}
-
-size_t AioDriveInterface::get_size(IODevice* iodev) {
-    if (std::filesystem::is_regular_file(std::filesystem::status(iodev->devname))) {
-        struct stat buf;
-        if (fstat(iodev->fd(), &buf) >= 0) { return buf.st_size; }
-    } else {
-        assert(std::filesystem::is_block_file(std::filesystem::status(iodev->devname)));
-        size_t devsize;
-        if (ioctl(iodev->fd(), BLKGETSIZE64, &devsize) >= 0) { return devsize; }
-    }
-
-    folly::throwSystemError(fmt::format("device stat failed for dev {} errno = {}", iodev->fd(), errno));
-    return 0;
-}
-
-drive_attributes AioDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
-    // TODO: Get this information from SSD using /sys commands
-    drive_attributes attr;
-    attr.phys_page_size = 4096;
-    attr.align_size = 512;
-#ifndef NDEBUG
-    attr.atomic_phys_page_size = 512;
-#else
-    attr.atomic_phys_page_size = 4096;
-#endif
-    return attr;
 }
 
 void AioDriveInterface::init_poll_interval_table() {
