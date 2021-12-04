@@ -1,16 +1,21 @@
-
 *.pyc
-test_package/build
-cmake-build*
-.idea/
-
-.idea/
-cmake-build*
-
+.idea/**
+.cache
 .clangd
-debug/*
-release/*
-nosanitize/*
 
 build
-.cache
+test_package/build
+nosanitize/**
+
+# Settings generated files and build files
+generated/**
+debug/**
+release/**
+cmake-*/**
+
+# vscode
+.vscode/**
+
+# Visual Studio
+CMakeSettings.json
+.vs/**
