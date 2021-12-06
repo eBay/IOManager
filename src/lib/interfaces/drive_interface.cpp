@@ -11,9 +11,15 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/sysmacros.h>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <array>
 
 #include <fmt/format.h>
 #include <flip/flip.hpp>
+#include <boost/algorithm/string.hpp>
 
 #include "iomgr.hpp"
 #include "drive_interface.hpp"
@@ -82,6 +88,75 @@ static uint64_t get_max_write_zeros(const std::string& devname) {
         }
     }
     return max_zeros;
+}
+
+// NOTE: This piece of code is taken from stackoverflow
+// https://stackoverflow.com/questions/478898/how-do-i-execute-a-command-and-get-the-output-of-the-command-within-c-using-po
+std::string exec_command(const std::string& cmd) {
+    std::array< char, 128 > buffer;
+    std::string result;
+    std::unique_ptr< FILE, decltype(&pclose) > pipe(popen(cmd.c_str(), "r"), pclose);
+    if (!pipe) {
+        LOGINFO("Unable to execute the command {}, perhaps command doesn't exists", cmd);
+        return result;
+    }
+    while (std::fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
+}
+
+static std::string find_megacli_bin_path() {
+    static std::vector< std::string > paths{"/usr/bin/megacli", "/bin/megacli", "/usr/local/bin/megacli",
+                                            "/bin/MegaCli64"};
+    for (auto& p : paths) {
+        if (std::filesystem::exists(p)) { return p; }
+    }
+    return std::string("");
+}
+
+static std::string get_raid_hdd_vendor_model() {
+    // Find megacli bin in popular paths
+    const auto megacli_bin = find_megacli_bin_path();
+    if (megacli_bin.empty()) {
+        LOGINFO("Megacli is not available in this host, ignoring hdd model detection");
+        return megacli_bin;
+    }
+
+    // Run megacli command and parse to get the vendor number
+    const auto summary_cmd = fmt::format("{} -ShowSummary -aALL", megacli_bin);
+    const auto summary_out = exec_command(summary_cmd);
+    if (summary_out.empty()) {
+        LOGINFO("We are not able to find any raid/megacli command, ignorning");
+        return summary_out;
+    }
+
+    // Parse the output to see number of enclosure and pick
+    std::vector< std::string > summary_lines;
+    boost::split(summary_lines, summary_out, boost::is_any_of("\n"));
+    const std::regex pd_regex("^ +PD");
+    const std::regex id_regex("^ +Product Id +: +(.+)");
+    const std::regex vd_regex("^ +Virtual Drives");
+    std::smatch base_match;
+    bool pd_area{false};
+    std::string product_id; // Output where we get model/product id
+    for (auto& line : summary_lines) {
+        if (pd_area) {
+            if (std::regex_match(line, base_match, id_regex)) {
+                // The first sub_match is the whole string; the next sub_match is the first parenthesized expression.
+                if (base_match.size() == 2) {
+                    product_id = base_match[1].str();
+                    break;
+                }
+            } else if (std::regex_match(line, base_match, vd_regex)) {
+                pd_area = false;
+                break;
+            }
+        } else {
+            if (std::regex_match(line, base_match, pd_regex)) { pd_area = true; }
+        }
+    }
+    return product_id;
 }
 
 drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
@@ -191,6 +266,30 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
 #else
     attr.atomic_phys_page_size = 4096;
 #endif
+    attr.num_streams = 1;
+
+    if ((drive_type == drive_type::block_hdd) || (drive_type == drive_type::file_on_hdd)) {
+        // Try to find the underlying device type and see if any vendor data matches with our preconfigured settings
+        static std::string model = get_raid_hdd_vendor_model();
+        static std::unordered_map< std::string, uint32_t > s_num_streams_for_model = {
+            {"HGST HUS726T6TAL", 24u}, // Western Digital
+            {"ST6000NM021A-2R7", 16u}, // Seagate
+        };
+
+        if (SDS_OPTIONS.count("hdd_streams") > 0) {
+            attr.num_streams = SDS_OPTIONS["hdd_streams"].as< uint32_t >();
+            LOGINFO("Device={} uses overriden attribute for hdd streams={}", devname, attr.num_streams);
+        } else if (!model.empty()) {
+            const auto it = s_num_streams_for_model.find(model);
+            if (it != s_num_streams_for_model.end()) {
+                attr.num_streams = it->second;
+                LOGINFO("Detected hdd product id as {}, setting num_streams as {}", model, it->second);
+            } else {
+                LOGINFO("Detected hdd product id as {}, but num_streams not configured for that, assuming default",
+                        model);
+            }
+        }
+    }
     return attr;
 }
 
