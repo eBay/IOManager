@@ -28,13 +28,14 @@
 #include "iomgr_types.hpp"
 
 namespace iomgr {
-constexpr unsigned MAX_OUTSTANDING_IO{200};  // if max outstanding IO is more than 200 then io_submit will fail.
+constexpr unsigned MAX_OUTSTANDING_IO{200}; // if max outstanding IO is more than 200 then io_submit will fail.
 constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions to process in one shot
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
-static constexpr uint32_t max_buf_size = 1 * 1024 * 1024ul;             // 1 MB
-static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
+static constexpr uint32_t max_write_zero_buf_size = 10 * 1024 * 1024ul; // 10 MB
+static constexpr uint32_t max_write_zero_iovcnt = 100;
+static constexpr uint32_t max_write_zero_size = max_write_zero_buf_size * max_write_zero_iovcnt; // 1 GB
 
 #ifdef __linux__
 struct iocb_info_t : public iocb {
@@ -342,8 +343,8 @@ private:
 private:
     static thread_local aio_thread_context* t_aio_ctx;
     std::mutex m_open_mtx;
-    std::unique_ptr< uint8_t, std::function<void(uint8_t* const)>> m_zero_buf{};
-    uint64_t m_max_write_zeros{std::numeric_limits<uint64_t>::max()};
+    std::unique_ptr< uint8_t, std::function< void(uint8_t* const) > > m_zero_buf{};
+    uint64_t m_max_write_zeros{std::numeric_limits< uint64_t >::max()};
     AioDriveInterfaceMetrics m_metrics;
     io_interface_comp_cb_t m_comp_cb;
 };

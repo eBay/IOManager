@@ -118,13 +118,13 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, iomgr_driv
 
     if (m_max_write_zeros == 0) {
         if (!m_zero_buf) {
-            m_zero_buf = std::unique_ptr< uint8_t, std::function<void(uint8_t* const)> >{
+            m_zero_buf = std::unique_ptr< uint8_t, std::function< void(uint8_t* const) > >{
                 sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
-                                                                  max_buf_size, sisl::buftag::common),
+                                                                  max_write_zero_buf_size, sisl::buftag::common),
                 [](uint8_t* const ptr) {
                     if (ptr) sisl::AlignedAllocator::allocator().aligned_free(ptr, sisl::buftag::common);
                 }};
-            if (m_zero_buf) std::memset(m_zero_buf.get(), 0, max_buf_size);
+            if (m_zero_buf) std::memset(m_zero_buf.get(), 0, max_write_zero_buf_size);
         };
     }
 
@@ -176,9 +176,7 @@ void AioDriveInterface::clear_iface_thread_ctx([[maybe_unused]] const io_thread_
     iomanager.this_reactor()->unregister_poll_interval_cb(t_aio_ctx->poll_cb_idx);
 
     int err = io_destroy(t_aio_ctx->ioctx);
-    if (err) {
-        LOGERROR("io_destroy failed with ret status={} errno={}", err, errno);
-    }
+    if (err) { LOGERROR("io_destroy failed with ret status={} errno={}", err, errno); }
 
     iomanager.generic_interface()->remove_io_device(t_aio_ctx->ev_io_dev);
     close(t_aio_ctx->ev_fd);
@@ -315,34 +313,46 @@ void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64
         return;
     }
 
-    uint64_t total_sz_written = 0;
-    while (total_sz_written < size) {
-        const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
-                                                                                   : (size - total_sz_written)};
-
-        const auto iovcnt{(sz_to_write - 1) / max_buf_size + 1};
-
+    if (size <= max_write_zero_size) {
+        const auto iovcnt = (size - 1) / max_write_zero_buf_size + 1;
         std::vector< iovec > iov(iovcnt);
         for (uint32_t i = 0; i < iovcnt; ++i) {
             iov[i].iov_base = m_zero_buf.get();
-            iov[i].iov_len = max_buf_size;
+            iov[i].iov_len = max_write_zero_buf_size;
+        }
+        iov[iovcnt - 1].iov_len = size - (max_write_zero_buf_size * (iovcnt - 1));
+
+        // Do Async write if it is within its limits
+        async_writev(iodev, iov.data(), iovcnt, size, offset, cookie, false /* batch */);
+    } else {
+        // Beyond limits of write zero, issue sync writes one by one and then do a callback ourselves
+        uint64_t total_sz_written = 0;
+        while (total_sz_written < size) {
+            const uint64_t sz_to_write = std::min(max_write_zero_size, (uint32_t)(size - total_sz_written));
+            const auto iovcnt = (sz_to_write - 1) / max_write_zero_buf_size + 1;
+
+            std::vector< iovec > iov(iovcnt);
+            for (uint32_t i = 0; i < iovcnt; ++i) {
+                iov[i].iov_base = m_zero_buf.get();
+                iov[i].iov_len = max_write_zero_buf_size;
+            }
+
+            iov[iovcnt - 1].iov_len = sz_to_write - (max_write_zero_buf_size * (iovcnt - 1));
+            try {
+                // returned written sz already asserted in sync_writev;
+                sync_writev(iodev, iov.data(), iovcnt, sz_to_write, offset + total_sz_written);
+            } catch (std::exception& e) {
+                RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
+                               iodev->devname, size);
+            }
+
+            total_sz_written += sz_to_write;
         }
 
-        iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
-        try {
-            // returned written sz already asserted in sync_writev;
-            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
-        } catch (std::exception& e) {
-            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
-                           iodev->devname, size);
-        }
+        assert(total_sz_written == size);
 
-        total_sz_written += sz_to_write;
+        if (m_comp_cb) { m_comp_cb(errno, cookie); }
     }
-
-    assert(total_sz_written == size);
-
-    if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
 
 void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
