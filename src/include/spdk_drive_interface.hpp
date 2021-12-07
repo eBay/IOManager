@@ -126,6 +126,9 @@ public:
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
     void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
+    void fsync(IODevice* iodev, uint8_t* cookie) override {
+        LOGMSG_ASSERT(false, "fsync on spdk drive interface is not supported");
+    }
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
 

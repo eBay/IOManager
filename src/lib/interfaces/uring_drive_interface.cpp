@@ -94,6 +94,10 @@ static void prep_sqe_from_iocb(drive_iocb* iocb, struct io_uring_sqe* sqe) {
         }
         break;
 
+    case DriveOpType::FSYNC:
+        io_uring_prep_fsync(sqe, iocb->iodev->fd(), IORING_FSYNC_DATASYNC);
+        break;
+
     default:
         break;
     }
@@ -205,6 +209,15 @@ void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iov
 void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                                       bool part_of_batch) {
     RELEASE_ASSERT(0, "async_unmap is not supported for uring yet");
+}
+
+void UringDriveInterface::fsync(IODevice* iodev, uint8_t* cookie) {
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::FSYNC, 0, 0, cookie);
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
+
+    io_uring_prep_fsync(sqe, iodev->fd(), IORING_FSYNC_DATASYNC);
+    t_uring_ch->submit_if_needed(iocb, sqe, false /* batching */);
 }
 
 void UringDriveInterface::submit_batch() { t_uring_ch->submit_ios(); }

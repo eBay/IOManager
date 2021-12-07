@@ -301,6 +301,9 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    void fsync(IODevice* iodev, uint8_t* cookie) override {
+        LOGMSG_ASSERT(false, "fsync on aio drive interface is not supported");
+    }
     virtual void submit_batch() override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);

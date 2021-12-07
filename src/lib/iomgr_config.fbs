@@ -54,7 +54,7 @@ table Poll {
     force_wakeup_by_io_decay_factor : float = 0.5;
 
     //io_wakeup_interval_decay_percentage : float = 0.5;
-    
+   
 }
 
 table IomgrSettings {
@@ -62,7 +62,6 @@ table IomgrSettings {
     aio : AioDriveInterface;
     iomem: IOMemory;
     poll: Poll;
-
     cpuset_path: string;
 
     // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
