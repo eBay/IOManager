@@ -46,7 +46,7 @@ class IOMgrConan(ConanFile):
             "isa-l/2.21.0",
             "semver/1.1.0",
             "grpc_internal/1.37.0",
-            "liburing/0.7"
+            "liburing/2.1"
             )
     build_requires = (
                 "gtest/1.10.0",
