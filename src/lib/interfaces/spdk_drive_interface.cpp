@@ -38,7 +38,7 @@ thread_local int s_temp_thread_ref_count{0};
 std::atomic< uint64_t > drive_iocb::_iocb_id_counter{0};
 #endif
 
-SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {
+SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : DriveInterface(cb) {
     m_my_msg_modid = iomanager.register_msg_module([this](iomgr_msg* msg) { handle_msg(msg); });
 }
 
@@ -46,7 +46,7 @@ static void bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev* bdev
 
 struct creat_ctx {
     std::string address;
-    iomgr_drive_type addr_type;
+    drive_type addr_type;
     std::error_condition err;
     const char* names[128];
     bool is_done{false};
@@ -191,16 +191,16 @@ static void create_dev_internal(const std::shared_ptr< creat_ctx >& ctx) {
     // a testing and docker environment
     try {
         switch (ctx->addr_type) {
-        case iomgr_drive_type::raw_nvme:
+        case drive_type::raw_nvme:
             create_nvme_bdev(ctx);
             break;
 
-        case iomgr_drive_type::file:
-        case iomgr_drive_type::block:
+        case drive_type::file_on_nvme:
+        case drive_type::block_nvme:
             create_fs_bdev(ctx);
             break;
 
-        case iomgr_drive_type::spdk_bdev:
+        case drive_type::spdk_bdev:
             // Already a bdev, set the ctx as done
             ctx->bdev_name = ctx->address;
             ctx->creator = iomanager.iothread_self();
@@ -288,7 +288,7 @@ void IOWatchDog::io_timer() {
     }
 }
 
-io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_drive_type drive_type,
+io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, drive_type drive_type,
                                            [[maybe_unused]] int oflags) {
     io_device_ptr iodev{nullptr};
     m_opened_device.withWLock([this, &devname, &iodev, &drive_type](auto& m) {
@@ -309,15 +309,15 @@ io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, iomgr_dri
     return iodev;
 }
 
-io_device_ptr SpdkDriveInterface::create_open_dev_internal(const std::string& devname, iomgr_drive_type drive_type) {
+io_device_ptr SpdkDriveInterface::create_open_dev_internal(const std::string& devname, drive_type drive_type) {
     io_device_ptr iodev{nullptr};
 
     // First create the bdev
     auto ctx = std::make_shared< creat_ctx >();
     ctx->address = devname;
-    ctx->addr_type = (drive_type == iomgr_drive_type::unknown) ? get_drive_type(devname) : drive_type;
+    ctx->addr_type = drive_type;
 
-    RELEASE_ASSERT((!iomanager.am_i_worker_reactor() || (ctx->addr_type == iomgr_drive_type::spdk_bdev)),
+    RELEASE_ASSERT((!iomanager.am_i_worker_reactor() || (ctx->addr_type == drive_type::spdk_bdev)),
                    "We cannot open the device from a worker reactor thread unless its a bdev");
     create_dev_internal(ctx);
 
@@ -370,26 +370,21 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     iodev->clear();
 }
 
-iomgr_drive_type SpdkDriveInterface::get_drive_type(const std::string& devname) const {
-    iomgr_drive_type type = DriveInterface::get_drive_type(devname);
-    if (type != iomgr_drive_type::unknown) { return type; }
-
+drive_type SpdkDriveInterface::detect_drive_type(const std::string& devname) {
     /* Lets find out if it is a nvme transport */
     spdk_nvme_transport_id trid;
     memset(&trid, 0, sizeof(trid));
     auto devname_c = devname.c_str();
 
     auto rc = spdk_nvme_transport_id_parse(&trid, devname_c);
-    // if ((rc == 0) && (trid.trtype == SPDK_NVME_TRANSPORT_PCIE)) { return iomgr_drive_type::raw_nvme; }
     if (rc == 0) {
         // assume trid.trtype is PCIE, this if should be reverted after we remove dev_type from caller completely;
-        return iomgr_drive_type::raw_nvme;
+        return drive_type::raw_nvme;
     }
 
-    auto bdev = spdk_bdev_get_by_name(devname_c);
-    if (bdev) { return iomgr_drive_type::spdk_bdev; }
+    if (spdk_bdev_get_by_name(devname_c)) { return drive_type::spdk_bdev; }
 
-    return iomgr_drive_type::unknown;
+    return drive_type::unknown;
 }
 
 void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
@@ -872,7 +867,7 @@ void SpdkDriveInterface::handle_msg(iomgr_msg* msg) {
     }
 }
 
-size_t SpdkDriveInterface::get_size(IODevice* iodev) {
+size_t SpdkDriveInterface::get_dev_size(IODevice* iodev) {
     return spdk_bdev_get_num_blocks(iodev->bdev()) * spdk_bdev_get_block_size(iodev->bdev());
 }
 
@@ -918,7 +913,7 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
     return attr;
 }
 
-drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const iomgr_drive_type drive_type) {
+drive_attributes SpdkDriveInterface::get_attributes(const std::string& devname, const drive_type drive_type) {
 #ifdef REFCOUNTED_OPEN_DEV
     auto iodev = open_dev(devname, drive_type, 0);
     auto ret = get_attributes(iodev);

@@ -10,8 +10,6 @@
 #include "iomgr.hpp"
 
 namespace iomgr {
-static inline DriveInterface* drive_iface() { return IOManager::instance().default_drive_interface(); }
-
 static constexpr uint16_t init_crc_16 = 0x8005;
 struct vol_info_t {
 private:
@@ -102,16 +100,15 @@ public:
     void add_device(const std::string& dev_name, const int oflags) {
         std::shared_ptr< vol_info_t > info = std::make_shared< vol_info_t >();
 
-        info->m_vol_dev = drive_iface()->open_dev(dev_name.c_str(), drive_iface()->get_drive_type(dev_name), oflags);
+        info->m_vol_dev = iomgr::DriveInterface::open_dev(dev_name.c_str(), oflags);
         info->m_vol_name = std::filesystem::path(dev_name).filename();
 
         auto shadow_fname = "/tmp/" + info->m_vol_name + "_shadow";
         info->m_shadow_fd = open(shadow_fname.c_str(), O_RDWR);
         // init_shadow_file(info->m_shadow_fd);
 
-        info->m_page_size =
-            drive_iface()->get_attributes(info->m_vol_name, drive_iface()->get_drive_type(dev_name)).phys_page_size;
-        info->m_max_vol_blks = drive_iface()->get_size(info->m_vol_dev.get()) / info->m_page_size;
+        info->m_page_size = iomgr::DriveInterface::get_attributes(dev_name).phys_page_size;
+        info->m_max_vol_blks = iomgr::DriveInterface::get_size(info->m_vol_dev.get()) / info->m_page_size;
         info->m_pending_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);
         info->m_hole_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);
         info->invalidate_lbas(0, info->m_max_vol_blks); // Punch hole for all.
@@ -121,13 +118,19 @@ public:
         m_vol_info.push_back(std::move(info));
     }
 
+    void attach_completion_cb(const iomgr::io_interface_comp_cb_t& cb) {
+        for (auto& info : m_vol_info) {
+            info->m_vol_dev->drive_interface()->attach_completion_cb(cb);
+        }
+    }
+
 private:
 #if 0
     void init_shadow_file(const int fd) {
         // initialize the file
         uint8_t* init_csum_buf{nullptr};
         const uint16_t csum_zero{crc16_t10dif(init_crc_16, static_cast< const uint8_t* >(m_init_buf),
-                                              drive_iface()->get_attributes().phys_page_size)};
+                                              iomgr::DriveInterface::get_attributes().phys_page_size)};
         if (verify_csum()) {
             init_csum_buf = iomanager.iobuf_alloc(512, sizeof(uint16_t));
             *reinterpret_cast< uint16_t* >(init_csum_buf) = csum_zero;

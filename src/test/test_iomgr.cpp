@@ -1,9 +1,8 @@
 /*
  * Copyright 2018 by eBay Corporation
  */
-#include <aio_drive_interface.hpp>
-#include <spdk_drive_interface.hpp>
 #include <iomgr.hpp>
+#include <drive_interface.hpp>
 #include <sds_logging/logging.h>
 #include <sds_options/options.h>
 #include <sisl/utility/thread_factory.hpp>
@@ -34,8 +33,6 @@ static constexpr size_t each_thread_size = total_dev_size / nthreads;
 // static constexpr size_t max_ios_per_thread = 10000000;
 static constexpr size_t max_ios_per_thread = 10000;
 static const std::string dev_path = "/tmp/f1";
-
-#define g_drive_iface iomanager.default_drive_interface()
 
 static io_device_ptr g_iodev = nullptr;
 static iomgr::drive_attributes g_driveattr;
@@ -92,13 +89,13 @@ static void do_write_io(size_t offset) {
     req->buf_arr->fill(offset);
 
     // memset(wbuf, offset, io_size);
-    g_drive_iface->async_write(g_iodev.get(), (const char*)req->buf, io_size, offset, (uint8_t*)req);
+    g_iodev->drive_interface()->async_write(g_iodev.get(), (const char*)req->buf, io_size, offset, (uint8_t*)req);
     // LOGINFO("Write on Offset {}", offset);
 }
 
 static void do_read_io(size_t offset) {
     auto req = new io_req();
-    g_drive_iface->async_read(g_iodev.get(), (char*)req->buf, io_size, offset, (uint8_t*)req);
+    g_iodev->drive_interface()->async_read(g_iodev.get(), (char*)req->buf, io_size, offset, (uint8_t*)req);
     // LOGINFO("Read on Offset {}", offset);
 }
 
@@ -132,7 +129,7 @@ static void do_verify() {
             if (is_started) {
                 uint8_t* rbuf = iomanager.iobuf_alloc(g_driveattr.align_size, io_size);
                 for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {
-                    g_drive_iface->sync_read(g_iodev.get(), (char*)rbuf, io_size, offset);
+                    g_iodev->drive_interface()->sync_read(g_iodev.get(), (char*)rbuf, io_size, offset);
                     for (auto i = 0u; i < io_size; ++i) {
                         assert(rbuf[i] == offset);
                     }
@@ -198,7 +195,6 @@ int main(int argc, char* argv[]) {
     std::stringstream ss;
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());
-    g_drive_iface->attach_completion_cb(on_io_completion);
 
     bool created = false;
     if (!std::filesystem::exists(std::filesystem::path{dev_path})) {
@@ -211,9 +207,9 @@ int main(int argc, char* argv[]) {
 
         created = true;
     }
-
-    g_iodev = g_drive_iface->open_dev(dev_path, iomgr_drive_type::file, O_CREAT | O_RDWR);
-    g_driveattr = g_drive_iface->get_attributes(dev_path, iomgr_drive_type::unknown);
+    g_iodev = iomgr::DriveInterface::open_dev(dev_path, O_CREAT | O_RDWR);
+    g_driveattr = iomgr::DriveInterface::get_attributes(dev_path);
+    g_iodev->drive_interface()->attach_completion_cb(on_io_completion);
 
     uint8_t* buf = iomanager.iobuf_alloc(g_driveattr.align_size, 8192);
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
@@ -226,7 +222,7 @@ int main(int argc, char* argv[]) {
 
     LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
 
-    g_drive_iface->close_dev(g_iodev);
+    g_iodev->drive_interface()->close_dev(g_iodev);
 
     // Stop the IOManage for clean exit
     iomanager.stop();

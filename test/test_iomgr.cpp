@@ -76,19 +76,19 @@ static void do_write_io(size_t offset) {
     wbuf.fill(offset);
 
     // memset(wbuf, offset, io_size);
-    g_aio_iface->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_iodev->drive_interface()->async_write(g_iodev.get(), (const char*)wbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Write on Offset {}", offset);
 }
 
 static void do_read_io(size_t offset) {
     std::array< size_t, io_size / sizeof(size_t) > rbuf;
-    g_aio_iface->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
+    g_iodev->drive_interface()->async_read(g_iodev.get(), (char*)rbuf.data(), io_size, offset, (uint8_t*)&work);
     // LOGINFO("Read on Offset {}", offset);
 }
 
 static void issue_preload() {
     static std::once_flag flag1;
-    std::call_once(flag1, [&]() { g_iodev = g_aio_iface->open_dev("/tmp/f1", O_CREAT | O_RDWR); });
+    std::call_once(flag1, [&]() { g_iodev = iomgr::DriveInterface::open_dev("/tmp/f1", O_CREAT | O_RDWR); });
 
     if (work.next_io_offset >= work.offset_end) {
         work.is_preload_phase = false;

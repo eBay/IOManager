@@ -58,7 +58,6 @@ static struct Runner {
 } s_runner;
 
 static constexpr uint64_t max_io_size{8 * 1024 * 1024}; // 8MB
-#define g_drive_iface iomanager.default_drive_interface()
 
 using random_bytes_engine = std::independent_bits_engine< std::default_random_engine, CHAR_BIT, unsigned char >;
 
@@ -80,15 +79,14 @@ public:
         }
 
         iomanager.start(1, SDS_OPTIONS["spdk"].as< bool >());
-        // g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_io_completion, 2));
-        m_iodev = g_drive_iface->open_dev(dev, iomgr_drive_type::unknown, O_CREAT | O_RDWR | O_DIRECT);
-        m_driveattr = g_drive_iface->get_attributes(dev, iomgr_drive_type::unknown);
+        m_iodev = iomgr::DriveInterface::open_dev(dev, O_CREAT | O_RDWR | O_DIRECT);
+        m_driveattr = iomgr::DriveInterface::get_attributes(dev);
 
         s_runner.start();
     }
 
     void TearDown() override {
-        g_drive_iface->close_dev(m_iodev);
+        m_iodev->drive_interface()->close_dev(m_iodev);
         iomanager.stop();
     }
 
@@ -101,7 +99,7 @@ public:
         auto remain_size{m_size};
         auto cur_offset{m_offset};
 
-        g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_write_completion, 2));
+        m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_write_completion, 2));
 
         // First fill in the entire set with some value in specific pattern
         random_bytes_engine rbe;
@@ -117,7 +115,8 @@ public:
             io_req* req = new io_req();
             req->buf = buf;
             req->size = this_sz;
-            g_drive_iface->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset, (uint8_t*)req);
+            m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset,
+                                                    (uint8_t*)req);
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
@@ -131,12 +130,12 @@ public:
         if (m_filled_size == m_size) {
             LOGINFO("Filling with rand bytes for size={} offset={} completed in {} usecs, now filling with 0s", m_size,
                     m_offset, get_elapsed_time_us(m_start_time));
-            g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_zero_completion, 2));
+            m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_zero_completion, 2));
             iomanager.iobuf_free(req->buf);
 
             // Now issue write zeros
             m_start_time = Clock::now();
-            g_drive_iface->write_zero(m_iodev.get(), m_size, m_offset, nullptr);
+            m_iodev->drive_interface()->write_zero(m_iodev.get(), m_size, m_offset, nullptr);
         }
         delete req;
     }
@@ -146,7 +145,7 @@ public:
         LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_size,
                 get_elapsed_time_us(m_start_time));
 
-        g_drive_iface->attach_completion_cb(bind_this(WriteZeroTest::on_read_completion, 2));
+        m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_read_completion, 2));
 
         auto remain_size{m_size};
         auto cur_offset{m_offset};
@@ -159,7 +158,8 @@ public:
             io_req* req = new io_req();
             req->buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
             req->size = this_sz;
-            g_drive_iface->async_read(m_iodev.get(), (char*)req->buf, (uint32_t)this_sz, cur_offset, (uint8_t*)req);
+            m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)req->buf, (uint32_t)this_sz, cur_offset,
+                                                   (uint8_t*)req);
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
