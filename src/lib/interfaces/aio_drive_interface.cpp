@@ -328,7 +328,7 @@ void AioDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64
         // Beyond limits of write zero, issue sync writes one by one and then do a callback ourselves
         uint64_t total_sz_written = 0;
         while (total_sz_written < size) {
-            const uint64_t sz_to_write = std::min(max_write_zero_size, (uint32_t)(size - total_sz_written));
+            const uint64_t sz_to_write = std::min((uint64_t)max_write_zero_size, (size - total_sz_written));
             const auto iovcnt = (sz_to_write - 1) / max_write_zero_buf_size + 1;
 
             std::vector< iovec > iov(iovcnt);
