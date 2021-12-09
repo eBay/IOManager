@@ -33,8 +33,8 @@ constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions 
 
 static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
-static constexpr uint32_t max_write_zero_buf_size = 10 * 1024 * 1024ul; // 10 MB
-static constexpr uint32_t max_write_zero_iovcnt = 100;
+static constexpr uint32_t max_write_zero_buf_size = 16 * 1024 * 1024ul; // 16 MB
+static constexpr uint32_t max_write_zero_iovcnt = 64;
 static constexpr uint32_t max_write_zero_size = max_write_zero_buf_size * max_write_zero_iovcnt; // 1 GB
 
 #ifdef __linux__
