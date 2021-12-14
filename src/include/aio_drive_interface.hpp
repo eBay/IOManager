@@ -303,6 +303,7 @@ public:
                      bool part_of_batch = false) override;
     void fsync(IODevice* iodev, uint8_t* cookie) override {
         // LOGMSG_ASSERT(false, "fsync on aio drive interface is not supported");
+        if (m_comp_cb) m_comp_cb(0, cookie);
     }
     virtual void submit_batch() override;
 

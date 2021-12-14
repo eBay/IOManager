@@ -128,6 +128,7 @@ public:
     void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) override;
     void fsync(IODevice* iodev, uint8_t* cookie) override {
         // LOGMSG_ASSERT(false, "fsync on spdk drive interface is not supported");
+        if (m_comp_cb) m_comp_cb(0, cookie);
     }
 
     io_interface_comp_cb_t& get_completion_cb() { return m_comp_cb; }
