@@ -18,17 +18,18 @@
 
 namespace iomgr {
 enum class drive_interface_type { aio, spdk, uring };
-ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO)
+ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO, FSYNC)
 
 struct drive_attributes {
-    uint32_t phys_page_size = 4096;        // Physical page size of flash ssd/nvme. This is optimal size to do IO
-    uint32_t align_size = 0;               // size alignment supported by drives/kernel
-    uint32_t atomic_phys_page_size = 4096; // atomic page size of the drive
+    uint32_t phys_page_size{4096};        // Physical page size of flash ssd/nvme. This is optimal size to do IO
+    uint32_t align_size{0};               // size alignment supported by drives/kernel
+    uint32_t atomic_phys_page_size{4096}; // atomic page size of the drive
+    uint32_t num_streams{1};              // Total number of independent streams supported on this drive
 
     bool is_valid() const { return (align_size != 0); }
     bool operator==(const drive_attributes& other) const {
         return ((phys_page_size == other.phys_page_size) && (align_size == other.align_size) &&
-                (atomic_phys_page_size == other.atomic_phys_page_size));
+                (atomic_phys_page_size == other.atomic_phys_page_size) && (num_streams == other.num_streams));
     }
     bool operator!=(const drive_attributes& other) const { return !(*this == other); }
 
@@ -37,6 +38,7 @@ struct drive_attributes {
         json["phys_page_size"] = phys_page_size;
         json["align_size"] = align_size;
         json["atomic_phys_page_size"] = atomic_phys_page_size;
+        json["num_streams"] = num_streams;
         return json;
     }
 };
@@ -119,11 +121,14 @@ private:
     std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
 
+class IOWatchDog;
+
 class DriveInterface : public IOInterface {
 public:
     DriveInterface(const io_interface_comp_cb_t& cb) : m_comp_cb(cb) {}
     virtual drive_interface_type interface_type() const = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
+
     virtual void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                              bool part_of_batch = false) = 0;
     virtual void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -140,6 +145,7 @@ public:
     virtual ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
     virtual ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
     virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) = 0;
+    virtual void fsync(IODevice* iodev, uint8_t* cookie) = 0;
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) { m_comp_cb = cb; }
 

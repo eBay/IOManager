@@ -85,6 +85,7 @@ public:
                      bool part_of_batch = false) override;
     void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
                      bool part_of_batch = false) override;
+    void fsync(IODevice* iodev, uint8_t* cookie) override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
     virtual void submit_batch() override;
