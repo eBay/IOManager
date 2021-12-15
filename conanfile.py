@@ -30,8 +30,8 @@ class IOMgrConan(ConanFile):
         )
 
     requires = (
-            "flip/[~=3, include_prerelease=True]@sds/develop",
-            "sisl/[~=7, include_prerelease=True]@sisl/develop",
+            "flip/[~=3, include_prerelease=True]@sds/master",
+            "sisl/[~=7, include_prerelease=True]@sisl/master",
 
             "boost/1.73.0",
             "grpc/1.37.0",
