@@ -13,25 +13,25 @@
 
 #include <sisl/fds/utils.hpp>
 #include <iomgr.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 
 #include <gtest/gtest.h>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SDS_OPTION_GROUP(test_write_zeros,
-                 (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/wz1"), "path"),
-                 (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-                 //(size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2147483648"), "number"),
-                 (size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2097152"), "number"),
-                 (offset, "", "offset", "offset", ::cxxopts::value< uint64_t >()->default_value("0"), "number"))
+SISL_OPTION_GROUP(test_write_zeros,
+                  (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/wz1"), "path"),
+                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
+                  //(size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2147483648"), "number"),
+                  (size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2097152"), "number"),
+                  (offset, "", "offset", "offset", ::cxxopts::value< uint64_t >()->default_value("0"), "number"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_write_zeros, config
-SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
+SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 static struct Runner {
     std::mutex cv_mutex;
@@ -64,11 +64,11 @@ using random_bytes_engine = std::independent_bits_engine< std::default_random_en
 class WriteZeroTest : public ::testing::Test {
 public:
     void SetUp() override {
-        m_size = SDS_OPTIONS["size"].as< uint64_t >();
-        m_offset = SDS_OPTIONS["offset"].as< uint64_t >();
+        m_size = SISL_OPTIONS["size"].as< uint64_t >();
+        m_offset = SISL_OPTIONS["offset"].as< uint64_t >();
 
-        const auto dev{SDS_OPTIONS["dev"].as< std::string >()};
-        const auto dev_size{SDS_OPTIONS["size"].as< uint64_t >() + SDS_OPTIONS["offset"].as< uint64_t >()};
+        const auto dev{SISL_OPTIONS["dev"].as< std::string >()};
+        const auto dev_size{SISL_OPTIONS["size"].as< uint64_t >() + SISL_OPTIONS["offset"].as< uint64_t >()};
 
         if (!std::filesystem::exists(std::filesystem::path{dev})) {
             LOGINFO("Device {} doesn't exists, creating a file for size {}", dev, dev_size);
@@ -78,7 +78,7 @@ public:
             ASSERT_EQ(ret, 0) << "fallocate of device " << dev << " for size " << dev_size << " failed";
         }
 
-        iomanager.start(1, SDS_OPTIONS["spdk"].as< bool >());
+        iomanager.start(1, SISL_OPTIONS["spdk"].as< bool >());
         m_iodev = iomgr::DriveInterface::open_dev(dev, O_CREAT | O_RDWR | O_DIRECT);
         m_driveattr = iomgr::DriveInterface::get_attributes(dev);
 
@@ -220,8 +220,8 @@ TEST_F(WriteZeroTest, fill_zero_validate) {
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
-    SDS_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
-    sds_logging::SetLogger("test_write_zero");
+    SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
+    sisl::logging::SetLogger("test_write_zero");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     auto ret{RUN_ALL_TESTS()};

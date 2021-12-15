@@ -6,8 +6,8 @@
 #include <chrono>
 
 #include <sisl/fds/bitset.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 #include <sisl/utility/enum.hpp>
 #include <nlohmann/json.hpp>
 #include <fmt/format.h>

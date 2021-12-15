@@ -2,7 +2,7 @@
 
 #include <filesystem>
 #include <gtest/gtest.h>
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 #include <isa-l/crc.h>
 
 #include <sisl/fds/bitset.hpp>

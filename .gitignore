@@ -1,8 +1,11 @@
-
 *.pyc
 .idea/**
-.clangd
 .cache
+.clangd
+
+build
+test_package/build
+nosanitize/**
 
 # Settings generated files and build files
 generated/**

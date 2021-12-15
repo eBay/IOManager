@@ -39,7 +39,7 @@ extern "C" {
 #include <functional>
 #include <sisl/fds/id_reserver.hpp>
 #include <sisl/utility/enum.hpp>
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 #include <semver/semver200.h>
 
 struct spdk_bdev_desc;
