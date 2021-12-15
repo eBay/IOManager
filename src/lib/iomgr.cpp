@@ -20,8 +20,8 @@ extern "C" {
 #include <rte_malloc.h>
 }
 
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 
 #include <cerrno>
 #include <chrono>
@@ -41,8 +41,17 @@ extern "C" {
 
 #include <sisl/utility/thread_factory.hpp>
 #include <sisl/fds/obj_allocator.hpp>
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 #include <sisl/version.hpp>
+
+#ifdef __linux__
+#include <sys/prctl.h>
+#include <sys/eventfd.h>
+#endif
+
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
 
 #ifdef __linux__
 #include <sys/prctl.h>
@@ -70,9 +79,11 @@ extern "C" {
 #include "include/reactor_spdk.hpp"
 #include "include/iomgr_config.hpp"
 
-SDS_OPTION_GROUP(iomgr,
+SISL_OPTION_GROUP(iomgr,
                  (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
-                  ::cxxopts::value< std::string >()->default_value("pa"), "mode"))
+                  ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
+                 (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
+                  ::cxxopts::value< uint32_t >()->default_value("1"), "count"))
 
 namespace iomgr {
 
@@ -216,6 +227,9 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     // Notify all the reactors that they are ready to make callback about thread started
     iomanager.run_on(thread_regex::all_io,
                      [this](io_thread_addr_t taddr) { iomanager.this_reactor()->notify_thread_state(true); });
+
+    m_io_wd = std::make_unique< IOWatchDog >();
+
 } // namespace iomgr
 
 static enum spdk_log_level to_spdk_log_level(spdlog::level::level_enum lvl) {
@@ -267,8 +281,8 @@ void IOManager::start_spdk() {
 
     // Set the spdk log level based on module spdk
     spdk_log_set_flag("all");
-    // spdk_log_set_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
-    spdk_log_set_print_level(to_spdk_log_level(sds_logging::GetModuleLogLevel("spdk")));
+    // spdk_log_set_level(to_spdk_log_level(sisl::logging::GetModuleLogLevel("spdk")));
+    spdk_log_set_print_level(to_spdk_log_level(sisl::logging::GetModuleLogLevel("spdk")));
 
     // Initialize if spdk has still not been initialized
     if (!is_spdk_inited()) {
@@ -284,7 +298,7 @@ void IOManager::start_spdk() {
             // Set VA mode if given
             va_mode = std::string("pa");
             try {
-                va_mode = SDS_OPTIONS["iova-mode"].as< std::string >();
+                va_mode = SISL_OPTIONS["iova-mode"].as< std::string >();
                 LOGDEBUG("Using IOVA = {} mode", va_mode);
             } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
             opts.iova_mode = va_mode.c_str();

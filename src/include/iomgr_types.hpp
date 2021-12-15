@@ -83,7 +83,7 @@ ENUM(drive_type, uint8_t,
      block_hdd,    // Kernel HDD block device
      raw_nvme,     // Raw Nvme device (which can be opened only thru spdk)
      memory,       // Non-persistent memory
-     spdk_bdev,    // A SDPK verion of bdev
+     spdk_bdev,    // A SDPK version of bdev
      unknown       // Try to deduce it while loading
 )
 typedef drive_type iomgr_drive_type;
