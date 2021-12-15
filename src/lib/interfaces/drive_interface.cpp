@@ -276,8 +276,8 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
             {"ST6000NM021A-2R7", 16u}, // Seagate
         };
 
-        if (SDS_OPTIONS.count("hdd_streams") > 0) {
-            attr.num_streams = SDS_OPTIONS["hdd_streams"].as< uint32_t >();
+        if (SISL_OPTIONS.count("hdd_streams") > 0) {
+            attr.num_streams = SISL_OPTIONS["hdd_streams"].as< uint32_t >();
             LOGINFO("Device={} uses overriden attribute for hdd streams={}", devname, attr.num_streams);
         } else if (!model.empty()) {
             const auto it = s_num_streams_for_model.find(model);

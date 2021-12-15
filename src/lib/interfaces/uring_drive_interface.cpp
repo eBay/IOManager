@@ -20,7 +20,7 @@
 #endif
 
 #include <sisl/fds/utils.hpp>
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 
 namespace iomgr {
 thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};

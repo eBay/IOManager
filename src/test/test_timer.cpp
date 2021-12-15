@@ -5,29 +5,29 @@
 #include <random>
 
 #include <iomgr.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SDS_OPTION_GROUP(test_timer,
-                 (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
-                  ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
-                 (user_threads, "", "user_threads", "user_threads", ::cxxopts::value< uint32_t >()->default_value("2"),
-                  "number"),
-                 (num_timers, "", "num_timers", "num_timers", ::cxxopts::value< uint64_t >()->default_value("1000"),
-                  "number"),
-                 (time_check, "Need timeout time check?", "time_check", "time_check",
-                  ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-                 (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
-                 (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+SISL_OPTION_GROUP(test_timer,
+                  (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
+                   ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
+                  (user_threads, "", "user_threads", "user_threads", ::cxxopts::value< uint32_t >()->default_value("2"),
+                   "number"),
+                  (num_timers, "", "num_timers", "num_timers", ::cxxopts::value< uint64_t >()->default_value("1000"),
+                   "number"),
+                  (time_check, "Need timeout time check?", "time_check", "time_check",
+                   ::cxxopts::value< bool >()->default_value("false"), "true or false"),
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
+                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_timer, config
-SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
+SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 struct timer_test_info {
     std::mutex timer_mtx;
@@ -54,13 +54,13 @@ static uint64_t g_iters{0};
 static bool g_need_time_check{false};
 
 void glob_setup() {
-    g_is_spdk = SDS_OPTIONS["spdk"].as< bool >();
-    g_io_threads = SDS_OPTIONS["io_threads"].as< uint32_t >();
-    if ((SDS_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
-    g_user_threads = SDS_OPTIONS["user_threads"].as< uint32_t >();
-    g_num_timers = SDS_OPTIONS["num_timers"].as< uint64_t >();
-    g_iters = SDS_OPTIONS["num_timers"].as< uint64_t >();
-    g_need_time_check = SDS_OPTIONS["time_check"].as< bool >();
+    g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
+    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
+    if ((SISL_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
+    g_user_threads = SISL_OPTIONS["user_threads"].as< uint32_t >();
+    g_num_timers = SISL_OPTIONS["num_timers"].as< uint64_t >();
+    g_iters = SISL_OPTIONS["num_timers"].as< uint64_t >();
+    g_need_time_check = SISL_OPTIONS["time_check"].as< bool >();
 
     iomanager.start(g_io_threads, g_is_spdk);
 }
@@ -194,8 +194,8 @@ TEST_F(TimerTest, timer_parallel_to_shutdown) {
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
-    SDS_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
-    sds_logging::SetLogger("timer_test");
+    SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
+    sisl::logging::SetLogger("timer_test");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     glob_setup();

@@ -31,7 +31,7 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 
 // TODO: Remove this once the problem is fixed in flip
 #if defined __clang__ or defined __GNUC__
