@@ -4,26 +4,26 @@
 #include <mutex>
 
 #include <iomgr.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 #include <sisl/fds/buffer.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SDS_OPTION_GROUP(test_msg,
-                 (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
-                  ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
-                 (client_threads, "", "client_threads", "client_threads",
-                  ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
-                 (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
-                 (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+SISL_OPTION_GROUP(test_msg,
+                  (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
+                   ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
+                  (client_threads, "", "client_threads", "client_threads",
+                   ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
+                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_msg, config
-SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
+SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 struct timer_test_info {
     std::mutex mtx;
@@ -43,11 +43,11 @@ static uint64_t g_iters{0};
 // static std::vector< std::unique_ptr< timer_test_info > > g_timer_infos;
 
 void glob_setup() {
-    g_is_spdk = SDS_OPTIONS["spdk"].as< bool >();
-    g_io_threads = SDS_OPTIONS["io_threads"].as< uint32_t >();
-    if ((SDS_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
-    g_client_threads = SDS_OPTIONS["client_threads"].as< uint32_t >();
-    g_iters = SDS_OPTIONS["iters"].as< uint64_t >();
+    g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
+    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
+    if ((SISL_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
+    g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
+    g_iters = SISL_OPTIONS["iters"].as< uint64_t >();
 
     iomanager.start(g_io_threads, g_is_spdk);
 }
@@ -264,8 +264,8 @@ TEST_F(MsgTest, async_broadcast_msg_with_timer) { msg_with_timer_test(wait_type_
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
-    SDS_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
-    sds_logging::SetLogger("msg_test");
+    SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
+    sisl::logging::SetLogger("msg_test");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     glob_setup();

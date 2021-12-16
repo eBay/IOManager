@@ -3,8 +3,8 @@
  */
 #include <iomgr.hpp>
 #include <drive_interface.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 
 extern "C" {
@@ -14,13 +14,13 @@ extern "C" {
 #include <stdexcept>
 using log_level = spdlog::level::level_enum;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS, flip)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SDS_OPTION_GROUP(test_iomgr,
-                 (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+SISL_OPTION_GROUP(test_iomgr,
+                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_iomgr, config
-SDS_OPTIONS_ENABLE(ENABLED_OPTIONS)
+SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 using namespace iomgr;
 
@@ -186,12 +186,12 @@ static void workload_on_thread([[maybe_unused]] io_thread_addr_t taddr) {
 }
 
 int main(int argc, char* argv[]) {
-    SDS_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
-    sds_logging::SetLogger("test_iomgr");
+    SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS);
+    sisl::logging::SetLogger("test_iomgr");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    iomanager.start(nthreads, SDS_OPTIONS["spdk"].as< bool >());
+    iomanager.start(nthreads, SISL_OPTIONS["spdk"].as< bool >());
     std::stringstream ss;
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());

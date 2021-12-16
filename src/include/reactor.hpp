@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <sds_logging/logging.h>
+#include <sisl/logging/logging.h>
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/fds/sparse_vector.hpp>
 #include <sisl/utility/atomic_counter.hpp>
@@ -16,7 +16,7 @@
 //#include "drive_type.hpp"
 
 #define IOMGR_LOG_MODS iomgr, spdk, io_wd
-SDS_LOGGING_DECL(IOMGR_LOG_MODS);
+SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 
 struct spdk_thread;
 struct spdk_bdev_desc;

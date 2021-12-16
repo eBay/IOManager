@@ -5,8 +5,8 @@
 #include <aio_drive_interface.hpp>
 #include <spdk_drive_interface.hpp>
 #include <iomgr.hpp>
-#include <sds_logging/logging.h>
-#include <sds_options/options.h>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
 #endif
 
 extern "C" {
@@ -19,8 +19,8 @@ using log_level = spdlog::level::level_enum;
 
 THREAD_BUFFER_INIT;
 
-SDS_LOGGING_INIT(IOMGR_LOG_MODS)
-SDS_OPTIONS_ENABLE(logging)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS)
+SISL_OPTIONS_ENABLE(logging)
 
 using namespace iomgr;
 
@@ -193,8 +193,8 @@ void tmp_setup_env() {
 
 int main(int argc, char* argv[]) {
 #if 0
-    SDS_OPTIONS_LOAD(argc, argv, logging);
-    sds_logging::SetLogger("example");
+    SISL_OPTIONS_LOAD(argc, argv, logging);
+    sisl::logging::SetLogger("example");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 #endif
 
