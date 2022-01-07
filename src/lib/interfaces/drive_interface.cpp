@@ -107,7 +107,7 @@ std::string exec_command(const std::string& cmd) {
 }
 
 static std::string find_megacli_bin_path() {
-    static std::vector< std::string > paths{"/usr/bin/megacli", "/bin/megacli", "/usr/local/bin/megacli",
+    static std::vector< std::string > paths{"/usr/sbin/megacli", "/bin/megacli", "/usr/lib/megacli",
                                             "/bin/MegaCli64"};
     for (auto& p : paths) {
         if (std::filesystem::exists(p)) { return p; }
@@ -272,8 +272,8 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
         // Try to find the underlying device type and see if any vendor data matches with our preconfigured settings
         static std::string model = get_raid_hdd_vendor_model();
         static std::unordered_map< std::string, uint32_t > s_num_streams_for_model = {
-            {"HGST HUS726T6TAL", 24u}, // Western Digital
-            {"ST6000NM021A-2R7", 16u}, // Seagate
+            {"HGST HUS726T6TAL", 128u}, // Western Digital
+            {"ST6000NM021A-2R7", 128u}, // Seagate
         };
 
         if (SISL_OPTIONS.count("hdd_streams") > 0) {
