@@ -59,13 +59,6 @@ static std::string get_mounted_device(const std::string& filename) {
     return mnt_dev;
 }
 
-static bool is_rotational_device(const std::string& device) {
-    std::string sys_path = fmt::format("/sys/block/{}/queue/rotational", device);
-    int is_rotational = 0;
-    if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
-    return (is_rotational == 1);
-}
-
 static std::string get_major_minor(const std::string& devname) {
     struct stat statbuf;
     const int ret{::stat(devname.c_str(), &statbuf)};
@@ -74,6 +67,16 @@ static std::string get_major_minor(const std::string& devname) {
         return "";
     }
     return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
+}
+
+static bool is_rotational_device(const std::string& device) {
+    int is_rotational = 0;
+    const auto maj_min{get_major_minor(device)};
+    if (!maj_min.empty()) {
+        std::string sys_path = fmt::format("/sys/dev/block/{}/queue/rotational", maj_min);
+        if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
+    }
+    return (is_rotational == 1);
 }
 
 static uint64_t get_max_write_zeros(const std::string& devname) {
