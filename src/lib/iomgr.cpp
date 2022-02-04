@@ -545,7 +545,7 @@ void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_
 void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
     std::shared_ptr< IOReactor > reactor;
-    if (is_tloop_reactor) {
+    if (m_is_spdk && is_tloop_reactor) {
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
         reactor = std::make_shared< IOReactorEPoll >();
