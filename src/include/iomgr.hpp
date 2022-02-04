@@ -124,6 +124,8 @@ extern const version::Semver200_version get_version();
 class IOWatchDog;
 class IOManager {
 public:
+    spdk_mempool* m_spdk_mempool;
+
     friend class IOReactor;
     friend class IOReactorEPoll;
     friend class IOReactorSPDK;
@@ -410,6 +412,8 @@ public:
         }
     }
 
+    void* create_mempool(size_t element_size, size_t element_count);
+
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
     thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
@@ -525,6 +529,8 @@ struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
     void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+    void* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag);
+    void aligned_pool_free(uint8_t* const b, const sisl::buftag tag);
     size_t buf_size(uint8_t* buf) const override;
 };
 

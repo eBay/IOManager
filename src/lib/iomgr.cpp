@@ -650,6 +650,25 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     return sent_to;
 }
 
+void* IOManager::create_mempool(size_t element_size, size_t element_count) {
+    if (m_is_spdk) {
+        if (m_spdk_mempool != nullptr) {
+            if (spdk_mempool_count(m_spdk_mempool) == element_count) {
+                return m_spdk_mempool;
+            } else {
+                LOGINFO("Creating new mempool of size {}", element_count);
+                m_spdk_mempool = spdk_mempool_create("SPDK_Mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+            }
+        } else {
+            LOGINFO("Creating new mempool of size {}", element_count);
+            m_spdk_mempool = spdk_mempool_create("SPDK_Mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+        }
+        return m_spdk_mempool;
+    } else {
+        return nullptr;
+    }
+}
+
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
         for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
@@ -879,6 +898,17 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
     sisl::AlignedAllocator::metrics().increment(sisl::buftag::common, new_sz - old_sz);
 #endif
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+}
+
+void* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
+    #ifdef _PRERELEASE
+        assert(spdk_mempool_count(iomanager.m_spdk_mempool) == sz);
+    #endif
+        return spdk_mempool_get(iomanager.m_spdk_mempool);
+}
+
+void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const sisl::buftag tag) {
+    spdk_mempool_free(iomanager.m_spdk_mempool);
 }
 
 size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
