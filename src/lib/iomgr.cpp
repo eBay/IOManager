@@ -539,7 +539,7 @@ void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_
 void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
     std::shared_ptr< IOReactor > reactor;
-    if (loop_type & TIGHT_LOOP) {
+    if (m_is_spdk && (loop_type & TIGHT_LOOP)) {
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
         reactor = std::make_shared< IOReactorEPoll >();
