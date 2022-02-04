@@ -7,7 +7,7 @@ attribute "deprecated";
 
 table SpdkDriveInterface {
     /* Number of batched io limit for SPDK request */
-    num_batch_io_limit: uint32 = 2 (hotswap); 
+    num_batch_io_limit: uint32 = 64 (hotswap); 
 
     // io watchdog on/off
     io_watchdog_timer_on: bool = false;
@@ -55,6 +55,16 @@ table Poll {
 
     //io_wakeup_interval_decay_percentage : float = 0.5;
    
+    // Backoff of the loop. It is the minimum time it backsoff. Backoff starts with this value. We are not making
+    // this value hotswappable because, in every tight loop it will have to get the value, which is not ideal
+    backoff_delay_min_us : uint64 = 2;
+
+    // Everytime we progressively delays, increase the next delay with this factor. By default it doubles
+    // the previous delay
+    backoff_delay_increase_factor: float = 2.0 (hotswap); 
+
+    // This is maximum delay backoff on every iteration
+    backoff_delay_max_us : uint64 = 500 (hotswap);
 }
 
 table IomgrSettings {

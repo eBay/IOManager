@@ -441,7 +441,8 @@ void IOManager::start_reactors() {
                         const int reactor_num = *p;
                         delete p;
                         set_thread_name("iomgr_thread");
-                        p_this._run_io_loop(reactor_num, p_this.m_is_spdk, nullptr, nullptr);
+                        p_this._run_io_loop(reactor_num, p_this.m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, nullptr,
+                                            nullptr);
                         return 0;
                     },
                     (void*)p);
@@ -454,8 +455,9 @@ void IOManager::start_reactors() {
         }
     } else {
         for (auto i = 0u; i < m_num_workers; ++i) {
-            m_worker_threads.emplace_back(sys_thread_id_t(sisl::thread_factory(
-                "iomgr_thread", &IOManager::_run_io_loop, this, (int)i, m_is_spdk, nullptr, nullptr)));
+            m_worker_threads.emplace_back(
+                sys_thread_id_t(sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this, (int)i,
+                                                     m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, nullptr, nullptr)));
             LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
         }
     }
@@ -529,29 +531,21 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
                m_iface_list.size());
 }
 
-void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_loop,
-                                    const iodev_selector_t& iodev_selector,
+void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                                     const thread_state_notifier_t& addln_notifier) {
-    std::shared_ptr< IOReactor > reactor;
-    if (is_tloop_reactor) {
-        reactor = std::make_shared< IOReactorSPDK >();
-    } else {
-        reactor = std::make_shared< IOReactorEPoll >();
-    }
-    *(m_reactors.get()) = reactor;
-    reactor->run(-1, user_controlled_loop, iodev_selector, addln_notifier);
+    _run_io_loop(-1, loop_type, iodev_selector, addln_notifier);
 }
 
-void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
+void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
     std::shared_ptr< IOReactor > reactor;
-    if (is_tloop_reactor) {
+    if (loop_type & TIGHT_LOOP) {
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
         reactor = std::make_shared< IOReactorEPoll >();
     }
     *(m_reactors.get()) = reactor;
-    reactor->run(iomgr_slot_num, false /* user_controlled_loop */, iodev_selector, addln_notifier);
+    reactor->run(iomgr_slot_num, loop_type, iodev_selector, addln_notifier);
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }

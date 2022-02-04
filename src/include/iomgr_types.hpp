@@ -52,6 +52,7 @@ typedef std::variant< std::thread, eal_core_id_t > sys_thread_id_t;
 
 typedef std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* > backing_dev_t;
 typedef uint32_t poll_cb_idx_t;
+typedef std::function< bool(const io_thread_t&) > can_backoff_cb_t;
 
 /////////////////// Types for all Msghandlers /////////////////////
 typedef std::function< void(iomgr_msg*) > msg_handler_t;
