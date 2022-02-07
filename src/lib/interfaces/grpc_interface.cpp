@@ -129,9 +129,7 @@ done:
 grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_millis deadline) {
     grpc_error* error{GRPC_ERROR_NONE};
 
-    if (!iomanager.am_i_io_reactor()) {
-        iomanager.become_user_reactor(false /* is_tightloop_reactor */, true /* user_controlled_loop */);
-    }
+    if (!iomanager.am_i_io_reactor()) { iomanager.become_user_reactor(INTERRUPT_LOOP | USER_CONTROLLED_LOOP); }
 
     // First time worker is operating on this pollset, then create/add worker (using threadbuffer) and add all
     // devices in pollset to this reactor

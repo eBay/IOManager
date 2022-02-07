@@ -121,6 +121,12 @@ struct io_thread {
     io_thread() = default;
 };
 
+typedef uint64_t loop_type_t;
+static constexpr loop_type_t TIGHT_LOOP = 1 << 0;     // Completely tight loop consuming 100% cpu
+static constexpr loop_type_t INTERRUPT_LOOP = 1 << 1; // Interrupt drive loop using epoll or similar mechanism
+static constexpr loop_type_t ADAPTIVE_LOOP = 1 << 2;  // Adaptive approach by backing off before polling upon no-load
+static constexpr loop_type_t USER_CONTROLLED_LOOP = 1 << 3; // User controlled loop where iomgr will poll on-need basis
+
 /****************** Device related *************************/
 inline backing_dev_t null_backing_dev() { return backing_dev_t{std::in_place_type< spdk_bdev_desc* >, nullptr}; }
 
@@ -188,14 +194,15 @@ public:
 
 public:
     virtual ~IOReactor();
-    virtual void run(int iomgr_slot_num, bool user_controlled_loop = false,
-                     const iodev_selector_t& iodev_selector = nullptr,
+    virtual void run(int worker_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
 
     virtual bool is_tight_loop_reactor() const = 0;
     virtual bool is_worker() const { return (m_worker_slot_num != -1); }
+    virtual bool is_adaptive_loop() const { return m_is_adaptive_loop; }
+    virtual void set_adaptive_loop(bool is_adaptive) { m_is_adaptive_loop = is_adaptive; }
     virtual int iomgr_slot_num() const {
         assert(is_worker());
         return m_worker_slot_num;
@@ -228,6 +235,7 @@ public:
     poll_cb_idx_t register_poll_interval_cb(std::function< void(void) >&& cb);
     void unregister_poll_interval_cb(const poll_cb_idx_t idx);
     IOThreadMetrics& thread_metrics() { return *(m_metrics.get()); }
+    void add_backoff_cb(can_backoff_cb_t&& cb);
 
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
@@ -251,6 +259,7 @@ protected:
     int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
     bool m_user_controlled_loop = false;
+    bool m_is_adaptive_loop{false};
 
     std::unique_ptr< timer > m_thread_timer;
     thread_state_notifier_t m_this_thread_notifier;
@@ -263,6 +272,9 @@ protected:
 
     std::vector< io_thread_t > m_io_threads; // List of io threads within the reactor
     std::vector< std::function< void(void) > > m_poll_interval_cbs;
+    std::vector< can_backoff_cb_t > m_can_backoff_cbs;
+    uint64_t m_cur_backoff_delay_us{0};
+    uint64_t m_backoff_delay_min_us{0};
 };
 } // namespace iomgr
 

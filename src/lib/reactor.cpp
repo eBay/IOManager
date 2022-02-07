@@ -27,7 +27,7 @@ IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
 
-void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_selector_t& iodev_selector,
+void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                     const thread_state_notifier_t& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
@@ -37,7 +37,12 @@ void IOReactor::run(int worker_slot_num, bool user_controlled_loop, const iodev_
 
     this_reactor = this;
     m_poll_interval = IM_DYNAMIC_CONFIG(poll.force_wakeup_by_time_ms);
-    m_user_controlled_loop = user_controlled_loop;
+    m_user_controlled_loop = ((loop_type & USER_CONTROLLED_LOOP) != 0);
+
+    m_is_adaptive_loop = ((loop_type & ADAPTIVE_LOOP) != 0);
+    m_backoff_delay_min_us = IM_DYNAMIC_CONFIG(poll.backoff_delay_min_us);
+    m_cur_backoff_delay_us = m_is_adaptive_loop ? m_backoff_delay_min_us : 0;
+
     if (!is_io_reactor()) {
         m_worker_slot_num = worker_slot_num;
         m_iodev_selector = iodev_selector;
@@ -86,6 +91,28 @@ bool IOReactor::listen_once() {
     if (m_keep_running) {
         auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
         if (sentinel_cb) { sentinel_cb(); }
+
+        bool need_backoff{false};
+        for (const auto& backoff_cb : m_can_backoff_cbs) {
+            if (backoff_cb == nullptr) { continue; }
+            for (auto thr : m_io_threads) {
+                if (!backoff_cb(thr)) {
+                    need_backoff = false;
+                    break;
+                } else {
+                    need_backoff = true;
+                }
+            }
+        }
+
+        if (need_backoff) {
+            m_cur_backoff_delay_us = m_cur_backoff_delay_us * IM_DYNAMIC_CONFIG(poll.backoff_delay_increase_factor);
+            auto max_us = IM_DYNAMIC_CONFIG(poll.backoff_delay_max_us);
+            if (m_cur_backoff_delay_us > max_us) { m_cur_backoff_delay_us = max_us; }
+            std::this_thread::sleep_for(std::chrono::microseconds(m_cur_backoff_delay_us));
+        } else {
+            m_cur_backoff_delay_us = m_backoff_delay_min_us;
+        }
     }
     return m_keep_running;
 }
@@ -287,4 +314,6 @@ void IOReactor::unregister_poll_interval_cb(const poll_cb_idx_t idx) {
                  "Poll interval cb idx {} already unregistered or never registered", idx);
     m_poll_interval_cbs[idx] = nullptr;
 }
+
+void IOReactor::add_backoff_cb(can_backoff_cb_t&& cb) { m_can_backoff_cbs.push_back(std::move(cb)); }
 } // namespace iomgr
