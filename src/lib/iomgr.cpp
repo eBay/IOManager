@@ -538,14 +538,18 @@ void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_
 
 void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
+    loop_type_t ltype = loop_type;
+
     std::shared_ptr< IOReactor > reactor;
     if (m_is_spdk && (loop_type & TIGHT_LOOP)) {
+        ltype = (loop_type & ~INTERRUPT_LOOP);
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
+        ltype = (loop_type & ~TIGHT_LOOP) | INTERRUPT_LOOP;
         reactor = std::make_shared< IOReactorEPoll >();
     }
     *(m_reactors.get()) = reactor;
-    reactor->run(iomgr_slot_num, loop_type, iodev_selector, addln_notifier);
+    reactor->run(iomgr_slot_num, ltype, iodev_selector, addln_notifier);
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
