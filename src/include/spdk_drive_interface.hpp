@@ -146,7 +146,7 @@ private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
     io_device_ptr create_open_dev_internal(const std::string& devname, drive_type drive_type);
     void open_dev_internal(const io_device_ptr& iodev);
-    void init_iface_thread_ctx(const io_thread_t& thr) override {}
+    void init_iface_thread_ctx(const io_thread_t& thr) override;
     void clear_iface_thread_ctx(const io_thread_t& thr) override {}
 
     void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override;

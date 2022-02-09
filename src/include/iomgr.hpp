@@ -171,16 +171,16 @@ public:
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
      * and thus will return only after the loop is exited
      *
-     * @param is_tloop_reactor Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll)
+     * @param loop_type_t Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll) etc..
      * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
      * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
      * needs to ignore this device.
      * @param addln_notifier Callback which notifies after reactor is ready or shutting down (with true or false)
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
-    void run_io_loop(bool is_tloop_reactor, const iodev_selector_t& iodev_selector = nullptr,
+    void run_io_loop(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
                      const thread_state_notifier_t& addln_notifier = nullptr) {
-        _run_io_loop(-1, is_tloop_reactor, iodev_selector, addln_notifier);
+        _run_io_loop(-1, loop_type, iodev_selector, addln_notifier);
     }
 
     /**
@@ -194,8 +194,7 @@ public:
      * @param addln_notifier  Callback which notifies after reactor is ready or shutting down (with true or false)
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
-    void become_user_reactor(bool is_tloop_reactor = true, bool user_controlled_loop = true,
-                             const iodev_selector_t& iodev_selector = nullptr,
+    void become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
                              const thread_state_notifier_t& addln_notifier = nullptr);
 
     /**
@@ -372,6 +371,17 @@ public:
         auto r = this_reactor();
         return r && r->is_worker();
     }
+
+    bool am_i_adaptive_reactor() const {
+        auto r = this_reactor();
+        return r && r->is_adaptive_loop();
+    }
+
+    void set_my_reactor_adaptive(bool adaptive) {
+        auto r = this_reactor();
+        if (r) { r->set_adaptive_loop(adaptive); }
+    }
+
     [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
     [[nodiscard]] bool is_spdk_mode() const { return m_is_spdk; }
     [[nodiscard]] bool is_uring_capable() const { return m_is_uring_capable; }
@@ -462,7 +472,7 @@ private:
 
     void foreach_interface(const interface_cb_t& iface_cb);
     void start_reactors();
-    void _run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
+    void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                       const thread_state_notifier_t& addln_notifier);
 
     void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
