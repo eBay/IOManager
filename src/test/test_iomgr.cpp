@@ -125,7 +125,8 @@ static void issue_rw_io() {
 static void do_verify() {
     LOGINFO("All IOs completed for this thread, running verification");
     auto sthread = sisl::named_thread("verify_thread", []() mutable {
-        iomanager.run_io_loop(false, nullptr, [](bool is_started) {
+        auto loop_type = SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP;
+        iomanager.run_io_loop(loop_type, nullptr, [](bool is_started) {
             if (is_started) {
                 uint8_t* rbuf = iomanager.iobuf_alloc(g_driveattr.align_size, io_size);
                 for (size_t offset = work.offset_start; offset < work.offset_end; offset += io_size) {

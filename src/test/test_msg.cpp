@@ -92,7 +92,7 @@ public:
         std::vector< std::thread > ts;
         for (uint32_t i{0}; i < g_client_threads; ++i) {
             auto sthread = sisl::named_thread("test_thread", [this, &to_threads, &receiver]() mutable {
-                iomanager.run_io_loop(false, nullptr, [&](bool is_started) {
+                iomanager.run_io_loop(INTERRUPT_LOOP, nullptr, [&](bool is_started) {
                     if (is_started) {
                         this->msg_sender_thread(wait_type_t::spin, to_threads, receiver);
                         iomanager.stop_io_loop();

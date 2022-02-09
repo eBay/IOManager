@@ -33,6 +33,7 @@ namespace iomgr {
 
 static io_thread_t _non_io_thread = std::make_shared< io_thread >();
 thread_local int s_temp_thread_ref_count{0};
+static thread_local int64_t t_outstanding_ops{0};
 
 #ifndef NDEBUG
 std::atomic< uint64_t > drive_iocb::_iocb_id_counter{0};
@@ -175,7 +176,7 @@ static void create_nvme_bdev(const std::shared_ptr< creat_ctx >& ctx) {
             if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names, count, nullptr, 0, create_bdev_done,
                                       (void*)ctx.get(), nullptr);
                 0 != rc) {
-                LOGERROR("Failed creating NVMe BDEV from {}", trid.traddr);
+                LOGERROR("Failed creating NVMe BDEV from {}, error_code: {}", trid.traddr, rc);
                 ctx->err = std::make_error_condition(std::errc::io_error);
                 ctx->done();
                 return;
@@ -387,6 +388,13 @@ drive_type SpdkDriveInterface::detect_drive_type(const std::string& devname) {
     return drive_type::unknown;
 }
 
+void SpdkDriveInterface::init_iface_thread_ctx(const io_thread_t& thr) {
+    if (thr->reactor->is_tight_loop_reactor() && thr->reactor->is_adaptive_loop()) {
+        // Allow backoff only if there are no outstanding operations.
+        thr->reactor->add_backoff_cb([](const io_thread_t& t) -> bool { return (t_outstanding_ops == 0); });
+    }
+}
+
 void SpdkDriveInterface::init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) {
     if (!thr->reactor->is_tight_loop_reactor()) {
         // If we are asked to initialize the thread context for non-spdk thread reactor, then create one spdk
@@ -559,6 +567,8 @@ void SpdkDriveInterface::increment_outstanding_counter(const SpdkIocb* iocb) {
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
+
+    ++t_outstanding_ops;
 }
 
 void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
@@ -579,6 +589,7 @@ void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
+    --t_outstanding_ops;
 }
 
 inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {

@@ -59,13 +59,6 @@ static std::string get_mounted_device(const std::string& filename) {
     return mnt_dev;
 }
 
-static bool is_rotational_device(const std::string& device) {
-    std::string sys_path = fmt::format("/sys/block/{}/queue/rotational", device);
-    int is_rotational = 0;
-    if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
-    return (is_rotational == 1);
-}
-
 static std::string get_major_minor(const std::string& devname) {
     struct stat statbuf;
     const int ret{::stat(devname.c_str(), &statbuf)};
@@ -74,6 +67,16 @@ static std::string get_major_minor(const std::string& devname) {
         return "";
     }
     return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
+}
+
+static bool is_rotational_device(const std::string& device) {
+    int is_rotational = 0;
+    const auto maj_min{get_major_minor(device)};
+    if (!maj_min.empty()) {
+        std::string sys_path = fmt::format("/sys/dev/block/{}/queue/rotational", maj_min);
+        if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
+    }
+    return (is_rotational == 1);
 }
 
 static uint64_t get_max_write_zeros(const std::string& devname) {
@@ -107,7 +110,7 @@ std::string exec_command(const std::string& cmd) {
 }
 
 static std::string find_megacli_bin_path() {
-    static std::vector< std::string > paths{"/usr/bin/megacli", "/bin/megacli", "/usr/local/bin/megacli",
+    static std::vector< std::string > paths{"/usr/sbin/megacli", "/bin/megacli", "/usr/lib/megacli",
                                             "/bin/MegaCli64"};
     for (auto& p : paths) {
         if (std::filesystem::exists(p)) { return p; }
@@ -272,8 +275,8 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
         // Try to find the underlying device type and see if any vendor data matches with our preconfigured settings
         static std::string model = get_raid_hdd_vendor_model();
         static std::unordered_map< std::string, uint32_t > s_num_streams_for_model = {
-            {"HGST HUS726T6TAL", 24u}, // Western Digital
-            {"ST6000NM021A-2R7", 16u}, // Seagate
+            {"HGST HUS726T6TAL", 128u}, // Western Digital
+            {"ST6000NM021A-2R7", 128u}, // Seagate
         };
 
         if (SISL_OPTIONS.count("hdd_streams") > 0) {
