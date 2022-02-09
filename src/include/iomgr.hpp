@@ -436,7 +436,7 @@ public:
     uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
     void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
     void * iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
-    void iobug_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
     void set_io_memory_limit(size_t limit);
@@ -537,8 +537,8 @@ struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
     void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
-    void* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag);
-    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag);
+    void* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) override;
+    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) override;
     size_t buf_size(uint8_t* buf) const override;
 };
 
@@ -546,8 +546,8 @@ struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
     void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
-    void* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag);
-    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag);
+    void* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) override;
+    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) override;
 };
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr

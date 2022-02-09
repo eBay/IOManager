@@ -885,8 +885,8 @@ uint8_t* IOManager::iobuf_pool_alloc(size_t align, size_t size, const sisl::buft
     return sisl::AlignedAllocator::allocator().aligned_pool_alloc(align, size, tag);
 }
 
-void IOManager::iobug_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common) {
-    return sisl::AlignedAllocator::allocator().aligned_pool_free(align, size, tag);
+void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common) {
+    sisl::AlignedAllocator::allocator().aligned_pool_free(buf, size, tag);
 }
 
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
