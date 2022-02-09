@@ -415,6 +415,11 @@ void IOManager::stop_spdk() {
     spdk_thread_lib_fini();
     spdk_env_fini();
     m_spdk_reinit_needed = true;
+    for(spdk_mempool* mempool: m_iomgr_internal_pools) {
+        if (mempool != nullptr) {
+            spdk_mempool_free(mempool);
+        }
+    }
 }
 
 void IOManager::start_reactors() {
@@ -545,7 +550,7 @@ void IOManager::become_user_reactor(bool is_tloop_reactor, bool user_controlled_
 void IOManager::_run_io_loop(int iomgr_slot_num, bool is_tloop_reactor, const iodev_selector_t& iodev_selector,
                              const thread_state_notifier_t& addln_notifier) {
     std::shared_ptr< IOReactor > reactor;
-    if (is_tloop_reactor) {
+    if (m_is_spdk && is_tloop_reactor) {
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
         reactor = std::make_shared< IOReactorEPoll >();
@@ -650,20 +655,29 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     return sent_to;
 }
 
+uint64_t IOManager::get_mempool_idx(size_t size) {
+    if (size < min_mempool_buf_size) {
+        LOGMSG_ASSERT(0, "Mempool size: {} is less than minimum mempool buf size: {}", size, min_mempool_buf_size);
+        return -1;
+    }
+    return spdk_u64log2(size - min_mempool_buf_size);
+}
+
 void* IOManager::create_mempool(size_t element_size, size_t element_count) {
     if (m_is_spdk) {
-        if (m_spdk_mempool != nullptr) {
-            if (spdk_mempool_count(m_spdk_mempool) == element_count) {
-                return m_spdk_mempool;
+        uint64_t idx = get_mempool_idx(element_size);
+        spdk_mempool* mempool = m_iomgr_internal_pools[idx];
+        if (mempool != nullptr) {
+            if (spdk_mempool_count(mempool) == element_count) {
+                return mempool;
             } else {
-                LOGINFO("Creating new mempool of size {}", element_count);
-                m_spdk_mempool = spdk_mempool_create("SPDK_Mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+                spdk_mempool_free(mempool);
             }
-        } else {
-            LOGINFO("Creating new mempool of size {}", element_count);
-            m_spdk_mempool = spdk_mempool_create("SPDK_Mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
         }
-        return m_spdk_mempool;
+        LOGINFO("Creating new mempool of size {}", element_count);
+        m_iomgr_internal_pools[idx] =
+                spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+        return m_iomgr_internal_pools[idx];
     } else {
         return nullptr;
     }
@@ -867,6 +881,14 @@ void IOManager::iobuf_free(uint8_t* buf, const sisl::buftag tag) {
     sisl::AlignedAllocator::allocator().aligned_free(buf, tag);
 }
 
+uint8_t* IOManager::iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common) {
+    return sisl::AlignedAllocator::allocator().aligned_pool_alloc(align, size, tag);
+}
+
+void IOManager::iobug_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common) {
+    return sisl::AlignedAllocator::allocator().aligned_pool_free(align, size, tag);
+}
+
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
 void IOManager::set_io_memory_limit(const size_t limit) {
@@ -901,14 +923,15 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
 }
 
 void* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
-    #ifdef _PRERELEASE
-        assert(spdk_mempool_count(iomanager.m_spdk_mempool) == sz);
-    #endif
-        return spdk_mempool_get(iomanager.m_spdk_mempool);
+    uint64_t idx = iomanager.get_mempool_idx(sz);
+    std::array< spdk_mempool*, IOManager::max_mempool_count > mempools = iomanager.get_iomgr_internal_pools();
+    return spdk_mempool_get(mempools[idx]);
 }
 
-void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const sisl::buftag tag) {
-    spdk_mempool_free(iomanager.m_spdk_mempool);
+void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {
+    uint64_t idx = iomanager.get_mempool_idx(sz);
+    std::array< spdk_mempool*, IOManager::max_mempool_count > mempools = iomanager.get_iomgr_internal_pools();
+    spdk_mempool_put(mempools[idx], b);
 }
 
 size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
@@ -934,6 +957,14 @@ void IOMgrAlignedAllocImpl::aligned_free(uint8_t* b, const sisl::buftag tag) {
 
 uint8_t* IOMgrAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
     return sisl::AlignedAllocatorImpl::aligned_realloc(old_buf, align, new_sz, old_sz);
+}
+
+void* IOMgrAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
+    return IOMgrAlignedAllocImpl::aligned_alloc(align, sz, tag);
+}
+
+void IOMgrAlignedAllocImpl::aligned_pool_free(uint8_t* const b,  const size_t sz, const sisl::buftag tag) {
+    IOMgrAlignedAllocImpl::aligned_free(b, tag);
 }
 
 /************* Mempool Metrics section ************************/
