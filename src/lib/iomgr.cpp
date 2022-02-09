@@ -881,11 +881,11 @@ void IOManager::iobuf_free(uint8_t* buf, const sisl::buftag tag) {
     sisl::AlignedAllocator::allocator().aligned_free(buf, tag);
 }
 
-uint8_t* IOManager::iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common) {
+void* IOManager::iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag) {
     return sisl::AlignedAllocator::allocator().aligned_pool_alloc(align, size, tag);
 }
 
-void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common) {
+void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag) {
     sisl::AlignedAllocator::allocator().aligned_pool_free(buf, size, tag);
 }
 

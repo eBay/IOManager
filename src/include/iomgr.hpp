@@ -435,7 +435,7 @@ public:
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
     void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
-    void * iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void* iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
     void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
