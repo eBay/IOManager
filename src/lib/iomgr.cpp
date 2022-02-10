@@ -2,13 +2,49 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
-#include "iomgr.hpp"
+#include <cerrno>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <limits>
+#include <random>
+#include <thread>
+#include <vector>
 
-extern "C" {
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
+
+#ifdef __linux__
+#include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/mount.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#endif
 
+#include <liburing.h>
+#include <liburing/io_uring.h>
+
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
+#include <sisl/utility/thread_factory.hpp>
+#include <sisl/version.hpp>
+
+#include "aio_drive_interface.hpp"
+#include "spdk_drive_interface.hpp"
+#include "uring_drive_interface.hpp"
+
+#include "iomgr_config.hpp"
+#include "reactor_epoll.hpp"
+#include "reactor_spdk.hpp"
+
+// Must be included after sisl headers to avoid macro definition clash
+extern "C" {
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>
@@ -20,64 +56,7 @@ extern "C" {
 #include <rte_malloc.h>
 }
 
-#include <sisl/logging/logging.h>
-#include <sisl/options/options.h>
-
-#include <cerrno>
-#include <chrono>
-#include <ctime>
-#include <functional>
-#include <thread>
-#include <vector>
-#include <filesystem>
-#include <sys/mount.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <fstream>
-#include <random>
-
-#include <liburing.h>
-#include <liburing/io_uring.h>
-
-#include <sisl/utility/thread_factory.hpp>
-#include <sisl/fds/obj_allocator.hpp>
-#include <sisl/logging/logging.h>
-#include <sisl/version.hpp>
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#include "include/aio_drive_interface.hpp"
-#include "include/spdk_drive_interface.hpp"
-#include "include/uring_drive_interface.hpp"
-#include "include/iomgr.hpp"
-#include "include/reactor_epoll.hpp"
-#include "include/reactor_spdk.hpp"
-#include "include/iomgr_config.hpp"
+#include "iomgr.hpp"
 
 SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -602,7 +581,7 @@ int IOManager::run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* 
 int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     int sent_to = 0;
     bool cloned = false;
-    int64_t min_cnt = INTMAX_MAX;
+    int64_t min_cnt = std::numeric_limits< int64_t >::max();
     io_thread_addr_t min_thread = -1U;
     IOReactor* min_reactor = nullptr;
     IOReactor* sender_reactor = iomanager.this_reactor();
@@ -629,11 +608,12 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                                 min_reactor = reactor;
                             }
                         } else {
-                            auto new_msg = msg->clone();
+                            auto* const new_msg{msg->clone()};
                             if (reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor)) {
                                 cloned = true;
                                 ++sent_to;
                             } else {
+                                // failed to deliver cleanup resources
                                 iomgr_msg::free(new_msg);
                             }
                         }
