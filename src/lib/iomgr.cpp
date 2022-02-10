@@ -2,6 +2,7 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
+#include <cassert>
 #include <cerrno>
 #include <chrono>
 #include <filesystem>
@@ -553,6 +554,7 @@ void IOManager::reactor_stopped() {
     // Notify the caller registered to iomanager for it
     this_reactor()->notify_thread_state(false /* started */);
 
+    // stopped state is set last
     if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
 }
 
@@ -591,9 +593,6 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
 
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
-        static thread_local std::random_device s_rd{};
-        static thread_local std::default_random_engine s_re{s_rd()};
-
         auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
         sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor) ? 1 : 0;
     } else {
@@ -633,7 +632,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
 
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
-        for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
+        for (size_t i{0}; i < m_worker_reactors.size(); ++i) {
             cb(m_worker_reactors[i].get(), (i == (m_worker_reactors.size() - 1)));
         }
     } else {
@@ -642,7 +641,7 @@ void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
 }
 
 int IOManager::multicast_msg_and_wait(thread_regex r, const std::shared_ptr< sync_msg_base >& smsg) {
-    auto sent_to = multicast_msg(r, smsg->base_msg());
+    const auto sent_to{multicast_msg(r, smsg->base_msg())};
     if (sent_to != 0) { smsg->wait(); }
     smsg->free_base_msg();
     return sent_to;
@@ -672,7 +671,7 @@ bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
 }
 
 bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, const std::shared_ptr< sync_msg_base >& smsg) {
-    auto sent = send_msg(to_thread, smsg->base_msg());
+    const auto sent{send_msg(to_thread, smsg->base_msg())};
     if (sent) { smsg->wait(); }
     smsg->free_base_msg();
     return sent;
@@ -753,10 +752,18 @@ void IOManager::specific_reactor(int thread_num, const auto& cb) {
 }
 
 IOReactor* IOManager::round_robin_reactor() const {
-    static uint64_t s_idx{0};
+    static std::atomic< size_t > s_idx{0};
     do {
-        const auto idx = s_idx++ % m_worker_reactors.size();
-        if (m_worker_reactors[idx] != nullptr) { return m_worker_reactors[idx].get(); }
+        // Let's assume that we wanted to do this
+        size_t current_idx{s_idx.load(std::memory_order_relaxed)};
+        size_t new_idx{(current_idx + 1) % m_worker_reactors.size()};
+        // This will now either succeed or not in the presence of concurrency
+        while (!s_idx.compare_exchange_weak(current_idx, new_idx, std::memory_order_relaxed)) {
+            current_idx = s_idx.load(std::memory_order_relaxed);
+            new_idx = (current_idx + 1) % m_worker_reactors.size();
+        }
+
+        if (m_worker_reactors[new_idx] != nullptr) { return m_worker_reactors[new_idx].get(); }
     } while (true);
 }
 
