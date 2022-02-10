@@ -755,11 +755,11 @@ IOReactor* IOManager::round_robin_reactor() const {
     static std::atomic< size_t > s_idx{0};
     do {
         // Let's assume that we wanted to do this
-        size_t current_idx{s_idx.load(std::memory_order_relaxed)};
+        size_t current_idx{s_idx.load(std::memory_order_acquire)};
         size_t new_idx{(current_idx + 1) % m_worker_reactors.size()};
         // This will now either succeed or not in the presence of concurrency
-        while (!s_idx.compare_exchange_weak(current_idx, new_idx, std::memory_order_relaxed)) {
-            current_idx = s_idx.load(std::memory_order_relaxed);
+        while (!s_idx.compare_exchange_weak(current_idx, new_idx, std::memory_order_release)) {
+            current_idx = s_idx.load(std::memory_order_acquire);
             new_idx = (current_idx + 1) % m_worker_reactors.size();
         }
 
