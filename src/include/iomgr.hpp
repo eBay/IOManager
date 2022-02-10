@@ -346,21 +346,24 @@ public:
         static thread_local synchronized_async_method_ctx tl_mctx;
         tl_mctx.outstanding_count = 0;
 
-        std::lock_guard< std::mutex > serialize_lock{serialize_mtx};
-
-        const int executed_on{run_on(r, [&fn, &mctx = tl_mctx]([[maybe_unused]] auto taddr) {
-            fn(mctx);
-            {
-                std::unique_lock< std::mutex > lk{mctx.m};
-                --mctx.outstanding_count;
-            }
-            mctx.cv.notify_one();
-        })};
-
+        // NOTE: access to this function must be serialized otherwise SPDK fails at this time
         {
-            std::unique_lock< std::mutex > lk{tl_mctx.m};
-            tl_mctx.outstanding_count += executed_on;
-            tl_mctx.cv.wait(lk, [] { return (tl_mctx.outstanding_count == 0); });
+            std::lock_guard< std::mutex > serialize_lock{serialize_mtx};
+
+            const int executed_on{run_on(r, [&fn, &mctx = tl_mctx]([[maybe_unused]] auto taddr) {
+                fn(mctx);
+                {
+                    std::unique_lock< std::mutex > lk{mctx.m};
+                    --mctx.outstanding_count;
+                }
+                mctx.cv.notify_one();
+            })};
+
+            {
+                std::unique_lock< std::mutex > lk{tl_mctx.m};
+                tl_mctx.outstanding_count += executed_on;
+                tl_mctx.cv.wait(lk, [] { return (tl_mctx.outstanding_count == 0); });
+            }
         }
     }
 
