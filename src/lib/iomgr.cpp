@@ -675,10 +675,8 @@ void* IOManager::create_mempool(size_t element_size, size_t element_count) {
             }
         }
         LOGINFO("Creating new mempool of size {}", element_count);
-
-        struct spdk_mempool *mempool =
-            spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
-        RELEASE_ASSERT_EQ(mempool, nullptr, "Failed to create new mempool of size {}", size);
+        mempool = spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+        RELEASE_ASSERT(mempool == nullptr, "Failed to create new mempool of size {}", element_size);
         m_iomgr_internal_pools[idx] = mempool;
         return mempool;
     } else {
@@ -926,7 +924,7 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
-    return spdk_mempool_get(iomanager.get_mempool(sz));
+    return (uint8_t *)spdk_mempool_get(iomanager.get_mempool(sz));
 }
 
 void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {

@@ -424,11 +424,8 @@ public:
     }
 
     uint64_t get_mempool_idx(size_t size);
-    void* get_mempool(size_t size);
+    spdk_mempool* get_mempool(size_t size);
     void* create_mempool(size_t element_size, size_t element_count);
-    std::array< spdk_mempool*, max_mempool_count > get_iomgr_internal_pools() {
-        return m_iomgr_internal_pools;
-    }
 
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
