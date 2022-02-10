@@ -253,6 +253,7 @@ int main(int argc, char* argv[]) {
     g_iodev->drive_interface()->close_dev(g_iodev);
 
     // Stop the IOManage for clean exit
+    iomanager.stop_io_loop();
     iomanager.stop();
 
     if (created) {
