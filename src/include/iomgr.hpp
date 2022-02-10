@@ -330,8 +330,8 @@ public:
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
-        static synchronized_async_method_ctx mctx;
-        int executed_on = run_on(r, [&fn]([[maybe_unused]] auto taddr) {
+        static thread_local synchronized_async_method_ctx mctx;
+        const int executed_on = run_on(r, [&fn]([[maybe_unused]] auto taddr) {
             fn(mctx);
             {
                 std::unique_lock< std::mutex > lk{mctx.m};
@@ -407,9 +407,7 @@ public:
 
     void wait_for_state(iomgr_state expected_state) {
         std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (m_state != expected_state) {
-            m_cv.wait(lck, [&] { return (m_state == expected_state); });
-        }
+        m_cv.wait(lck, [&] { return (m_state == expected_state); });
     }
 
     void ensure_running() {

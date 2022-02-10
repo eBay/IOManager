@@ -571,10 +571,10 @@ void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
 }
 
 void IOManager::reactor_stopped() {
-    if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
-
     // Notify the caller registered to iomanager for it
     this_reactor()->notify_thread_state(false /* started */);
+
+    if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
 }
 
 void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
@@ -616,7 +616,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
         static thread_local std::default_random_engine s_re{s_rd()};
 
         auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
-        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
+        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor) ? 1 : 0;
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
             if (reactor && reactor->is_io_reactor()) {
@@ -630,9 +630,12 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                             }
                         } else {
                             auto new_msg = msg->clone();
-                            reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor);
-                            cloned = true;
-                            ++sent_to;
+                            if (reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor)) {
+                                cloned = true;
+                                ++sent_to;
+                            } else {
+                                iomgr_msg::free(new_msg);
+                            }
                         }
                     }
                 }
