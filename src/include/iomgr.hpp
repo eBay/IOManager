@@ -342,8 +342,11 @@ public:
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
+        static std::mutex serialize_mtx;
         static thread_local synchronized_async_method_ctx tl_mctx;
         tl_mctx.outstanding_count = 0;
+
+        std::lock_guard< std::mutex > serialize_lock{serialize_mtx};
 
         const int executed_on{run_on(r, [&fn, &mctx = tl_mctx]([[maybe_unused]] auto taddr) {
             fn(mctx);
