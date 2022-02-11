@@ -216,11 +216,13 @@ int main(int argc, char* argv[]) {
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
-    void* mempool = iomanager.create_mempool(io_size, 32);
-    RELEASE_ASSERT_NE(mempool, nullptr, "Mempool was not created successfully");
-    LOGINFO("Allocated mempool size = {}", io_size);
-    uint8_t* mempool_buf = iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size);
-    iomanager.iobuf_pool_free(mempool_buf, io_size);
+    if (iomanager.is_spdk_mode()) {
+        void* mempool = iomanager.create_mempool(io_size, 32);
+        RELEASE_ASSERT_NOTNULL(mempool, "Mempool was not created successfully");
+        LOGINFO("Allocated mempool size = {}", io_size);
+        uint8_t* mempool_buf = iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size);
+        iomanager.iobuf_pool_free(mempool_buf, io_size);
+    }
 
     iomanager.run_on(thread_regex::all_io, workload_on_thread);
 
