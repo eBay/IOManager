@@ -216,8 +216,7 @@ int main(int argc, char* argv[]) {
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
-    void* mempool = iomanager.create_mempool(io_size, 32);
-    assert(mempool != nullptr);
+    iomanager.create_mempool(io_size, 32);
     LOGINFO("Allocated mempool size = {}", io_size);
     uint8_t* mempool_buf = iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size);
     iomanager.iobuf_pool_free(mempool_buf, io_size);
