@@ -476,6 +476,11 @@ static void complete_io(SpdkIocb* iocb) {
 
     if (iomanager.get_io_wd()->is_on()) { iomanager.get_io_wd()->complete_io(iocb); }
 
+    // reduce outstanding async io's
+    [[maybe_unused]] const auto prev_outstanding_count{
+        iocb->iface->m_outstanding_async_ios.fetch_sub(1 + iocb->resubmit_cnt, std::memory_order_relaxed)};
+    assert(prev_outstanding_count > iocb->resubmit_cnt);
+
     sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
 }
 
@@ -497,11 +502,6 @@ static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void
 
     // LOGDEBUGMOD(iomgr, "Received completion on bdev = {}", (void*)iocb->iodev->bdev_desc());
     spdk_bdev_free_io(bdev_io);
-
-    // reduce outstanding async io's
-    [[maybe_unused]] const auto prev_outstanding_count{
-        iocb->iface->m_outstanding_async_ios.fetch_sub(1, std::memory_order_relaxed)};
-    assert(prev_outstanding_count > 0);
 
 #ifdef _PRERELEASE
     auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io");
@@ -777,8 +777,10 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 
 void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
     iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
-        std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        iocb->sync_io_completed = true;
+        {
+            std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
+            iocb->sync_io_completed = true;
+        }
         m_sync_cv.notify_all();
     };
 
@@ -797,16 +799,24 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
 void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb submit: mode=local_sync, {}", iocb->to_string());
 
-    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) { iocb->sync_io_completed = true; };
+    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
+        std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
+        iocb->sync_io_completed = true;
+    };
     submit_io((void*)iocb);
 
     auto sthread = spdk_get_thread();
     auto cur_wait_us = max_wait_sync_io_us;
+    bool completed{false};
     do {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
         if (cur_wait_us > min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
-    } while (!iocb->sync_io_completed);
+        {
+            std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
+            completed = iocb->sync_io_completed;
+        }
+    } while (!completed);
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }
