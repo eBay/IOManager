@@ -247,6 +247,7 @@ int main(int argc, char* argv[]) {
 
     // Wait for IO to finish on all threads.
     runner.wait();
+    std::this_thread::sleep_for(std::chrono::seconds{1});
 
     LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
 
