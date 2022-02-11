@@ -32,7 +32,7 @@ using namespace std::chrono_literals;
 namespace iomgr {
 struct SpdkDriveDeviceContext : public IODeviceThreadContext {
     ~SpdkDriveDeviceContext() = default;
-    struct spdk_io_channel* channel{NULL};
+    spdk_io_channel* channel{nullptr};
 };
 
 struct spdk_msg_type {
