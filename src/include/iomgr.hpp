@@ -554,8 +554,6 @@ struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
     void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
-    uint8_t* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) override;
-    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) override;
 };
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr
