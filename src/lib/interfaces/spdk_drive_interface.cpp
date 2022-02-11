@@ -389,7 +389,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     // wait for outstanding IO's to complete
     LOGINFOMOD(iomgr, "Device {} bdev_name={} close device issued with {} outstanding ios", iodev->devname,
                iodev->alias_name, m_outstanding_async_ios);
-    constexpr std::chrono::milliseconds max_wait_ms{1000};
+    constexpr std::chrono::milliseconds max_wait_ms{5000};
     constexpr std::chrono::milliseconds wait_interval_ms{50};
     const auto start_time{std::chrono::steady_clock::now()};
     while (m_outstanding_async_ios != 0) {
