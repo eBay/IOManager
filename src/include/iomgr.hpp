@@ -342,13 +342,13 @@ public:
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
-        static std::mutex serialize_mtx;
+        // static std::mutex serialize_mtx;
         static thread_local synchronized_async_method_ctx tl_mctx;
         tl_mctx.outstanding_count = 0;
 
         // NOTE: access to this function must be serialized otherwise SPDK fails at this time
         {
-            std::lock_guard< std::mutex > serialize_lock{serialize_mtx};
+            // std::lock_guard< std::mutex > serialize_lock{serialize_mtx};
 
             const int executed_on{run_on(r, [&fn, &mctx = tl_mctx]([[maybe_unused]] auto taddr) {
                 fn(mctx);
@@ -531,7 +531,7 @@ private:
     std::array< msg_handler_t, max_msg_modules > m_msg_handlers;
     uint32_t m_msg_handlers_count{0};
     msg_module_id_t m_internal_msg_module_id;
-    thread_state_notifier_t m_common_thread_state_notifier = nullptr;
+    thread_state_notifier_t m_common_thread_state_notifier{nullptr};
     sisl::IDReserver m_thread_idx_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
