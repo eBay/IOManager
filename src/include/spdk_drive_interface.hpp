@@ -17,8 +17,9 @@
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/vector_pool.hpp>
 #include <sisl/metrics/metrics.hpp>
-#include <spdk/bdev.h>
 #include <sisl/utility/enum.hpp>
+
+#include <spdk/bdev.h>
 
 #include "drive_interface.hpp"
 #include "iomgr_config.hpp"
@@ -167,6 +168,7 @@ private:
     std::condition_variable m_sync_cv;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
+    std::atomic< size_t > m_outstanding_async_ios;
 };
 
 struct SpdkBatchIocb {

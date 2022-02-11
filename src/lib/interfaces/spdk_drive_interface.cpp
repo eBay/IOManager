@@ -1,12 +1,20 @@
-#include <sisl/logging/logging.h>
-#include "include/iomgr.hpp"
-#include "include/spdk_drive_interface.hpp"
-#include "include/reactor_spdk.hpp"
-#include <folly/Exception.h>
-#include <sisl/fds/obj_allocator.hpp>
-#include <sisl/fds/buffer.hpp>
 #include <filesystem>
 #include <thread>
+
+#include <sisl/fds/buffer.hpp>
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/logging/logging.h>
+
+// TODO: Remove this once the problem is fixed in folly
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattribute-warning"
+#endif
+#include <folly/Exception.h>
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
 // TODO: Remove this once the problem is fixed in flip
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -29,6 +37,11 @@ extern "C" {
 #include <spdk/module/bdev/nvme/bdev_nvme.h>
 #include <spdk/nvme.h>
 }
+
+#include "include/iomgr.hpp"
+#include "include/reactor_spdk.hpp"
+#include "include/spdk_drive_interface.hpp"
+
 namespace iomgr {
 
 static io_thread_t _non_io_thread = std::make_shared< io_thread >();
@@ -347,6 +360,9 @@ void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
         folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
     }
 
+    // reset stats
+    m_outstanding_async_ios = 0;
+
     // Set the bdev to split on underlying device io boundary.
     auto bdev = spdk_bdev_get_by_name(iodev->alias_name.c_str());
     if (!bdev) { folly::throwSystemError(fmt::format("Unable to get opened device={}", iodev->alias_name)); }
@@ -365,7 +381,25 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     assert(iodev->creator != nullptr);
     iomanager.run_on(
         iodev->creator,
-        [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev)](io_thread_addr_t taddr) { spdk_bdev_close(bdev_desc); },
+        [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev), this](io_thread_addr_t taddr) {
+            // wait for outstanding IO's to complete
+            constexpr std::chrono::milliseconds max_wait_ms{1000};
+            constexpr std::chrono::milliseconds wait_interval_ms{50};
+            const auto start_time{std::chrono::steady_clock::now()};
+            while (m_outstanding_async_ios != 0) {
+                std::this_thread::sleep_for(wait_interval_ms);
+                const auto current_time{std::chrono::steady_clock::now()};
+                if (std::chrono::duration_cast< std::chrono::milliseconds >(current_time - start_time).count() >=
+                    max_wait_ms.count()) {
+                    LOGERRORMOD(iomgr,
+                                "spdk close_dev timeout waiting for async io's to complete. IO's outstanding: {}",
+                                m_outstanding_async_ios);
+                    break;
+                }
+            }
+
+            spdk_bdev_close(bdev_desc);
+        },
         wait_type_t::sleep);
 
     iodev->clear();
@@ -460,8 +494,14 @@ static std::string explain_bdev_io_status(struct spdk_bdev_io* bdev_io) {
 static void process_completions(struct spdk_bdev_io* bdev_io, bool success, void* ctx) {
     SpdkIocb* iocb = (SpdkIocb*)ctx;
     assert(iocb->iodev->bdev_desc());
+
     // LOGDEBUGMOD(iomgr, "Received completion on bdev = {}", (void*)iocb->iodev->bdev_desc());
     spdk_bdev_free_io(bdev_io);
+
+    // reduce outstanding async io's
+    [[maybe_unused]] const auto prev_outstanding_count{
+        iocb->iface->m_outstanding_async_ios.fetch_sub(1, std::memory_order_relaxed)};
+    assert(prev_outstanding_count > 0);
 
 #ifdef _PRERELEASE
     auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io");
@@ -507,6 +547,8 @@ static void submit_io(void* b) {
     iocb->owns_by_spdk = true;
 #endif
 
+    // preadd outstanding io's so that if completes quickly count will not become negative
+    iocb->iface->m_outstanding_async_ios.fetch_add(1, std::memory_order_relaxed);
     LOGDEBUGMOD(iomgr, "iocb submit: mode=actual, {}", iocb->to_string());
     if (iocb->op_type == DriveOpType::READ) {
         if (iocb->has_iovs()) {
@@ -531,11 +573,15 @@ static void submit_io(void* b) {
         rc = spdk_bdev_write_zeroes(iocb->iodev->bdev_desc(), get_io_channel(iocb->iodev), iocb->offset, iocb->size,
                                     process_completions, (void*)iocb);
     } else {
+        // adjust count since unrecognized command
+        iocb->iface->m_outstanding_async_ios.fetch_sub(1, std::memory_order_relaxed);
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
         return;
     }
 
     if (rc != 0) {
+        // adjust count since unsuccessful command
+        iocb->iface->m_outstanding_async_ios.fetch_sub(1, std::memory_order_relaxed);
         if (rc == -ENOMEM) {
             LOGDEBUGMOD(iomgr, "Bdev is lacking memory to do IO right away, queueing iocb: {}", iocb->to_string());
             COUNTER_INCREMENT(iocb->iface->get_metrics(), queued_ios_for_memory_pressure, 1);
