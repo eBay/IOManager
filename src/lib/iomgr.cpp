@@ -653,11 +653,6 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     return sent_to;
 }
 
-uint64_t IOManager::get_mempool_idx(size_t size) {
-    DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size is less than minimum mempool buf size");
-    return spdk_u64log2(size / min_mempool_buf_size);
-}
-
 spdk_mempool* IOManager::get_mempool(size_t size) {
     uint64_t idx = get_mempool_idx(size);
     return m_iomgr_internal_pools[idx];

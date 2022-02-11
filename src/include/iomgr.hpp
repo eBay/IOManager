@@ -423,7 +423,10 @@ public:
         }
     }
 
-    uint64_t get_mempool_idx(size_t size);
+    uint64_t get_mempool_idx(size_t size) const {
+        DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size is less than minimum mempool buf size");
+        return spdk_u64log2(size / min_mempool_buf_size);
+    }
     spdk_mempool* get_mempool(size_t size);
     void* create_mempool(size_t element_size, size_t element_count);
 
