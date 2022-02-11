@@ -42,6 +42,8 @@ extern "C" {
 #include "include/reactor_spdk.hpp"
 #include "include/spdk_drive_interface.hpp"
 
+using namespace std::chrono_literals;
+
 namespace iomgr {
 
 static io_thread_t _non_io_thread = std::make_shared< io_thread >();
@@ -360,7 +362,7 @@ void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
         folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
     }
 
-    // reset stats
+    // reset counters
     m_outstanding_async_ios = 0;
 
     // Set the bdev to split on underlying device io boundary.
@@ -376,12 +378,17 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
 #ifdef REFCOUNTED_OPEN_DEV
     if (!iodev->opened_count.decrement_testz()) { return; }
 #endif
+    // TODO: In the future might want to add atomic that will block any new read/write access to device that occur
+    // after the close is called
+
     // check if current thread is reactor
     const auto& reactor{iomanager.this_reactor()};
     const bool this_thread_reactor{reactor && reactor->is_io_reactor()};
     auto* const sthread{this_thread_reactor ? spdk_get_thread() : nullptr};
 
     // wait for outstanding IO's to complete
+    LOGINFOMOD(iomgr, "Device {} bdev_name={} close device issued with {} outstanding ios", iodev->devname,
+               iodev->alias_name, m_outstanding_async_ios);
     constexpr std::chrono::milliseconds max_wait_ms{1000};
     constexpr std::chrono::milliseconds wait_interval_ms{50};
     const auto start_time{std::chrono::steady_clock::now()};
@@ -391,13 +398,13 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
         const auto current_time{std::chrono::steady_clock::now()};
         if (std::chrono::duration_cast< std::chrono::milliseconds >(current_time - start_time).count() >=
             max_wait_ms.count()) {
-            LOGERRORMOD(iomgr, "spdk close_dev timeout waiting for async io's to complete. IO's outstanding: {}",
-                        m_outstanding_async_ios);
+            LOGERRORMOD(
+                iomgr,
+                "Device {} bdev_name={} close device timeout waiting for async io's to complete. IO's outstanding: {}",
+                iodev->devname, iodev->alias_name, m_outstanding_async_ios);
             break;
         }
     }
-    LOGINFO("spdk IO's outstanding: {}", m_outstanding_async_ios);
-    LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
 
     IOInterface::close_dev(iodev);
     assert(iodev->creator != nullptr);

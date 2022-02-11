@@ -153,6 +153,8 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_ty
 }
 
 void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
+    // TODO: This is where we would wait for any outstanding io's to complete
+
     IOInterface::close_dev(iodev);
 
     // AIO base devices are not added to any poll list, so it can be closed as is.
