@@ -376,9 +376,6 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
 #ifdef REFCOUNTED_OPEN_DEV
     if (!iodev->opened_count.decrement_testz()) { return; }
 #endif
-    IOInterface::close_dev(iodev);
-    assert(iodev->creator != nullptr);
-
     // check if current thread is reactor
     const auto& reactor{iomanager.this_reactor()};
     const bool this_thread_reactor{reactor && reactor->is_io_reactor()};
@@ -401,6 +398,9 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     }
     LOGINFO("spdk IO's outstanding: {}", m_outstanding_async_ios);
     LOGINFO("IOManagerMetrics: {}", sisl::MetricsFarm::getInstance().get_result_in_json().dump(4));
+
+    IOInterface::close_dev(iodev);
+    assert(iodev->creator != nullptr);
 
     iomanager.run_on(
         iodev->creator,
