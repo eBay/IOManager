@@ -21,6 +21,7 @@
 #endif
 
 #include <semver/semver200.h>
+#include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
 #include <sisl/fds/malloc_helper.hpp>
@@ -143,7 +144,9 @@ public:
     // TODO: Make this a dynamic config (albeit non-hotswap)
     static constexpr uint32_t max_msg_modules = 64;
     static constexpr uint32_t max_io_threads = 1024; // Keep in mind increasing this cause increased mem footprint
-
+    static constexpr uint64_t max_mempool_buf_size = 256 * 1024;
+    static constexpr uint64_t min_mempool_buf_size = 512;
+    static constexpr uint64_t max_mempool_count = std::log2(max_mempool_buf_size - min_mempool_buf_size);
     /********* Start/Stop Control Related Operations ********/
 
     /**
@@ -432,6 +435,15 @@ public:
         }
     }
 
+    uint64_t get_mempool_idx(size_t size) const {
+        DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size must be modulo mempool buf size");
+        DEBUG_ASSERT_GE(size, min_mempool_buf_size,
+                        "Mempool size must be greater than or equal to minimum mempool buf size");
+        return sisl::logBase2(size / min_mempool_buf_size);
+    }
+    spdk_mempool* get_mempool(size_t size);
+    void* create_mempool(size_t element_size, size_t element_count);
+
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
     thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
@@ -448,6 +460,8 @@ public:
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
     void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
+    uint8_t* iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
     void set_io_memory_limit(size_t limit);
@@ -500,6 +514,7 @@ private:
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors{0}; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors{0};
     uint32_t m_num_workers{0};
+    std::array< spdk_mempool*, max_mempool_count > m_iomgr_internal_pools;
 
     std::shared_mutex m_iface_list_mtx;
     std::vector< std::shared_ptr< IOInterface > > m_iface_list;
@@ -547,6 +562,8 @@ struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
     uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
     void aligned_free(uint8_t* b, const sisl::buftag tag) override;
     uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
+    uint8_t* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) override;
+    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) override;
     size_t buf_size(uint8_t* buf) const override;
 };
 

@@ -395,6 +395,9 @@ void IOManager::stop_spdk() {
     spdk_thread_lib_fini();
     spdk_env_fini();
     m_spdk_reinit_needed = true;
+    for (spdk_mempool* mempool : m_iomgr_internal_pools) {
+        if (mempool != nullptr) { spdk_mempool_free(mempool); }
+    }
 }
 
 void IOManager::start_reactors() {
@@ -630,6 +633,32 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     return sent_to;
 }
 
+spdk_mempool* IOManager::get_mempool(size_t size) {
+    uint64_t idx = get_mempool_idx(size);
+    return m_iomgr_internal_pools[idx];
+}
+
+void* IOManager::create_mempool(size_t element_size, size_t element_count) {
+    if (m_is_spdk) {
+        const uint64_t idx{get_mempool_idx(element_size)};
+        spdk_mempool* mempool{m_iomgr_internal_pools[idx]};
+        if (mempool != nullptr) {
+            if (spdk_mempool_count(mempool) == element_count) {
+                return mempool;
+            } else {
+                spdk_mempool_free(mempool);
+            }
+        }
+        LOGINFO("Creating new mempool of size {}", element_size);
+        mempool = spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
+        RELEASE_ASSERT(mempool != nullptr, "Failed to create new mempool of size {}", element_size);
+        m_iomgr_internal_pools[idx] = mempool;
+        return mempool;
+    } else {
+        return nullptr;
+    }
+}
+
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
         for (size_t i{0}; i < m_worker_reactors.size(); ++i) {
@@ -836,6 +865,14 @@ void IOManager::iobuf_free(uint8_t* buf, const sisl::buftag tag) {
     sisl::AlignedAllocator::allocator().aligned_free(buf, tag);
 }
 
+uint8_t* IOManager::iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag) {
+    return sisl::AlignedAllocator::allocator().aligned_pool_alloc(align, size, tag);
+}
+
+void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag) {
+    sisl::AlignedAllocator::allocator().aligned_pool_free(buf, size, tag);
+}
+
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
 void IOManager::set_io_memory_limit(const size_t limit) {
@@ -867,6 +904,14 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
     sisl::AlignedAllocator::metrics().increment(sisl::buftag::common, new_sz - old_sz);
 #endif
     return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+}
+
+uint8_t* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
+    return (uint8_t*)spdk_mempool_get(iomanager.get_mempool(sz));
+}
+
+void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {
+    spdk_mempool_put(iomanager.get_mempool(sz), b);
 }
 
 size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
