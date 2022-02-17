@@ -117,6 +117,14 @@ static bool is_cpu_pinning_enabled() {
     return false;
 }
 
+static std::mutex s_core_assign_mutex;
+static std::unordered_set< uint32_t > s_core_assignment;
+static bool assign_core_if_available(uint32_t lcore) {
+    std::unique_lock lg(s_core_assign_mutex);
+    const auto [it, inserted] = s_core_assignment.insert(lcore);
+    return inserted;
+}
+
 IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.reserve(inbuilt_interface_count + 5); }
 
 IOManager::~IOManager() = default;
@@ -141,7 +149,6 @@ static bool check_uring_capability() {
 
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
                       const interface_adder_t& iface_adder) {
-
     if (get_state() == iomgr_state::running) {
         LOGWARN("WARNING: IOManager is asked to start, but it is already in running state. Ignoring the start request");
         return;
@@ -197,7 +204,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-    start_reactors();
+    create_reactors();
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -403,6 +410,7 @@ void IOManager::stop() {
         // m_default_grpc_iface.reset();
         m_drive_ifaces.clear();
         m_iface_list.clear();
+        s_core_assignment.clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
     assert(get_state() == iomgr_state::stopped);
 
@@ -422,49 +430,72 @@ void IOManager::stop_spdk() {
     }
 }
 
-void IOManager::start_reactors() {
+void IOManager::create_reactors() {
+    // First populate the full sparse vector of m_worker_reactors before starting workers.
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_reactors.push_back(nullptr);
     }
 
-    if (m_is_spdk && m_is_cpu_pinning_enabled) {
-        const auto current_core = spdk_env_get_current_core();
-        auto lcore = spdk_env_get_first_core();
-        uint32_t worker{0};
+    for (uint32_t i{0}; i < m_num_workers; ++i) {
+        m_worker_threads.emplace_back(create_reactor_internal(
+            fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, (int)i, nullptr));
+        LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
+    }
+}
 
-        while (worker < m_num_workers) {
-            RELEASE_ASSERT_NE(lcore, std::numeric_limits< uint32_t >::max(),
-                              "System has less cores than iomgr threads={}", m_num_workers);
-            // Skip starting the thread loop on current core
-            if (lcore != current_core) {
-                int* p = new int{(int)worker};
-                const auto rc = spdk_env_thread_launch_pinned(
-                    lcore,
-                    [](void* arg) -> int {
-                        IOManager& p_this = IOManager::instance();
-                        const int* p = (const int*)arg;
-                        const int reactor_num = *p;
-                        delete p;
-                        set_thread_name("iomgr_thread");
-                        p_this._run_io_loop(reactor_num, p_this.m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, nullptr,
-                                            nullptr);
-                        return 0;
-                    },
-                    (void*)p);
-                RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
-                m_worker_threads.emplace_back(sys_thread_id_t{lcore});
-                LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", worker);
-                ++worker;
-            }
+void IOManager::create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier) {
+    create_reactor_internal(name, loop_type, -1, std::move(notifier));
+}
+
+void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
+                                    thread_state_notifier_t&& addln_notifier) {
+    _run_io_loop(-1, loop_type, iodev_selector, std::move(addln_notifier));
+}
+
+sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop_type_t loop_type, int slot_num,
+                                                   thread_state_notifier_t&& notifier) {
+    if (m_is_spdk && m_is_cpu_pinning_enabled && (loop_type & TIGHT_LOOP)) {
+        struct param_holder {
+            std::string name;
+            thread_state_notifier_t notifier;
+            int slot_num;
+            loop_type_t loop_type;
+        };
+
+        // Skip starting the thread loop on current core
+        auto lcore = spdk_env_get_first_core();
+        const auto current_core = spdk_env_get_current_core();
+        while ((lcore != UINT32_MAX) && ((lcore == current_core) || !assign_core_if_available(lcore))) {
             lcore = spdk_env_get_next_core(lcore);
         }
+        RELEASE_ASSERT_NE(lcore, current_core, "No more cores to schedule this reactor {}", name);
+        RELEASE_ASSERT_NE(lcore, UINT32_MAX, "No more cores to schedule this reactor {}", name);
+
+        param_holder* h = new param_holder();
+        h->name = name;
+        h->notifier = std::move(notifier);
+        h->slot_num = slot_num;
+        h->loop_type = loop_type;
+
+        const auto rc = spdk_env_thread_launch_pinned(
+            lcore,
+            [](void* arg) -> int {
+                param_holder* h = (param_holder*)arg;
+                set_thread_name(h->name.c_str());
+                iomanager._run_io_loop(h->slot_num, h->loop_type, nullptr, std::move(h->notifier));
+                delete h;
+                return 0;
+            },
+            (void*)h);
+        RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
+        LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
+        return sys_thread_id_t{lcore};
     } else {
-        for (auto i = 0u; i < m_num_workers; ++i) {
-            m_worker_threads.emplace_back(
-                sys_thread_id_t(sisl::thread_factory("iomgr_thread", &IOManager::_run_io_loop, this, (int)i,
-                                                     m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, nullptr, nullptr)));
-            LOGTRACEMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
-        }
+        auto sthread = sisl::named_thread(name, [slot_num, loop_type, n = std::move(notifier)]() mutable {
+            iomanager._run_io_loop(slot_num, loop_type, nullptr, std::move(n));
+        });
+        sthread.detach();
+        return sys_thread_id_t{std::move(sthread)};
     }
 }
 
@@ -536,13 +567,8 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
                m_iface_list.size());
 }
 
-void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                                    const thread_state_notifier_t& addln_notifier) {
-    _run_io_loop(-1, loop_type, iodev_selector, addln_notifier);
-}
-
 void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                             const thread_state_notifier_t& addln_notifier) {
+                             thread_state_notifier_t&& addln_notifier) {
     loop_type_t ltype = loop_type;
 
     std::shared_ptr< IOReactor > reactor;
@@ -554,7 +580,7 @@ void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const io
         reactor = std::make_shared< IOReactorEPoll >();
     }
     *(m_reactors.get()) = reactor;
-    reactor->run(iomgr_slot_num, ltype, iodev_selector, addln_notifier);
+    reactor->run(iomgr_slot_num, ltype, iodev_selector, std::move(addln_notifier));
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
@@ -563,6 +589,7 @@ void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
     m_yet_to_stop_nreactors.increment();
     if (reactor->is_worker()) {
         m_worker_reactors[reactor->m_worker_slot_num] = reactor;
+        reactor->notify_thread_state(true);
 
         // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
         if (m_yet_to_start_nreactors.decrement_testz()) {
@@ -570,7 +597,6 @@ void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
             set_state_and_notify(iomgr_state::sys_init);
         }
     } else {
-        // For IOMgr created reactors, the notification be called after all reactors are started and system init.
         reactor->notify_thread_state(true);
     }
 }

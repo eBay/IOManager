@@ -28,7 +28,7 @@ IOReactor::~IOReactor() {
 }
 
 void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                    const thread_state_notifier_t& thread_state_notifier) {
+                    thread_state_notifier_t&& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
         LOGINFO("Starting a new IOReactor while iomanager is stopping or stopped, not starting io loop");
@@ -46,7 +46,7 @@ void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_sele
     if (!is_io_reactor()) {
         m_worker_slot_num = worker_slot_num;
         m_iodev_selector = iodev_selector;
-        m_this_thread_notifier = thread_state_notifier;
+        m_this_thread_notifier = std::move(thread_state_notifier);
 
         m_reactor_num = sisl::ThreadLocalContext::my_thread_num();
         REACTOR_LOG(INFO, base, , "IOReactor started and assigned reactor id {}", m_reactor_num);
