@@ -303,29 +303,18 @@ public:
         int sent_count{0};
 
         if ((wtype == wait_type_t::callback) && cb_wait_closure) {
-            static thread_local ssize_t tl_pending_count;
-            static thread_local std::mutex tl_pending_mtx;
-            static thread_local std::condition_variable tl_pending_cv;
-
+            static thread_local std::atomic< ssize_t > tl_pending_count;
             tl_pending_count = 0;
-            auto temp_cb = [fn, &pending_mtx = tl_pending_mtx, &pending_count = tl_pending_count,
-                            &pending_cv = tl_pending_cv](io_thread_addr_t addr) {
+
+            auto temp_cb = [fn, &pending_count = tl_pending_count, &cb_wait_closure](io_thread_addr_t addr) {
                 fn(addr);
-                {
-                    std::unique_lock lock{pending_mtx};
-                    --pending_count;
-                }
-                pending_cv.notify_one();
+                if (pending_count.fetch_sub(1) == 1) { cb_wait_closure(); }
             };
 
             sent_count =
                 multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
-            {
-                std::unique_lock lock{tl_pending_mtx};
-                tl_pending_count += sent_count;
-                tl_pending_cv.wait(lock, [] { return tl_pending_count == 0; });
-            }
-            cb_wait_closure();
+            if ((sent_count == 0) || (tl_pending_count.fetch_add(sent_count) == -sent_count)) { cb_wait_closure(); }
+
             return sent_count;
         }
 

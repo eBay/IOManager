@@ -1,3 +1,4 @@
+#include <cassert>
 #include <filesystem>
 #include <thread>
 
@@ -47,7 +48,7 @@ using namespace std::chrono_literals;
 namespace iomgr {
 
 static io_thread_t _non_io_thread{std::make_shared< io_thread >()};
-static thread_local size_t s_temp_thread_ref_count{0};
+static thread_local bool s_temp_thread_created{false};
 static thread_local int64_t t_outstanding_ops{0};
 
 #ifndef NDEBUG
@@ -87,23 +88,26 @@ struct creat_ctx {
 
 static spdk_thread* create_temp_spdk_thread() {
     auto* sthread = spdk_get_thread();
-    if (s_temp_thread_ref_count == 0) {
+    if (!s_temp_thread_created) {
         if (sthread != nullptr) { return sthread; } // We are already tight loop reactor
 
         sthread = IOReactorSPDK::create_spdk_thread();
         if (sthread == nullptr) { throw std::runtime_error("SPDK Thread Create failed"); }
         spdk_set_thread(sthread);
+        s_temp_thread_created = true;
     }
-    ++s_temp_thread_ref_count;
     return sthread;
 }
 
 static void destroy_temp_spdk_thread() {
-    if (s_temp_thread_ref_count == 0) {
+    if (!s_temp_thread_created) {
         assert(spdk_get_thread() != nullptr); // We must be a tight loop reactor, don't disturb it
-    } else if (--s_temp_thread_ref_count == 0) {
+    } else {
         auto* sthread = spdk_get_thread();
         assert(sthread != nullptr);
+        // NOTE: The set to false must be here or later not to allow overwrite with spdk_set_thread before getting value
+        s_temp_thread_created = false;
+
         spdk_thread_exit(sthread);
         while (!spdk_thread_is_exited(sthread)) {
             spdk_thread_poll(sthread, 0, 0);
@@ -492,7 +496,8 @@ static void complete_io(SpdkIocb* iocb) {
     // reduce outstanding async io's
     [[maybe_unused]] const auto prev_outstanding_count{
         iocb->iface->m_outstanding_async_ios.fetch_sub(1 + iocb->resubmit_cnt, std::memory_order_relaxed)};
-    assert(prev_outstanding_count > iocb->resubmit_cnt);
+    DEBUG_ASSERT_GT(prev_outstanding_count, iocb->resubmit_cnt,
+                    "Expect outstanding count to be greater than resubmit count.");
 
     sisl::ObjectAllocator< SpdkIocb >::deallocate(iocb);
 }
@@ -813,10 +818,9 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
 void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb submit: mode=local_sync, {}", iocb->to_string());
 
-    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
-        std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        iocb->sync_io_completed = true;
-    };
+    // NOTE: This callback is called in the same thread as the original entry via spdk_thread_poll so not
+    // synchronization of sync_io_completed is needed
+    iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) { iocb->sync_io_completed = true; };
     submit_io((void*)iocb);
 
     auto* sthread = spdk_get_thread();
@@ -826,10 +830,7 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
         if (cur_wait_us > min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
-        {
-            std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-            completed = iocb->sync_io_completed;
-        }
+        { completed = iocb->sync_io_completed; }
     } while (!completed);
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
@@ -865,8 +866,8 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
         iocb->result = res;
         if (!iocb->batch_info_ptr) {
-            auto* const reply{iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid,
-                                                reinterpret_cast< uint8_t* >(iocb), sizeof(SpdkIocb))};
+            auto* reply{iomgr_msg::create(spdk_msg_type::ASYNC_IO_DONE, m_my_msg_modid,
+                                          reinterpret_cast< uint8_t* >(iocb), sizeof(SpdkIocb))};
             iomanager.send_msg(iocb->owner_thread, reply);
         } else {
             ++(iocb->batch_info_ptr->num_io_comp);
@@ -877,9 +878,9 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
             // re-use the batch info ptr which contains all the batch iocbs to send/create
             // async_batch_io_done msg;
             if (iocb->batch_info_ptr->num_io_comp == iocb->batch_info_ptr->batch_io->size()) {
-                auto* const reply{iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
-                                                    reinterpret_cast< uint8_t* >(iocb->batch_info_ptr),
-                                                    sizeof(SpdkBatchIocb*))};
+                auto* reply{iomgr_msg::create(spdk_msg_type::ASYNC_BATCH_IO_DONE, m_my_msg_modid,
+                                              reinterpret_cast< uint8_t* >(iocb->batch_info_ptr),
+                                              sizeof(SpdkBatchIocb*))};
                 iomanager.send_msg(iocb->owner_thread, reply);
             }
 
@@ -963,8 +964,8 @@ drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) co
 
     /* Try to get the atomic physical page size from controller */
     attr.atomic_phys_page_size = 0;
-    if (strncmp(g_bdev->product_name, "NVMe disk", sizeof("NVMe disk")) == 0) {
-        nvme_bdev* const n_bdev{static_cast< nvme_bdev* >(g_bdev->ctxt)};
+    if (std::strncmp(g_bdev->product_name, "NVMe disk", sizeof("NVMe disk")) == 0) {
+        nvme_bdev* n_bdev{static_cast< nvme_bdev* >(g_bdev->ctxt)};
 
         // Get the namespace data if available
         const spdk_nvme_ns_data* nsdata{spdk_nvme_ns_get_data(n_bdev->nvme_ns->ns)};
