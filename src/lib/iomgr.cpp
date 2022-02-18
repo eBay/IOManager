@@ -784,7 +784,8 @@ IOReactor* IOManager::round_robin_reactor() const {
     static size_t s_idx{0};
     // static std::atomic< size_t > s_idx{0};
     do {
-        const size_t idx{s_idx.fetch_add(1, std::memory_order_relaxed) % m_worker_reactors.size()};
+        // const size_t idx{s_idx.fetch_add(1, std::memory_order_relaxed) % m_worker_reactors.size()};
+        const size_t idx{s_idx++ % m_worker_reactors.size()};
         if (m_worker_reactors[idx] != nullptr) { return m_worker_reactors[idx].get(); }
     } while (true);
 }
