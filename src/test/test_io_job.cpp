@@ -1,8 +1,20 @@
-#include <gtest/gtest.h>
-#include <iomgr.hpp>
+#include <cassert>
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#ifdef __linux__
+#include <fcntl.h>
+#endif
+
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
-#include <sisl/fds/atomic_status_counter.hpp>
+
+#include <gtest/gtest.h>
+
+#include <iomgr.hpp>
+
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;
@@ -22,18 +34,24 @@ SISL_OPTION_GROUP(test_io,
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 TEST(IOMgrTest, basic_io_test) {
-    auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
-    auto examiner = std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */);
+    const auto nthreads{SISL_OPTIONS["num_threads"].as< uint32_t >()};
+    const auto examiner{std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */)};
 
     // Create an add the device
     std::vector< std::string > devs{"/tmp/io_test"}; // Default if user has not provided
     if (SISL_OPTIONS.count("device_list")) { devs = SISL_OPTIONS["device_list"].as< std::vector< std::string > >(); }
-    auto dev_size = SISL_OPTIONS["device_size"].as< uint64_t >();
+    const auto dev_size{SISL_OPTIONS["device_size"].as< uint64_t >()};
     for (const auto& dev : devs) {
-        auto fd = open(dev.c_str(), O_RDWR | O_CREAT, 0666);
-        fallocate(fd, 0, 0, dev_size);
-        close(fd);
-        examiner->add_device(dev, O_RDWR);
+        const std::filesystem::path file_path{dev};
+        if (!std::filesystem::exists(file_path)) {
+            LOGINFO("Device {} doesn't exists, creating a file for size {}", dev, dev_size);
+            const auto fd{::open(dev.c_str(), O_RDWR | O_CREAT, 0666)};
+            assert(fd > 0);
+            ::close(fd);
+
+            std::filesystem::resize_file(file_path, dev_size);
+            examiner->add_device(dev, O_RDWR);
+        }
     }
 
     IOJobCfg cfg;
