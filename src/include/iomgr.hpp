@@ -369,27 +369,27 @@ public:
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
 
     bool am_i_io_reactor() const {
-        auto* const r{this_reactor()};
+        auto* r{this_reactor()};
         return r && r->is_io_reactor();
     }
 
     bool am_i_tight_loop_reactor() const {
-        auto* const r{this_reactor()};
+        auto* r{this_reactor()};
         return r && r->is_tight_loop_reactor();
     }
 
     bool am_i_worker_reactor() const {
-        auto* const r{this_reactor()};
+        auto* r{this_reactor()};
         return r && r->is_worker();
     }
 
     bool am_i_adaptive_reactor() const {
-        auto* const r{this_reactor()};
+        auto* r{this_reactor()};
         return r && r->is_adaptive_loop();
     }
 
     void set_my_reactor_adaptive(bool adaptive) {
-        auto* const r{this_reactor()};
+        auto* r{this_reactor()};
         if (r) { r->set_adaptive_loop(adaptive); }
     }
 

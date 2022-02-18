@@ -47,9 +47,11 @@ using namespace std::chrono_literals;
 
 namespace iomgr {
 
-static io_thread_t _non_io_thread{std::make_shared< io_thread >()};
-static thread_local bool s_temp_thread_created{false};
-static thread_local int64_t t_outstanding_ops{0};
+namespace {
+io_thread_t _non_io_thread{std::make_shared< io_thread >()};
+thread_local bool s_temp_thread_created{false};
+thread_local int64_t t_outstanding_ops{0};
+} // namespace
 
 #ifndef NDEBUG
 std::atomic< uint64_t > drive_iocb::_iocb_id_counter{0};
@@ -74,15 +76,15 @@ struct creat_ctx {
 
     void done() {
         {
-            std::unique_lock lg(mtx);
+            std::unique_lock lg{mtx};
             is_done = true;
         }
         cv.notify_all();
     }
 
     void wait() {
-        std::unique_lock lg(mtx);
-        cv.wait(lg, [this]() { return is_done == true; });
+        std::unique_lock lg{mtx};
+        cv.wait(lg, [this]() { return is_done; });
     }
 };
 
@@ -796,7 +798,7 @@ ssize_t SpdkDriveInterface::do_sync_io(SpdkIocb* iocb, const io_interface_comp_c
 void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
     iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) {
         {
-            std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
+            std::unique_lock< std::mutex > lk{m_sync_cv_mutex};
             iocb->sync_io_completed = true;
         }
         m_sync_cv.notify_all();
@@ -808,8 +810,8 @@ void SpdkDriveInterface::submit_sync_io_to_tloop_thread(SpdkIocb* iocb) {
     iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
 
     {
-        std::unique_lock< std::mutex > lk(m_sync_cv_mutex);
-        m_sync_cv.wait(lk, [&]() { return iocb->sync_io_completed; });
+        std::unique_lock< std::mutex > lk{m_sync_cv_mutex};
+        m_sync_cv.wait(lk, [&iocb]() { return iocb->sync_io_completed; });
     }
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=sync, {}", iocb->to_string());
@@ -821,17 +823,20 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     // NOTE: This callback is called in the same thread as the original entry via spdk_thread_poll so not
     // synchronization of sync_io_completed is needed
     iocb->comp_cb = [iocb, this](int64_t res, uint8_t* cookie) { iocb->sync_io_completed = true; };
-    submit_io((void*)iocb);
+    submit_io(iocb);
 
     auto* sthread = spdk_get_thread();
     auto cur_wait_us = max_wait_sync_io_us;
-    bool completed{false};
     do {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
-        if (cur_wait_us > min_wait_sync_io_us) { cur_wait_us = cur_wait_us - 1us; }
-        { completed = iocb->sync_io_completed; }
-    } while (!completed);
+        if (cur_wait_us > min_wait_sync_io_us) {
+            cur_wait_us = cur_wait_us - 1us;
+        } else {
+            LOGWARNMOD(iomgr, "iocb complete: mode=local_sync, wait timeout {} us exceeded",
+                       max_wait_sync_io_us.count() - min_wait_sync_io_us.count());
+        }
+    } while (!iocb->sync_io_completed);
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
 }

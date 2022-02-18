@@ -221,8 +221,8 @@ struct SpdkIocb : public drive_iocb {
                            get_elapsed_time_ms(op_start_time));
 
         if (has_iovs()) {
-            const auto* const ivs{get_iovs()};
-            for (auto i{0}; i < iovcnt; ++i) {
+            const auto* ivs{get_iovs()};
+            for (decltype(iovcnt) i{0}; i < iovcnt; ++i) {
                 str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
             }
         } else {

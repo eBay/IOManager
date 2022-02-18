@@ -101,7 +101,7 @@ static thread_local Workload work;
 static Runner runner;
 
 static void do_write_io(size_t offset) {
-    auto* const req{new io_req()};
+    auto* req = new io_req();
     req->buf_arr->fill(offset);
 
     // memset(wbuf, offset, io_size);
@@ -111,7 +111,7 @@ static void do_write_io(size_t offset) {
 }
 
 static void do_read_io(size_t offset) {
-    auto* const req{new io_req()};
+    auto* req = new io_req();
     g_iodev->drive_interface()->async_read(g_iodev.get(), reinterpret_cast< char* >(req->buf), io_size, offset,
                                            reinterpret_cast< uint8_t* >(req));
     // LOGINFO("Read on Offset {}", offset);
@@ -173,7 +173,7 @@ static void do_verify() {
 
 static void on_io_completion(int64_t res, uint8_t* cookie) {
     // LOGINFO("An IO is completed");
-    io_req* const req{reinterpret_cast< io_req* >(cookie)};
+    io_req* req{reinterpret_cast< io_req* >(cookie)};
     delete req;
 
     ++work.available_qs;
@@ -239,15 +239,15 @@ int main(int argc, char* argv[]) {
     g_driveattr = iomgr::DriveInterface::get_attributes(dev_path);
     g_iodev->drive_interface()->attach_completion_cb(on_io_completion);
 
-    uint8_t* const buf{iomanager.iobuf_alloc(g_driveattr.align_size, 8192)};
+    uint8_t* buf{iomanager.iobuf_alloc(g_driveattr.align_size, 8192)};
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
     if (iomanager.is_spdk_mode()) {
-        void* mempool = iomanager.create_mempool(io_size, 32);
+        void* mempool{iomanager.create_mempool(io_size, 32)};
         RELEASE_ASSERT_NOTNULL(mempool, "Mempool was not created successfully");
         LOGINFO("Allocated mempool size = {}", io_size);
-        uint8_t* mempool_buf = iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size);
+        uint8_t* mempool_buf{iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size)};
         iomanager.iobuf_pool_free(mempool_buf, io_size);
     }
 

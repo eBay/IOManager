@@ -610,7 +610,7 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                                 min_reactor = reactor;
                             }
                         } else {
-                            auto* const new_msg{msg->clone()};
+                            auto* new_msg = msg->clone();
                             if (reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor)) {
                                 cloned = true;
                                 ++sent_to;
@@ -888,18 +888,18 @@ void SpdkAlignedAllocImpl::aligned_free(uint8_t* b, [[maybe_unused]] const sisl:
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().decrement(tag, buf_size(b));
 #endif
-    spdk_free((void*)b);
+    spdk_free(b);
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().increment(sisl::buftag::common, new_sz - old_sz);
 #endif
-    return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+    return static_cast< uint8_t* >(spdk_realloc((void*)old_buf, new_sz, align));
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
-    return (uint8_t*)spdk_mempool_get(iomanager.get_mempool(sz));
+    return static_cast< uint8_t* >(spdk_mempool_get(iomanager.get_mempool(sz)));
 }
 
 void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {
@@ -908,7 +908,7 @@ void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, 
 
 size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
     size_t sz;
-    [[maybe_unused]] auto ret = rte_malloc_validate(buf, &sz);
+    [[maybe_unused]] const auto ret{rte_malloc_validate(buf, &sz)};
     assert(ret != -1);
     return sz;
 }
