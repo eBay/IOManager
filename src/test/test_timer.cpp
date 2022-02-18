@@ -1,13 +1,17 @@
-#include <gtest/gtest.h>
-#include <vector>
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <mutex>
 #include <random>
+#include <vector>
 
-#include <iomgr.hpp>
+#include <gtest/gtest.h>
+
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
+
+#include <iomgr.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -52,6 +56,7 @@ static bool g_is_spdk{false};
 static uint64_t g_num_timers{0};
 static uint64_t g_iters{0};
 static bool g_need_time_check{false};
+static std::vector< timer_handle_t > g_thdls;
 
 void glob_setup() {
     g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
@@ -72,8 +77,8 @@ public:
     void SetUp() override {}
     void TearDown() override {}
 
-    static const uint64_t early_tolerance_ns = 500 * 1000;
-    static const uint64_t late_tolerance_ns = 20 * 1000 * 1000;
+    static constexpr uint64_t early_tolerance_ns{500 * 1000};
+    static constexpr uint64_t late_tolerance_ns{20 * 1000 * 1000};
 
     void validate_timeout(void* arg) {
         timer_test_info* ti = reinterpret_cast< timer_test_info* >(arg);
@@ -82,7 +87,7 @@ public:
         if (g_need_time_check) {
             // Enabling time check if a little tricky to run on all types of environments. Hence making it
             // as an option. Enable it only on a targetted system and not by default.
-            auto elapsed_time_ns = get_elapsed_time_ns(ti->start_timer_time) / ++ti->timer_call_count;
+            const auto elapsed_time_ns{get_elapsed_time_ns(ti->start_timer_time) / ++ti->timer_call_count};
             ASSERT_GE(elapsed_time_ns, ti->nanos_after - early_tolerance_ns)
                 << "Received timeout earlier than expected";
             ASSERT_LT(elapsed_time_ns, ti->nanos_after + late_tolerance_ns)
@@ -129,8 +134,8 @@ public:
         }
 
         {
-            std::unique_lock< std::mutex > lk(m_list_mtx);
-            m_timer_infos.push_back(std::move(ti));
+            std::unique_lock< std::mutex > lk{m_list_mtx};
+            m_timer_infos.emplace_back(std::move(ti));
             ++m_pending_timers;
         }
     }
@@ -150,7 +155,7 @@ public:
         ti->is_active = false;
         bool notify{false};
         {
-            std::unique_lock< std::mutex > lk(m_list_mtx);
+            std::unique_lock< std::mutex > lk{m_list_mtx};
             notify = (--m_pending_timers == 0);
         }
 
@@ -181,13 +186,14 @@ TEST_F(TimerTest, timer_parallel_to_shutdown) {
     std::default_random_engine engine{rd()};
     std::uniform_int_distribution< uint64_t > rand_freq_ns{500 * 1000, 5 * 1000 * 1000};
 
-    std::vector< timer_handle_t > m_thdls;
+    // NOTE: The timer handles must be global(file scope) otherwise when this function exits they will be destroyed
+    // before the cancel timers can complete causing a segmentation fault
     for (uint64_t i{0}; i < g_num_timers; ++i) {
-        m_thdls.push_back(iomanager.schedule_global_timer(
+        g_thdls.emplace_back(iomanager.schedule_global_timer(
             rand_freq_ns(engine), true /* recurring */, nullptr, thread_regex::all_worker, [](void*) {},
             true /* wait */));
     }
-    for (auto& thdl : m_thdls) {
+    for (auto& thdl : g_thdls) {
         iomanager.cancel_timer(thdl, false /* wait_to_cancel */);
     }
 }

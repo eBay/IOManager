@@ -293,8 +293,8 @@ public:
      *         3. spin  -  Wait by spinning till all threads that executing completed running the method. While
      *                     waiting, it can process other messages. So potentially stack could grow. If the calling
      *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
-     *         4. Closure - Closure to be called after method is run on all the threads. NOTE that this closure can be
-     *                      called on any thread, not neccessarily issuing thread only.
+     *         4. Closure - Closure to be called after method is run on all the threads.  Callback may come from another
+     *                      besides invoking one.
      *
      * @return number of threads this method was run.
      */
@@ -303,17 +303,26 @@ public:
         int sent_count{0};
 
         if ((wtype == wait_type_t::callback) && cb_wait_closure) {
-            static thread_local std::atomic< ssize_t > tl_pending_count;
-            tl_pending_count = 0;
+            struct Context {
+                std::atomic< ssize_t > pending_count{};
+            };
+            auto ctx{std::make_shared< Context >()};
 
-            auto temp_cb = [fn, &pending_count = tl_pending_count, &cb_wait_closure](io_thread_addr_t addr) {
+            auto temp_cb = [fn, ctx, cb_wait_closure](io_thread_addr_t addr) {
                 fn(addr);
-                if (pending_count.fetch_sub(1) == 1) { cb_wait_closure(); }
+                if (ctx->pending_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
+                    std::atomic_thread_fence(std::memory_order_acquire);
+                    cb_wait_closure();
+                }
             };
 
             sent_count =
                 multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
-            if ((sent_count == 0) || (tl_pending_count.fetch_add(sent_count) == -sent_count)) { cb_wait_closure(); }
+            if ((sent_count == 0) ||
+                (ctx->pending_count.fetch_add(sent_count, std::memory_order_relaxed) == -sent_count)) {
+                std::atomic_thread_fence(std::memory_order_acquire);
+                cb_wait_closure();
+            }
 
             return sent_count;
         }
@@ -334,22 +343,21 @@ public:
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
-        static thread_local synchronized_async_method_ctx tl_mctx;
-        tl_mctx.outstanding_count = 0;
+        auto ctx{std::make_shared< synchronized_async_method_ctx >()};
 
-        const int executed_on{run_on(r, [&fn, &mctx = tl_mctx]([[maybe_unused]] auto taddr) {
-            fn(mctx);
+        const int executed_on{run_on(r, [&fn, ctx]([[maybe_unused]] auto taddr) {
+            fn(*ctx);
             {
-                std::unique_lock< std::mutex > lk{mctx.m};
-                --mctx.outstanding_count;
+                std::unique_lock< std::mutex > lk{ctx->m};
+                --(ctx->outstanding_count);
             }
-            mctx.cv.notify_one();
+            ctx->cv.notify_one();
         })};
 
         {
-            std::unique_lock< std::mutex > lk{tl_mctx.m};
-            tl_mctx.outstanding_count += executed_on;
-            tl_mctx.cv.wait(lk, [] { return (tl_mctx.outstanding_count == 0); });
+            std::unique_lock< std::mutex > lk{ctx->m};
+            ctx->outstanding_count += executed_on;
+            ctx->cv.wait(lk, [ctx] { return (ctx->outstanding_count == 0); });
         }
     }
 
