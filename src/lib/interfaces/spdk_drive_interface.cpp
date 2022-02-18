@@ -112,7 +112,8 @@ static void destroy_temp_spdk_thread() {
 
         spdk_thread_exit(sthread);
         while (!spdk_thread_is_exited(sthread)) {
-            spdk_thread_poll(sthread, 0, 0);
+            std::this_thread::yield();
+            // spdk_thread_poll(sthread, 0, 0);
         }
         spdk_thread_destroy(sthread);
     }
