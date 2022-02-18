@@ -101,8 +101,7 @@ void IOReactorSPDK::reactor_specific_exit_thread(const io_thread_t& thr) {
     if (thr->thread_addr) {
         spdk_thread_exit(thr->spdk_thread_impl());
         while (!spdk_thread_is_exited(thr->spdk_thread_impl())) {
-            std::this_thread::yield();
-            // spdk_thread_poll(thr->spdk_thread_impl(), 0, 0);
+            spdk_thread_poll(thr->spdk_thread_impl(), 0, 0);
         }
         spdk_thread_destroy(thr->spdk_thread_impl());
         thr->thread_impl = nullptr;
