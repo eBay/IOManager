@@ -142,11 +142,11 @@ public:
     }
 
     // TODO: Make this a dynamic config (albeit non-hotswap)
-    static constexpr uint32_t max_msg_modules = 64;
-    static constexpr uint32_t max_io_threads = 1024; // Keep in mind increasing this cause increased mem footprint
-    static constexpr uint64_t max_mempool_buf_size = 256 * 1024;
-    static constexpr uint64_t min_mempool_buf_size = 512;
-    static constexpr uint64_t max_mempool_count = std::log2(max_mempool_buf_size - min_mempool_buf_size);
+    static constexpr uint32_t max_msg_modules{64};
+    static constexpr uint32_t max_io_threads{1024}; // Keep in mind increasing this cause increased mem footprint
+    static constexpr uint64_t max_mempool_buf_size{256 * 1024};
+    static constexpr uint64_t min_mempool_buf_size{512};
+    static constexpr uint64_t max_mempool_count{sisl::logBase2(max_mempool_buf_size - min_mempool_buf_size)};
     /********* Start/Stop Control Related Operations ********/
 
     /**

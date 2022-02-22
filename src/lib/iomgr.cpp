@@ -649,7 +649,7 @@ void* IOManager::create_mempool(size_t element_size, size_t element_count) {
                 spdk_mempool_free(mempool);
             }
         }
-        LOGINFO("Creating new mempool of size {}", element_size);
+        LOGINFO("Creating new mempool of element count {} and size {}", element_count, element_size);
         mempool = spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
         RELEASE_ASSERT(mempool != nullptr, "Failed to create new mempool of size {}", element_size);
         m_iomgr_internal_pools[idx] = mempool;
