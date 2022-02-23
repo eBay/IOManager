@@ -17,8 +17,9 @@
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/vector_pool.hpp>
 #include <sisl/metrics/metrics.hpp>
-#include <spdk/bdev.h>
 #include <sisl/utility/enum.hpp>
+
+#include <spdk/bdev.h>
 
 #include "drive_interface.hpp"
 #include "iomgr_config.hpp"
@@ -27,18 +28,17 @@
 struct spdk_io_channel;
 struct spdk_thread;
 
-using namespace std::chrono_literals;
 namespace iomgr {
 struct SpdkDriveDeviceContext : public IODeviceThreadContext {
     ~SpdkDriveDeviceContext() = default;
-    struct spdk_io_channel* channel{NULL};
+    spdk_io_channel* channel{nullptr};
 };
 
 struct spdk_msg_type {
-    static constexpr int QUEUE_IO = 100;
-    static constexpr int ASYNC_IO_DONE = 101;
-    static constexpr int QUEUE_BATCH_IO = 102;
-    static constexpr int ASYNC_BATCH_IO_DONE = 103;
+    static constexpr int QUEUE_IO{100};
+    static constexpr int ASYNC_IO_DONE{101};
+    static constexpr int QUEUE_BATCH_IO{102};
+    static constexpr int ASYNC_BATCH_IO_DONE{103};
 };
 
 class SpdkDriveInterfaceMetrics : public sisl::MetricsGroup {
@@ -65,12 +65,12 @@ public:
 
 struct SpdkIocb;
 
-// static constexpr uint32_t SPDK_BATCH_IO_NUM = 2;
+// static constexpr uint32_t SPDK_BATCH_IO_NUM{2};
 
 // static_assert(SPDK_BATCH_IO_NUM > 1);
 
 class IOWatchDog {
-    using io_wd_ptr_t = SpdkIocb*;
+    typedef SpdkIocb* io_wd_ptr_t;
 
 public:
     IOWatchDog();
@@ -139,8 +139,8 @@ public:
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
     static drive_type detect_drive_type(const std::string& devname);
-    static constexpr auto max_wait_sync_io_us = 5us;
-    static constexpr auto min_wait_sync_io_us = 0us;
+    static constexpr std::chrono::microseconds max_wait_sync_io_us{5};
+    static constexpr std::chrono::microseconds min_wait_sync_io_us{0};
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
@@ -167,6 +167,7 @@ private:
     std::condition_variable m_sync_cv;
     SpdkDriveInterfaceMetrics m_metrics;
     folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
+    std::atomic< size_t > m_outstanding_async_ios;
 };
 
 struct SpdkBatchIocb {
@@ -181,16 +182,16 @@ struct SpdkBatchIocb {
         batch_io = nullptr;
     }
 
-    uint32_t num_io_comp = 0;
-    std::vector< SpdkIocb* >* batch_io = nullptr;
+    uint32_t num_io_comp{0};
+    std::vector< SpdkIocb* >* batch_io{nullptr};
 };
 
 struct SpdkIocb : public drive_iocb {
     SpdkDriveInterface* iface;
-    io_thread_t owner_thread = nullptr; // Owner thread (nullptr if same owner as processor)
-    io_interface_comp_cb_t comp_cb = nullptr;
+    io_thread_t owner_thread{nullptr}; // Owner thread (nullptr if same owner as processor)
+    io_interface_comp_cb_t comp_cb{nullptr};
     spdk_bdev_io_wait_entry io_wait_entry;
-    SpdkBatchIocb* batch_info_ptr = nullptr;
+    SpdkBatchIocb* batch_info_ptr{nullptr};
 #ifndef NDEBUG
     bool owns_by_spdk{false};
 #endif
@@ -203,7 +204,7 @@ struct SpdkIocb : public drive_iocb {
             drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
-        comp_cb = ((SpdkDriveInterface*)iodev->io_interface)->m_comp_cb;
+        comp_cb = reinterpret_cast< SpdkDriveInterface* >(iodev->io_interface)->m_comp_cb;
 
         op_start_time = Clock::now();
     }
@@ -220,12 +221,12 @@ struct SpdkIocb : public drive_iocb {
                            get_elapsed_time_ms(op_start_time));
 
         if (has_iovs()) {
-            auto ivs = get_iovs();
-            for (auto i = 0; i < iovcnt; ++i) {
+            const auto* ivs{get_iovs()};
+            for (decltype(iovcnt) i{0}; i < iovcnt; ++i) {
                 str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
             }
         } else {
-            str += fmt::format("buf={}", (void*)get_data());
+            str += fmt::format("buf={}", static_cast< void* >(get_data()));
         }
         return str;
     }
