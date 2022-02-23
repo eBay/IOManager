@@ -83,7 +83,7 @@ public:
                                                         wait_type_t::sleep, to_threads, receiver)));
         }
         for (auto& t : ts) {
-            t.join();
+            if (t.joinable()) t.join();
         }
         ASSERT_EQ(m_sent_count, m_rcvd_count) << "Missing messages";
     }
@@ -102,7 +102,7 @@ public:
             ts.push_back(std::move(sthread));
         }
         for (auto& t : ts) {
-            t.join();
+            if (t.joinable()) t.join();
         }
         ASSERT_EQ(m_sent_count, m_rcvd_count) << "Missing messages";
     }
@@ -114,7 +114,7 @@ public:
                                                         wait_type_t::no_wait, to_threads, receiver)));
         }
         for (auto& t : ts) {
-            t.join();
+            if (t.joinable()) t.join();
         }
 
         const auto max_wait_time{10000ms};
