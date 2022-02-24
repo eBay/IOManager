@@ -4,23 +4,32 @@
 
 #pragma once
 
-extern "C" {
-#include <event.h>
-#include "spdk/util.h"
-#include <sys/time.h>
-}
+#include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
+#include <functional>
 #include <mutex>
-#include <map>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
-#include <sisl/utility/thread_buffer.hpp>
-#include <sisl/utility/atomic_counter.hpp>
-#include <sisl/fds/sparse_vector.hpp>
-#include <sisl/fds/malloc_helper.hpp>
+
+#ifdef __linux__
+#include <event.h>
+#include <sys/time.h>
+#endif
+
+#include <semver/semver200.h>
+#include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
+#include <sisl/fds/id_reserver.hpp>
+#include <sisl/fds/malloc_helper.hpp>
+#include <sisl/fds/sparse_vector.hpp>
+#include <sisl/logging/logging.h>
+#include <sisl/utility/atomic_counter.hpp>
+#include <sisl/utility/enum.hpp>
+#include <sisl/utility/thread_buffer.hpp>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -31,17 +40,12 @@ extern "C" {
 #pragma GCC diagnostic pop
 #endif
 
-#include "iomgr_msg.hpp"
-#include "reactor.hpp"
-#include "iomgr_timer.hpp"
-#include "io_interface.hpp"
-#include "iomgr_types.hpp"
 #include "drive_interface.hpp"
-#include <functional>
-#include <sisl/fds/id_reserver.hpp>
-#include <sisl/utility/enum.hpp>
-#include <sisl/logging/logging.h>
-#include <semver/semver200.h>
+#include "io_interface.hpp"
+#include "iomgr_msg.hpp"
+#include "iomgr_timer.hpp"
+#include "iomgr_types.hpp"
+#include "reactor.hpp"
 
 struct spdk_bdev_desc;
 struct spdk_bdev;
@@ -92,7 +96,7 @@ struct synchronized_async_method_ctx {
 public:
     std::mutex m;
     std::condition_variable cv;
-    int outstanding_count{0};
+    ssize_t outstanding_count{0};
     void* custom_ctx{nullptr};
 
     ~synchronized_async_method_ctx() {
@@ -138,11 +142,11 @@ public:
     }
 
     // TODO: Make this a dynamic config (albeit non-hotswap)
-    static constexpr uint32_t max_msg_modules = 64;
-    static constexpr uint32_t max_io_threads = 1024; // Keep in mind increasing this cause increased mem footprint
-    static constexpr uint64_t max_mempool_buf_size = 256 * 1024;
-    static constexpr uint64_t min_mempool_buf_size = 512;
-    static constexpr uint64_t max_mempool_count = std::log2(max_mempool_buf_size - min_mempool_buf_size);
+    static constexpr uint32_t max_msg_modules{64};
+    static constexpr uint32_t max_io_threads{1024}; // Keep in mind increasing this cause increased mem footprint
+    static constexpr uint64_t max_mempool_buf_size{256 * 1024};
+    static constexpr uint64_t min_mempool_buf_size{512};
+    static constexpr uint64_t max_mempool_count{sisl::logBase2(max_mempool_buf_size - min_mempool_buf_size)};
     /********* Start/Stop Control Related Operations ********/
 
     /**
@@ -291,8 +295,8 @@ public:
      *         3. spin  -  Wait by spinning till all threads that executing completed running the method. While
      *                     waiting, it can process other messages. So potentially stack could grow. If the calling
      *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
-     *         4. Closure - Closure to be called after method is run on all the threads. NOTE that this closure can be
-     *                      called on any thread, not neccessarily issuing thread only.
+     *         4. Closure - Closure to be called after method is run on all the threads.  Callback may come from another
+     *                      besides invoking one.
      *
      * @return number of threads this method was run.
      */
@@ -301,21 +305,27 @@ public:
         int sent_count{0};
 
         if ((wtype == wait_type_t::callback) && cb_wait_closure) {
-            auto pending_count = new std::atomic< int >(0);
-            auto temp_cb = [fn, cb_wait_closure, pending_count](io_thread_addr_t addr) {
+            struct Context {
+                std::atomic< ssize_t > pending_count{};
+            };
+            auto ctx{std::make_shared< Context >()};
+
+            auto temp_cb = [fn, ctx, cb_wait_closure](io_thread_addr_t addr) {
                 fn(addr);
-                if (pending_count->fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                if (ctx->pending_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
+                    std::atomic_thread_fence(std::memory_order_acquire);
                     cb_wait_closure();
-                    delete pending_count;
                 }
             };
 
             sent_count =
                 multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
-            if ((pending_count->fetch_add(sent_count, std::memory_order_acq_rel) == -sent_count)) {
+            if ((sent_count == 0) ||
+                (ctx->pending_count.fetch_add(sent_count, std::memory_order_relaxed) == -sent_count)) {
+                std::atomic_thread_fence(std::memory_order_acquire);
                 cb_wait_closure();
-                delete pending_count;
             }
+
             return sent_count;
         }
 
@@ -335,20 +345,21 @@ public:
     }
 
     void run_async_method_synchronized(thread_regex r, const auto& fn) {
-        static synchronized_async_method_ctx mctx;
-        int executed_on = run_on(r, [&fn]([[maybe_unused]] auto taddr) {
-            fn(mctx);
+        auto ctx{std::make_shared< synchronized_async_method_ctx >()};
+
+        const int executed_on{run_on(r, [&fn, ctx]([[maybe_unused]] auto taddr) {
+            fn(*ctx);
             {
-                std::unique_lock< std::mutex > lk{mctx.m};
-                --mctx.outstanding_count;
+                std::unique_lock< std::mutex > lk{ctx->m};
+                --(ctx->outstanding_count);
             }
-            mctx.cv.notify_one();
-        });
+            ctx->cv.notify_one();
+        })};
 
         {
-            std::unique_lock< std::mutex > lk{mctx.m};
-            mctx.outstanding_count += executed_on;
-            mctx.cv.wait(lk, [] { return (mctx.outstanding_count == 0); });
+            std::unique_lock< std::mutex > lk{ctx->m};
+            ctx->outstanding_count += executed_on;
+            ctx->cv.wait(lk, [ctx] { return (ctx->outstanding_count == 0); });
         }
     }
 
@@ -360,27 +371,27 @@ public:
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
 
     bool am_i_io_reactor() const {
-        auto r = this_reactor();
+        auto* r{this_reactor()};
         return r && r->is_io_reactor();
     }
 
     bool am_i_tight_loop_reactor() const {
-        auto r = this_reactor();
+        auto* r{this_reactor()};
         return r && r->is_tight_loop_reactor();
     }
 
     bool am_i_worker_reactor() const {
-        auto r = this_reactor();
+        auto* r{this_reactor()};
         return r && r->is_worker();
     }
 
     bool am_i_adaptive_reactor() const {
-        auto r = this_reactor();
+        auto* r{this_reactor()};
         return r && r->is_adaptive_loop();
     }
 
     void set_my_reactor_adaptive(bool adaptive) {
-        auto r = this_reactor();
+        auto* r{this_reactor()};
         if (r) { r->set_adaptive_loop(adaptive); }
     }
 
@@ -391,17 +402,17 @@ public:
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
 
-    void set_state(iomgr_state state) {
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
+    void set_state(const iomgr_state state) {
+        std::unique_lock< std::mutex > lck{m_cv_mtx};
         m_state = state;
     }
 
     iomgr_state get_state() const {
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
+        std::unique_lock< std::mutex > lck{m_cv_mtx};
         return m_state;
     }
 
-    void set_state_and_notify(iomgr_state state) {
+    void set_state_and_notify(const iomgr_state state) {
         set_state(state);
         m_cv.notify_all();
     }
@@ -410,11 +421,9 @@ public:
 
     void wait_to_be_stopped() { wait_for_state(iomgr_state::stopped); }
 
-    void wait_for_state(iomgr_state expected_state) {
-        std::unique_lock< std::mutex > lck(m_cv_mtx);
-        if (m_state != expected_state) {
-            m_cv.wait(lck, [&] { return (m_state == expected_state); });
-        }
+    void wait_for_state(const iomgr_state expected_state) {
+        std::unique_lock< std::mutex > lck{m_cv_mtx};
+        m_cv.wait(lck, [&] { return (m_state == expected_state); });
     }
 
     void ensure_running() {
@@ -426,8 +435,10 @@ public:
     }
 
     uint64_t get_mempool_idx(size_t size) const {
-        DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size is less than minimum mempool buf size");
-        return spdk_u64log2(size / min_mempool_buf_size);
+        DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size must be modulo mempool buf size");
+        DEBUG_ASSERT_GE(size, min_mempool_buf_size,
+                        "Mempool size must be greater than or equal to minimum mempool buf size");
+        return sisl::logBase2(size / min_mempool_buf_size);
     }
     spdk_mempool* get_mempool(size_t size);
     void* create_mempool(size_t element_size, size_t element_count);
@@ -500,10 +511,10 @@ private:
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
-    iomgr_state m_state = iomgr_state::stopped;                   // Current state of IOManager
-    sisl::atomic_counter< int16_t > m_yet_to_start_nreactors = 0; // Total number of iomanager threads yet to start
-    sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors = 0;
-    uint32_t m_num_workers = 0;
+    iomgr_state m_state{iomgr_state::stopped};                   // Current state of IOManager
+    sisl::atomic_counter< int16_t > m_yet_to_start_nreactors{0}; // Total number of iomanager threads yet to start
+    sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors{0};
+    uint32_t m_num_workers{0};
     std::array< spdk_mempool*, max_mempool_count > m_iomgr_internal_pools;
 
     std::shared_mutex m_iface_list_mtx;
@@ -528,9 +539,9 @@ private:
 
     std::mutex m_msg_hdlrs_mtx;
     std::array< msg_handler_t, max_msg_modules > m_msg_handlers;
-    uint32_t m_msg_handlers_count = 0;
+    uint32_t m_msg_handlers_count{0};
     msg_module_id_t m_internal_msg_module_id;
-    thread_state_notifier_t m_common_thread_state_notifier = nullptr;
+    thread_state_notifier_t m_common_thread_state_notifier{nullptr};
     sisl::IDReserver m_thread_idx_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe

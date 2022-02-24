@@ -2,82 +2,62 @@
 // Created by Rishabh Mittal on 04/20/2018
 //
 
-#include "iomgr.hpp"
+#include <cerrno>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <limits>
+#include <random>
+#include <thread>
+#include <vector>
 
-extern "C" {
+#ifdef __FreeBSD__
+#include <pthread_np.h>
+#endif
+
+#ifdef __linux__
+#include <fcntl.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/mount.h>
+#include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/types.h>
+#endif
 
+#include <liburing.h>
+#include <liburing/io_uring.h>
+
+#include <sisl/fds/obj_allocator.hpp>
+#include <sisl/logging/logging.h>
+#include <sisl/options/options.h>
+#include <sisl/utility/thread_factory.hpp>
+#include <sisl/version.hpp>
+
+#include "aio_drive_interface.hpp"
+#include "spdk_drive_interface.hpp"
+#include "uring_drive_interface.hpp"
+
+#include "iomgr_config.hpp"
+#include "reactor_epoll.hpp"
+#include "reactor_spdk.hpp"
+
+// Must be included after sisl headers to avoid macro definition clash
+extern "C" {
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>
 #include <spdk/bdev.h>
 #include <spdk/env_dpdk.h>
 #include <spdk/init.h>
+#include <spdk/rpc.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
 #include <rte_malloc.h>
 }
 
-#include <sisl/logging/logging.h>
-#include <sisl/options/options.h>
-
-#include <cerrno>
-#include <chrono>
-#include <ctime>
-#include <functional>
-#include <thread>
-#include <vector>
-#include <filesystem>
-#include <sys/mount.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <fstream>
-#include <random>
-
-#include <liburing.h>
-#include <liburing/io_uring.h>
-
-#include <sisl/utility/thread_factory.hpp>
-#include <sisl/fds/obj_allocator.hpp>
-#include <sisl/logging/logging.h>
-#include <sisl/version.hpp>
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#ifdef __linux__
-#include <sys/prctl.h>
-#include <sys/eventfd.h>
-#endif
-
-#ifdef __FreeBSD__
-#include <pthread_np.h>
-#endif
-
-#include "include/aio_drive_interface.hpp"
-#include "include/spdk_drive_interface.hpp"
-#include "include/uring_drive_interface.hpp"
-#include "include/iomgr.hpp"
-#include "include/reactor_epoll.hpp"
-#include "include/reactor_spdk.hpp"
-#include "include/iomgr_config.hpp"
+#include "iomgr.hpp"
 
 SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -218,6 +198,17 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
             spdk_subsystem_init(
                 [](int rc, void* cb_arg) {
+                    // Initialize rpc system
+                    int ret = spdk_rpc_initialize(SPDK_DEFAULT_RPC_ADDR);
+                    if (ret) {
+                        LOGERROR("Initialize rpc on address={} has failed with ret={}", SPDK_DEFAULT_RPC_ADDR, ret);
+#ifndef NDEBUG
+                        // Exceptions only on debug build, because rpc is not essential component at this time.
+                        throw std::runtime_error("SPDK RPC Initialize failed");
+#endif
+                    }
+                    spdk_rpc_set_state(SPDK_RPC_RUNTIME);
+
                     IOManager* pthis = (IOManager*)cb_arg;
                     pthis->mempool_metrics_populate();
                     pthis->set_state_and_notify(iomgr_state::running);
@@ -423,10 +414,8 @@ void IOManager::stop_spdk() {
     spdk_thread_lib_fini();
     spdk_env_fini();
     m_spdk_reinit_needed = true;
-    for(spdk_mempool* mempool: m_iomgr_internal_pools) {
-        if (mempool != nullptr) {
-            spdk_mempool_free(mempool);
-        }
+    for (spdk_mempool* mempool : m_iomgr_internal_pools) {
+        if (mempool != nullptr) { spdk_mempool_free(mempool); }
     }
 }
 
@@ -602,10 +591,11 @@ void IOManager::reactor_started(std::shared_ptr< IOReactor > reactor) {
 }
 
 void IOManager::reactor_stopped() {
-    if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
-
     // Notify the caller registered to iomanager for it
     this_reactor()->notify_thread_state(false /* started */);
+
+    // stopped state is set last
+    if (m_yet_to_stop_nreactors.decrement_testz()) { set_state_and_notify(iomgr_state::stopped); }
 }
 
 void IOManager::device_reschedule(const io_device_ptr& iodev, int event) {
@@ -633,7 +623,7 @@ int IOManager::run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* 
 int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
     int sent_to = 0;
     bool cloned = false;
-    int64_t min_cnt = INTMAX_MAX;
+    int64_t min_cnt = std::numeric_limits< int64_t >::max();
     io_thread_addr_t min_thread = -1U;
     IOReactor* min_reactor = nullptr;
     IOReactor* sender_reactor = iomanager.this_reactor();
@@ -643,11 +633,8 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
 
     if (r == thread_regex::random_worker) {
         // Send to any random iomgr created io thread
-        static thread_local std::random_device s_rd{};
-        static thread_local std::default_random_engine s_re{s_rd()};
-
         auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
-        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor);
+        sent_to = reactor->deliver_msg(reactor->select_thread()->thread_addr, msg, sender_reactor) ? 1 : 0;
     } else {
         _pick_reactors(r, [&](IOReactor* reactor, bool is_last_thread) {
             if (reactor && reactor->is_io_reactor()) {
@@ -660,10 +647,14 @@ int IOManager::multicast_msg(thread_regex r, iomgr_msg* msg) {
                                 min_reactor = reactor;
                             }
                         } else {
-                            auto new_msg = msg->clone();
-                            reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor);
-                            cloned = true;
-                            ++sent_to;
+                            auto* new_msg = msg->clone();
+                            if (reactor->deliver_msg(thr->thread_addr, new_msg, sender_reactor)) {
+                                cloned = true;
+                                ++sent_to;
+                            } else {
+                                // failed to deliver cleanup resources
+                                iomgr_msg::free(new_msg);
+                            }
                         }
                     }
                 }
@@ -686,8 +677,8 @@ spdk_mempool* IOManager::get_mempool(size_t size) {
 
 void* IOManager::create_mempool(size_t element_size, size_t element_count) {
     if (m_is_spdk) {
-        uint64_t idx = get_mempool_idx(element_size);
-        spdk_mempool* mempool = m_iomgr_internal_pools[idx];
+        const uint64_t idx{get_mempool_idx(element_size)};
+        spdk_mempool* mempool{m_iomgr_internal_pools[idx]};
         if (mempool != nullptr) {
             if (spdk_mempool_count(mempool) == element_count) {
                 return mempool;
@@ -695,7 +686,7 @@ void* IOManager::create_mempool(size_t element_size, size_t element_count) {
                 spdk_mempool_free(mempool);
             }
         }
-        LOGINFO("Creating new mempool of size {}", element_size);
+        LOGINFO("Creating new mempool of element count {} and size {}", element_count, element_size);
         mempool = spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
         RELEASE_ASSERT(mempool != nullptr, "Failed to create new mempool of size {}", element_size);
         m_iomgr_internal_pools[idx] = mempool;
@@ -707,7 +698,7 @@ void* IOManager::create_mempool(size_t element_size, size_t element_count) {
 
 void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
     if ((r == thread_regex::all_worker) || (r == thread_regex::least_busy_worker)) {
-        for (auto i = 0u; i < m_worker_reactors.size(); ++i) {
+        for (size_t i{0}; i < m_worker_reactors.size(); ++i) {
             cb(m_worker_reactors[i].get(), (i == (m_worker_reactors.size() - 1)));
         }
     } else {
@@ -716,7 +707,7 @@ void IOManager::_pick_reactors(thread_regex r, const auto& cb) {
 }
 
 int IOManager::multicast_msg_and_wait(thread_regex r, const std::shared_ptr< sync_msg_base >& smsg) {
-    auto sent_to = multicast_msg(r, smsg->base_msg());
+    const auto sent_to{multicast_msg(r, smsg->base_msg())};
     if (sent_to != 0) { smsg->wait(); }
     smsg->free_base_msg();
     return sent_to;
@@ -746,7 +737,7 @@ bool IOManager::send_msg(const io_thread_t& to_thread, iomgr_msg* msg) {
 }
 
 bool IOManager::send_msg_and_wait(const io_thread_t& to_thread, const std::shared_ptr< sync_msg_base >& smsg) {
-    auto sent = send_msg(to_thread, smsg->base_msg());
+    const auto sent{send_msg(to_thread, smsg->base_msg())};
     if (sent) { smsg->wait(); }
     smsg->free_base_msg();
     return sent;
@@ -827,9 +818,9 @@ void IOManager::specific_reactor(int thread_num, const auto& cb) {
 }
 
 IOReactor* IOManager::round_robin_reactor() const {
-    static uint64_t s_idx{0};
+    static std::atomic< size_t > s_idx{0};
     do {
-        const auto idx = s_idx++ % m_worker_reactors.size();
+        const size_t idx{s_idx.fetch_add(1, std::memory_order_relaxed) % m_worker_reactors.size()};
         if (m_worker_reactors[idx] != nullptr) { return m_worker_reactors[idx].get(); }
     } while (true);
 }
@@ -934,18 +925,18 @@ void SpdkAlignedAllocImpl::aligned_free(uint8_t* b, [[maybe_unused]] const sisl:
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().decrement(tag, buf_size(b));
 #endif
-    spdk_free((void*)b);
+    spdk_free(b);
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz) {
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().increment(sisl::buftag::common, new_sz - old_sz);
 #endif
-    return (uint8_t*)spdk_realloc((void*)old_buf, new_sz, align);
+    return static_cast< uint8_t* >(spdk_realloc((void*)old_buf, new_sz, align));
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
-    return (uint8_t *)spdk_mempool_get(iomanager.get_mempool(sz));
+    return static_cast< uint8_t* >(spdk_mempool_get(iomanager.get_mempool(sz)));
 }
 
 void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {
@@ -954,7 +945,7 @@ void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, 
 
 size_t SpdkAlignedAllocImpl::buf_size(uint8_t* buf) const {
     size_t sz;
-    [[maybe_unused]] auto ret = rte_malloc_validate(buf, &sz);
+    [[maybe_unused]] const auto ret{rte_malloc_validate(buf, &sz)};
     assert(ret != -1);
     return sz;
 }
