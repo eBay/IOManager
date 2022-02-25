@@ -139,8 +139,7 @@ public:
     [[nodiscard]] bool is_spdk_interface() const override { return true; }
 
     static drive_type detect_drive_type(const std::string& devname);
-    static constexpr std::chrono::microseconds max_wait_sync_io_us{5};
-    static constexpr std::chrono::microseconds min_wait_sync_io_us{0};
+    static constexpr std::chrono::microseconds max_sync_io_poll_freq_us{5};
 
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;

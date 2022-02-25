@@ -1,4 +1,3 @@
-#include <cassert>
 #include <filesystem>
 #include <thread>
 
@@ -50,7 +49,6 @@ namespace iomgr {
 namespace {
 io_thread_t _non_io_thread{std::make_shared< io_thread >()};
 thread_local bool s_temp_thread_created{false};
-thread_local int64_t t_outstanding_ops{0};
 } // namespace
 
 #ifndef NDEBUG
@@ -103,10 +101,10 @@ static spdk_thread* create_temp_spdk_thread() {
 
 static void destroy_temp_spdk_thread() {
     if (!s_temp_thread_created) {
-        assert(spdk_get_thread() != nullptr); // We must be a tight loop reactor, don't disturb it
+        DEBUG_ASSERT_NOTNULL((void*)spdk_get_thread()); // We must be a tight loop reactor, don't disturb it
     } else {
         auto* sthread = spdk_get_thread();
-        assert(sthread != nullptr);
+        DEBUG_ASSERT_NOTNULL((void*)sthread);
         // NOTE: The set to false must be here or later not to allow overwrite with spdk_set_thread before getting value
         s_temp_thread_created = false;
 
@@ -126,7 +124,7 @@ static void create_fs_bdev(const std::shared_ptr< creat_ctx >& ctx) {
                     ctx->address);
             auto const bdev_name = ctx->address + std::string("_bdev");
 
-            assert(spdk_bdev_get_by_name(bdev_name.c_str()) == nullptr);
+            DEBUG_ASSERT_EQ((void*)spdk_bdev_get_by_name(bdev_name.c_str()), nullptr);
 #ifdef SPDK_DRIVE_USE_URING
             auto bdev = create_uring_bdev(bdev_name.c_str(), ctx->address.c_str(), 512u);
             if (bdev == nullptr) {
@@ -412,7 +410,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     }
 
     IOInterface::close_dev(iodev);
-    assert(iodev->creator != nullptr);
+    DEBUG_ASSERT(iodev->creator != nullptr, "Expect creator of iodev to be non null");
 
     iomanager.run_on(
         iodev->creator,
@@ -444,7 +442,8 @@ drive_type SpdkDriveInterface::detect_drive_type(const std::string& devname) {
 void SpdkDriveInterface::init_iface_thread_ctx(const io_thread_t& thr) {
     if (thr->reactor->is_tight_loop_reactor() && thr->reactor->is_adaptive_loop()) {
         // Allow backoff only if there are no outstanding operations.
-        thr->reactor->add_backoff_cb([](const io_thread_t& t) -> bool { return (t_outstanding_ops == 0); });
+        thr->reactor->add_backoff_cb(
+            [](const io_thread_t& t) -> bool { return (t->reactor->m_metrics->outstanding_ops == 0); });
     }
 }
 
@@ -518,7 +517,7 @@ static std::string explain_bdev_io_status(spdk_bdev_io* bdev_io) {
 
 static void process_completions(spdk_bdev_io* bdev_io, bool success, void* ctx) {
     SpdkIocb* iocb{static_cast< SpdkIocb* >(ctx)};
-    assert(iocb->iodev->bdev_desc());
+    DEBUG_ASSERT_NOTNULL((void*)iocb->iodev->bdev_desc());
 
     // LOGDEBUGMOD(iomgr, "Received completion on bdev = {}", (void*)iocb->iodev->bdev_desc());
     spdk_bdev_free_io(bdev_io);
@@ -560,7 +559,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool success, void* ctx) 
 static void submit_io(void* b) {
     SpdkIocb* iocb{static_cast< SpdkIocb* >(b)};
     int rc = 0;
-    assert(iocb->iodev->bdev_desc());
+    DEBUG_ASSERT_NOTNULL((void*)iocb->iodev->bdev_desc());
 
 #ifndef NDEBUG
     DEBUG_ASSERT((iocb->owns_by_spdk == false), "Duplicate submission of iocb while io pending: {}", iocb->to_string());
@@ -634,7 +633,7 @@ void SpdkDriveInterface::increment_outstanding_counter(const SpdkIocb* iocb) {
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
 
-    ++t_outstanding_ops;
+    ++(iomanager.this_reactor()->thread_metrics().outstanding_ops);
 }
 
 void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
@@ -655,7 +654,7 @@ void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
-    --t_outstanding_ops;
+    --(iomanager.this_reactor()->thread_metrics().outstanding_ops);
 }
 
 inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
@@ -663,6 +662,9 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
 
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
+        auto& thread_metrics = iomanager.this_reactor()->thread_metrics();
+        ++thread_metrics.io_submissions;
+        ++thread_metrics.actual_ios;
         submit_io(iocb);
     } else if (iomanager.am_i_io_reactor()) {
         COUNTER_INCREMENT(m_metrics, num_async_io_non_spdk_thread, 1);
@@ -734,7 +736,7 @@ void SpdkDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t off
 
 ssize_t SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    assert(!iomanager.am_i_tight_loop_reactor());
+    DEBUG_ASSERT_EQ(iomanager.am_i_tight_loop_reactor(), false, "Sync io on tight loop thread not supported");
 
     SpdkIocb* iocb{
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset, nullptr)};
@@ -744,7 +746,7 @@ ssize_t SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32
 
 ssize_t SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    assert(!iomanager.am_i_tight_loop_reactor());
+    DEBUG_ASSERT_EQ(iomanager.am_i_tight_loop_reactor(), false, "Sync io on tight loop thread not supported");
 
     SpdkIocb* iocb{
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset, nullptr)};
@@ -754,7 +756,7 @@ ssize_t SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int i
 
 ssize_t SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    assert(!iomanager.am_i_tight_loop_reactor());
+    DEBUG_ASSERT_EQ(iomanager.am_i_tight_loop_reactor(), false, "Sync io on tight loop thread not supported");
 
     SpdkIocb* iocb{
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset, nullptr)};
@@ -764,7 +766,7 @@ ssize_t SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size
 
 ssize_t SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    assert(!iomanager.am_i_tight_loop_reactor());
+    DEBUG_ASSERT_EQ(iomanager.am_i_tight_loop_reactor(), false, "Sync io on tight loop thread not supported");
 
     SpdkIocb* iocb{
         sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset, nullptr)};
@@ -826,16 +828,11 @@ void SpdkDriveInterface::submit_sync_io_in_this_thread(SpdkIocb* iocb) {
     submit_io(iocb);
 
     auto* sthread = spdk_get_thread();
-    auto cur_wait_us = max_wait_sync_io_us;
+    auto cur_wait_us = max_sync_io_poll_freq_us;
     do {
         std::this_thread::sleep_for(cur_wait_us);
         spdk_thread_poll(sthread, 0, 0);
-        if (cur_wait_us > min_wait_sync_io_us) {
-            cur_wait_us = cur_wait_us - 1us;
-        } else {
-            LOGWARNMOD(iomgr, "iocb complete: mode=local_sync, wait timeout {} us exceeded",
-                       max_wait_sync_io_us.count() - min_wait_sync_io_us.count());
-        }
+        if (cur_wait_us > 0us) { cur_wait_us = cur_wait_us - 1us; }
     } while (!iocb->sync_io_completed);
 
     LOGDEBUGMOD(iomgr, "iocb complete: mode=local_sync, {}", iocb->to_string());
@@ -865,7 +862,8 @@ void SpdkDriveInterface::submit_batch() {
 }
 
 void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
-    assert(iomanager.am_i_io_reactor()); // We have to run reactor otherwise async response will not be handled.
+    DEBUG_ASSERT_EQ(iomanager.am_i_io_reactor(), true, "Async on non-io reactors not possible");
+    auto& thread_metrics = iomanager.this_reactor()->thread_metrics();
 
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
@@ -878,7 +876,8 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
             ++(iocb->batch_info_ptr->num_io_comp);
 
             // batch io completion count should never exceed number of batch io;
-            assert(iocb->batch_info_ptr->num_io_comp <= iocb->batch_info_ptr->batch_io->size());
+            DEBUG_ASSERT_LE(iocb->batch_info_ptr->num_io_comp, iocb->batch_info_ptr->batch_io->size(),
+                            "Batch completion more than submission?");
 
             // re-use the batch info ptr which contains all the batch iocbs to send/create
             // async_batch_io_done msg;
@@ -899,7 +898,9 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         // we don't have a use-case for same user thread to issue part_of_batch to both true and false for now.
         // if we support same user-thread to send both, we should not use iocb->batch_info_ptr to check whether it is
         // batch io in comp_cb (line: 470);
-        assert(iocb->batch_info_ptr == nullptr);
+        DEBUG_ASSERT_EQ((void*)iocb->batch_info_ptr, nullptr);
+        ++thread_metrics.actual_ios;
+        ++thread_metrics.io_submissions;
         auto* msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, reinterpret_cast< uint8_t* >(iocb),
                                       sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
@@ -910,6 +911,8 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         s_batch_info_ptr->batch_io->push_back(iocb);
 
         if (s_batch_info_ptr->batch_io->size() == IM_DYNAMIC_CONFIG(spdk->num_batch_io_limit)) {
+            ++thread_metrics.io_submissions;
+            thread_metrics.actual_ios += s_batch_info_ptr->batch_io->size();
             // this batch is ready to be processed;
             submit_batch();
         }
@@ -961,7 +964,7 @@ size_t SpdkDriveInterface::get_dev_size(IODevice* iodev) {
 }
 
 drive_attributes SpdkDriveInterface::get_attributes(const io_device_ptr& dev) const {
-    assert(dev->is_spdk_dev());
+    DEBUG_ASSERT_EQ(dev->is_spdk_dev(), true);
     const spdk_bdev* g_bdev{dev->bdev()};
     drive_attributes attr;
 
