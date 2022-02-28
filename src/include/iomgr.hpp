@@ -183,9 +183,11 @@ public:
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
     void run_io_loop(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
-                     const thread_state_notifier_t& addln_notifier = nullptr) {
-        _run_io_loop(-1, loop_type, iodev_selector, addln_notifier);
+                     thread_state_notifier_t&& addln_notifier = nullptr) {
+        _run_io_loop(-1, loop_type, iodev_selector, std::move(addln_notifier));
     }
+
+    void create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier = nullptr);
 
     /**
      * @brief Convert the current thread to new user reactor
@@ -199,7 +201,7 @@ public:
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
     void become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
-                             const thread_state_notifier_t& addln_notifier = nullptr);
+                             thread_state_notifier_t&& addln_notifier = nullptr);
 
     /**
      * @brief Stop the IO Loop and cease to being a reactor for the current thread. The current thread can choose
@@ -483,9 +485,11 @@ private:
     ~IOManager();
 
     void foreach_interface(const interface_cb_t& iface_cb);
-    void start_reactors();
+    void create_reactors();
+    sys_thread_id_t create_reactor_internal(const std::string& name, loop_type_t loop_type, int slot_num,
+                                            thread_state_notifier_t&& notifier = nullptr);
     void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                      const thread_state_notifier_t& addln_notifier);
+                      thread_state_notifier_t&& addln_notifier);
 
     void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
     void reactor_stopped();                                     // Notification that IO thread is reliquished

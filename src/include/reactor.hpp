@@ -195,7 +195,7 @@ public:
 public:
     virtual ~IOReactor();
     virtual void run(int worker_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
-                     const thread_state_notifier_t& thread_state_notifier = nullptr);
+                     thread_state_notifier_t&& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
 
