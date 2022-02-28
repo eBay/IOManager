@@ -100,9 +100,7 @@ static spdk_thread* create_temp_spdk_thread() {
 }
 
 static void destroy_temp_spdk_thread() {
-    if (!s_temp_thread_created) {
-        DEBUG_ASSERT_NOTNULL((void*)spdk_get_thread()); // We must be a tight loop reactor, don't disturb it
-    } else {
+    if (s_temp_thread_created) {
         auto* sthread = spdk_get_thread();
         DEBUG_ASSERT_NOTNULL((void*)sthread);
         // NOTE: The set to false must be here or later not to allow overwrite with spdk_set_thread before getting value
