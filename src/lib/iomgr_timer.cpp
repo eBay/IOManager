@@ -311,6 +311,7 @@ bool spdk_thread_timer_info::call_timer_cb_once() {
     auto cur_term_num = term_num++;
     if (!tinfo->is_multi_threaded ||
         tinfo->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
+        ++(iomanager.this_reactor()->thread_metrics().timer_wakeup_count);
         tinfo->cb(tinfo->context);
         ret = true;
     }

@@ -688,8 +688,10 @@ void* IOManager::create_mempool(size_t element_size, size_t element_count) {
         }
         LOGINFO("Creating new mempool of element count {} and size {}", element_count, element_size);
         mempool = spdk_mempool_create("iomgr_mempool", element_count, element_size, 0, SPDK_ENV_SOCKET_ID_ANY);
-        RELEASE_ASSERT(mempool != nullptr, "Failed to create new mempool of size {}", element_size);
+        RELEASE_ASSERT(mempool != nullptr, "Failed to create new mempool of size={}, rte_errno={} {}", element_size,
+                       rte_errno, rte_strerror(rte_errno));
         m_iomgr_internal_pools[idx] = mempool;
+        register_mempool_metrics(r_cast< rte_mempool* >(mempool));
         return mempool;
     } else {
         return nullptr;
