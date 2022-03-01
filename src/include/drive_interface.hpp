@@ -17,14 +17,14 @@
 #include "iomgr_types.hpp"
 
 namespace iomgr {
-enum class drive_interface_type { aio, spdk, uring };
+ENUM(drive_interface_type, uint8_t, aio, spdk, uring)
 ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO, FSYNC)
 
 struct drive_attributes {
     uint32_t phys_page_size{4096};        // Physical page size of flash ssd/nvme. This is optimal size to do IO
     uint32_t align_size{0};               // size alignment supported by drives/kernel
     uint32_t atomic_phys_page_size{4096}; // atomic page size of the drive
-    uint32_t num_streams{1};            // Total number of independent streams supported on Drive
+    uint32_t num_streams{1};              // Total number of independent streams supported on Drive
 
     bool is_valid() const { return (align_size != 0); }
     bool operator==(const drive_attributes& other) const {
