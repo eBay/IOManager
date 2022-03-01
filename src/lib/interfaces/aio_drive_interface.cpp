@@ -150,7 +150,7 @@ void AioDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]] 
 }
 
 void AioDriveInterface::handle_completions() {
-    auto& tmetrics{iomanager.this_reactor()->thread_metrics()};
+    auto& tmetrics = iomanager.this_thread_metrics();
 
     const int nevents = io_getevents(t_aio_ctx->ioctx, 0, MAX_COMPLETIONS, t_aio_ctx->events, NULL);
     ++tmetrics.io_callbacks;
@@ -219,7 +219,7 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
         t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
     } else {
         auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
-        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        auto& metrics = iomanager.this_thread_metrics();
         ++metrics.io_submissions;
         ++metrics.actual_ios;
 
@@ -243,7 +243,7 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
         t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
     } else {
         auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
-        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        auto& metrics = iomanager.this_thread_metrics();
         ++metrics.io_submissions;
         ++metrics.actual_ios;
 
@@ -272,7 +272,7 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
                                cookie);
     } else {
         auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
-        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        auto& metrics = iomanager.this_thread_metrics();
         ++metrics.io_submissions;
         ++metrics.actual_ios;
 
@@ -301,8 +301,7 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
         t_aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), true /* is_read */, iov, iovcnt, size, offset, cookie);
     } else {
         auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
-
-        auto& metrics{iomanager.this_reactor()->thread_metrics()};
+        auto& metrics = iomanager.this_thread_metrics();
         ++metrics.io_submissions;
         ++metrics.actual_ios;
 
@@ -323,7 +322,7 @@ void AioDriveInterface::submit_batch() {
     LOGTRACEMOD(iomgr, "submit pending batch n_iocbs={}", ibatch.n_iocbs);
     if (ibatch.n_iocbs == 0) { return; } // No batch to submit
 
-    auto& metrics{iomanager.this_reactor()->thread_metrics()};
+    auto& metrics = iomanager.this_thread_metrics();
     ++metrics.io_submissions;
 
     auto n_issued = io_submit(t_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());

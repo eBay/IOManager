@@ -369,6 +369,7 @@ public:
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
     IOReactor* this_reactor() const;
+    IOThreadMetrics& this_thread_metrics();
 
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }

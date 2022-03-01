@@ -805,6 +805,17 @@ void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
 
 IOReactor* IOManager::this_reactor() const { return IOReactor::this_reactor; }
 
+IOThreadMetrics& IOManager::this_thread_metrics() {
+    if (this_reactor() != nullptr) {
+        return this_reactor()->thread_metrics();
+    } else {
+        static std::atomic< uint32_t > s_count{0};
+        static thread_local std::unique_ptr< IOThreadMetrics > s_m =
+            std::make_unique< IOThreadMetrics >(fmt::format("NonIOThread-{}", ++s_count));
+        return *s_m;
+    }
+}
+
 void IOManager::all_reactors(const auto& cb) {
     m_reactors.access_all_threads(
         [&cb](std::shared_ptr< IOReactor >* preactor, bool is_last_thread) { cb(preactor->get(), is_last_thread); });
