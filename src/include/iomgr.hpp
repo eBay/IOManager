@@ -267,7 +267,10 @@ public:
                const run_on_closure_t& cb_wait_closure = nullptr) {
         bool sent{false};
         if (wtype == wait_type_t::no_wait) {
-            sent = send_msg(thread, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
+            // make rvalue copy of completion func
+            sent = send_msg(thread,
+                            iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id,
+                                              std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
         } else if (wtype == wait_type_t::callback) {
             DEBUG_ASSERT(0, "run_on direct thread with async closure is not supported yet");
         } else if ((wtype == wait_type_t::spin) && IOManager::instance().am_i_io_reactor()) {
@@ -310,11 +313,11 @@ public:
             };
             auto ctx{std::make_shared< Context >()};
 
-            auto temp_cb = [fn, ctx, cb_wait_closure](io_thread_addr_t addr) {
-                fn(addr);
+            auto temp_cb = [cb_func = fn, ctx, wait_closure = cb_wait_closure](io_thread_addr_t addr) {
+                cb_func(addr);
                 if (ctx->pending_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
                     std::atomic_thread_fence(std::memory_order_acquire);
-                    cb_wait_closure();
+                    wait_closure();
                 }
             };
 
@@ -366,6 +369,7 @@ public:
     /********* Access related methods ***********/
     const io_thread_t& iothread_self() const;
     IOReactor* this_reactor() const;
+    IOThreadMetrics& this_thread_metrics();
 
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }

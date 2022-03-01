@@ -631,7 +631,7 @@ void SpdkDriveInterface::increment_outstanding_counter(const SpdkIocb* iocb) {
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
 
-    ++(iomanager.this_reactor()->thread_metrics().outstanding_ops);
+    ++(iomanager.this_thread_metrics().outstanding_ops);
 }
 
 void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
@@ -652,7 +652,7 @@ void SpdkDriveInterface::decrement_outstanding_counter(const SpdkIocb* iocb) {
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
-    --(iomanager.this_reactor()->thread_metrics().outstanding_ops);
+    --(iomanager.this_thread_metrics().outstanding_ops);
 }
 
 inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch) {
@@ -660,7 +660,7 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
 
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
-        auto& thread_metrics = iomanager.this_reactor()->thread_metrics();
+        auto& thread_metrics = iomanager.this_thread_metrics();
         ++thread_metrics.io_submissions;
         ++thread_metrics.actual_ios;
         submit_io(iocb);
@@ -861,7 +861,7 @@ void SpdkDriveInterface::submit_batch() {
 
 void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch) {
     DEBUG_ASSERT_EQ(iomanager.am_i_io_reactor(), true, "Async on non-io reactors not possible");
-    auto& thread_metrics = iomanager.this_reactor()->thread_metrics();
+    auto& thread_metrics = iomanager.this_thread_metrics();
 
     iocb->owner_thread = iomanager.iothread_self(); // TODO: This makes a shared_ptr copy, see if we can avoid it
     iocb->comp_cb = [this, iocb](int64_t res, uint8_t* cookie) {
