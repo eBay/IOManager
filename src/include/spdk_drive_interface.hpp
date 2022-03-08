@@ -198,7 +198,8 @@ struct SpdkIocb : public drive_iocb {
 
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
-            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
+            drive_iocb{iodev, op_type, size, offset, cookie},
+            iface{iface} {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = reinterpret_cast< SpdkDriveInterface* >(iodev->io_interface)->m_comp_cb;
@@ -211,6 +212,8 @@ struct SpdkIocb : public drive_iocb {
 #ifndef NDEBUG
         str = fmt::format("id={} ", iocb_id);
 #endif
+        str += fmt::format("spdk={}", owns_by_spdk);
+
         str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, "
                            "resubmit_cnt={}, unique_id={}, elapsed_time_ms(op_start_time)={}",
                            (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
