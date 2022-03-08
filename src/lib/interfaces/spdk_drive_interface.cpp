@@ -525,9 +525,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool success, void* ctx) 
     if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { success = false; }
 #endif
 
-#ifndef NDEBUG
     iocb->owns_by_spdk = false;
-#endif
 
     if (success) {
         iocb->result = 0;
@@ -559,10 +557,8 @@ static void submit_io(void* b) {
     int rc = 0;
     DEBUG_ASSERT_NOTNULL((void*)iocb->iodev->bdev_desc());
 
-#ifndef NDEBUG
     DEBUG_ASSERT((iocb->owns_by_spdk == false), "Duplicate submission of iocb while io pending: {}", iocb->to_string());
     iocb->owns_by_spdk = true;
-#endif
 
     // preadd outstanding io's so that if completes quickly count will not become negative
     iocb->iface->m_outstanding_async_ios.fetch_add(1, std::memory_order_relaxed);
@@ -606,9 +602,7 @@ static void submit_io(void* b) {
         } else {
             LOGERRORMOD(iomgr, "iocb {} submission failed with rc={}", iocb->to_string(), rc);
         }
-#ifndef NDEBUG
         iocb->owns_by_spdk = false;
-#endif
     }
 }
 

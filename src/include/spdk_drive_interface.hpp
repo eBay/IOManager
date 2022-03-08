@@ -191,9 +191,7 @@ struct SpdkIocb : public drive_iocb {
     io_interface_comp_cb_t comp_cb{nullptr};
     spdk_bdev_io_wait_entry io_wait_entry;
     SpdkBatchIocb* batch_info_ptr{nullptr};
-#ifndef NDEBUG
     bool owns_by_spdk{false};
-#endif
     // used by io watchdog
     uint64_t unique_id{0};
     Clock::time_point op_start_time;
