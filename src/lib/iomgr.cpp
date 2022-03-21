@@ -949,10 +949,17 @@ uint8_t* SpdkAlignedAllocImpl::aligned_realloc(uint8_t* old_buf, size_t align, s
 }
 
 uint8_t* SpdkAlignedAllocImpl::aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) {
-    return static_cast< uint8_t* >(spdk_mempool_get(iomanager.get_mempool(sz)));
+    auto buf = static_cast< uint8_t* >(spdk_mempool_get(iomanager.get_mempool(sz)));
+#ifdef _PRERELEASE
+    sisl::AlignedAllocator::metrics().increment(tag, buf_size(buf));
+#endif
+    return buf;
 }
 
 void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) {
+#ifdef _PRERELEASE
+    sisl::AlignedAllocator::metrics().decrement(tag, buf_size(b));
+#endif
     spdk_mempool_put(iomanager.get_mempool(sz), b);
 }
 
