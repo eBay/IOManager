@@ -63,7 +63,7 @@ static std::string get_major_minor(const std::string& devname) {
     struct stat statbuf;
     const int ret{::stat(devname.c_str(), &statbuf)};
     if (ret != 0) {
-        LOGERROR("Unable to stat the path {}, ignoring to get major/minor", devname.c_str());
+        LOGERROR("Unable to stat the path {}, ignoring to get major/minor, ret:{}", devname.c_str(), ret);
         return "";
     }
     return fmt::format("{}:{}", gnu_dev_major(statbuf.st_rdev), gnu_dev_minor(statbuf.st_rdev));
@@ -110,8 +110,7 @@ std::string exec_command(const std::string& cmd) {
 }
 
 static std::string find_megacli_bin_path() {
-    static std::vector< std::string > paths{"/usr/sbin/megacli", "/bin/megacli", "/usr/lib/megacli",
-                                            "/bin/MegaCli64"};
+    static std::vector< std::string > paths{"/usr/sbin/megacli", "/bin/megacli", "/usr/lib/megacli", "/bin/MegaCli64"};
     for (auto& p : paths) {
         if (std::filesystem::exists(p)) { return p; }
     }
@@ -167,8 +166,7 @@ drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
         auto device = std::filesystem::path(get_mounted_device(dev_name)).filename();
         return is_rotational_device(device) ? drive_type::file_on_hdd : drive_type::file_on_nvme;
     } else if (std::filesystem::is_block_file(std::filesystem::status(dev_name))) {
-        const auto device = std::filesystem::path(dev_name).filename();
-        return is_rotational_device(device) ? drive_type::block_hdd : drive_type::block_nvme;
+        return is_rotational_device(dev_name) ? drive_type::block_hdd : drive_type::block_nvme;
     } else {
         return SpdkDriveInterface::detect_drive_type(dev_name);
     }
