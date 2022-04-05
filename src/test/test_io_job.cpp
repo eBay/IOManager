@@ -48,10 +48,9 @@ TEST(IOMgrTest, basic_io_test) {
             const auto fd{::open(dev.c_str(), O_RDWR | O_CREAT, 0666)};
             assert(fd > 0);
             ::close(fd);
-
-            std::filesystem::resize_file(file_path, dev_size);
-            examiner->add_device(dev, O_RDWR);
         }
+        std::filesystem::resize_file(file_path, dev_size);
+        examiner->add_device(dev, O_RDWR);
     }
 
     IOJobCfg cfg;

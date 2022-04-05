@@ -30,6 +30,7 @@ private:
     void idle_time_wakeup_poller();
 
 private:
+    std::atomic< bool > m_msg_handler_on;           // Is Message handling ongoing now
     int m_epollfd = -1;                             // Parent epoll context for this thread
     io_device_ptr m_msg_iodev;                      // iodev for the messages
     folly::UMPSCQueue< iomgr_msg*, false > m_msg_q; // Q of message for this thread

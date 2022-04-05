@@ -173,9 +173,13 @@ bool IOReactorEPoll::put_msg(iomgr_msg* msg) {
                 m_reactor_num, msg->m_dest_thread, m_msg_iodev->fd(), (void*)m_msg_iodev.get());
 
     m_msg_q.enqueue(msg);
-    const uint64_t temp{1};
-    while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
-        ++m_metrics->msg_iodev_busy_count;
+
+    // Raise an event only in case msg handler is not currently running
+    if (!m_msg_handler_on.load(std::memory_order_acquire)) {
+        const uint64_t temp{1};
+        while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
+            ++m_metrics->msg_iodev_busy_count;
+        }
     }
 
     return true;
@@ -191,22 +195,33 @@ void IOReactorEPoll::on_msg_fd_notification() {
 }
 
 void IOReactorEPoll::process_messages() {
-    uint32_t max_msg_batch_size{IM_DYNAMIC_CONFIG(max_msgs_before_yield)};
+    const auto max_msg_batch_size{IM_DYNAMIC_CONFIG(max_msgs_before_yield)};
     uint32_t msg_count{0};
+    bool in_retry{false};
 
-    // Start pulling all the messages and handle them.
-    while (msg_count < max_msg_batch_size) {
-        iomgr_msg* msg;
-        if (!m_msg_q.try_dequeue(msg)) { break; }
-        handle_msg(msg);
-        ++msg_count;
-    }
+    m_msg_handler_on.store(true, std::memory_order_release);
+    while (true) {
+        // Start pulling all the messages and handle them.
+        while (msg_count < max_msg_batch_size) {
+            iomgr_msg* msg;
+            if (!m_msg_q.try_dequeue(msg)) { break; }
+            handle_msg(msg);
+            ++msg_count;
+        }
 
-    if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
-        REACTOR_LOG(DEBUG, iomgr, , "Reached max msg_count batch {}, yielding and will process again", msg_count);
-        const uint64_t temp{1};
-        while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
-            ++m_metrics->msg_iodev_busy_count;
+        if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
+            REACTOR_LOG(DEBUG, iomgr, , "Reached max msg_count batch {}, yielding and will process again", msg_count);
+            const uint64_t temp{1};
+            while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
+                ++m_metrics->msg_iodev_busy_count;
+            }
+            m_msg_handler_on.store(false, std::memory_order_release);
+            break;
+        } else if (in_retry) { // Already retrying after msg handler on unset
+            break;
+        } else {
+            m_msg_handler_on.store(false, std::memory_order_release);
+            in_retry = true;
         }
     }
 }

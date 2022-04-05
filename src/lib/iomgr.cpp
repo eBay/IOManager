@@ -322,6 +322,11 @@ void IOManager::start_spdk() {
         if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
 
         spdk_unaffinitize_thread();
+        
+        // Lock the first core for non-reactor threads.
+        const auto lcore = spdk_env_get_first_core();
+        RELEASE_ASSERT(lcore != UINT32_MAX, "SPDK unable to get the first core, possibly no cpu available");
+        assign_core_if_available(lcore);
 
         rc = spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread,
                                       IOReactorSPDK::reactor_thread_op_supported, 0);
