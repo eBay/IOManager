@@ -8,6 +8,7 @@
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 #include <sisl/fds/buffer.hpp>
+#include "io_environment.hpp"
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -49,7 +50,7 @@ void glob_setup() {
     g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
     g_iters = SISL_OPTIONS["iters"].as< uint64_t >();
 
-    iomanager.start(g_io_threads, g_is_spdk);
+    ioenvironment.with_iomgr(g_io_threads, g_is_spdk);
 }
 
 void glob_teardown() { iomanager.stop(); }

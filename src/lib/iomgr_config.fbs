@@ -67,6 +67,57 @@ table Poll {
     backoff_delay_max_us : uint64 = 500 (hotswap);
 }
 
+table TrfClient {
+    // grant token mount directory
+    grant_path_prefix: string;
+
+    // Server addr to download the token (default: https://trustfabric.vip.ebay.com/v2/token)
+    server: string;
+
+    // Pod env variables
+    app_name: string;
+    app_inst_name: string;
+    app_env: string;
+    pod_name: string;
+}
+
+table AuthManager {
+    // , separated allowed applications (default all)
+    auth_allowed_apps: string;
+
+    // Token issuer (default trustfabric)
+    issuer: string;
+
+    // signing key domain
+    tf_token_url: string;
+
+    // leeway to the token expiration
+    leeway: uint32 = 0;
+
+    // ssl verification for the signing key download url
+    verify: bool = true;
+}
+
+table Security {
+    // ssl cert related files
+    ssl_cert_file: string;
+    ssl_key_file: string;
+    ssl_ca_file: string;
+
+    // Auth Manager to decode and verify the token
+    auth_manager: AuthManager;
+
+    // Trustfabric client settings
+    trf_client: TrfClient;    
+}
+
+table IoEnv {
+    http_port: uint32 = 5000;
+    
+    // Turn on security features
+    secure_zone: bool = false;
+}
+
 table IomgrSettings {
     spdk: SpdkDriveInterface;
     aio : AioDriveInterface;
@@ -77,6 +128,9 @@ table IomgrSettings {
     // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
     max_msgs_before_yield: uint32 = 100 (hotswap);
     max_resubmit_cnt: uint32 = 3 (hotswap); // it is max resubmit cnt of io in case of error
+
+    io_env: IoEnv;
+    security: Security;
 }
 
 root_type IomgrSettings;
