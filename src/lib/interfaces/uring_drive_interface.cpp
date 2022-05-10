@@ -17,6 +17,7 @@
 
 #ifdef __linux__
 #include <sys/epoll.h>
+#include <linux/version.h>
 #endif
 
 #include <sisl/fds/utils.hpp>
@@ -165,12 +166,21 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
 void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
                                       uint8_t* cookie, bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
-    iocb->set_data((char*)data);
 
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
-    io_uring_prep_write(sqe, iodev->fd(), (const void*)data, size, offset);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
+    std::array< iovec, 1 > iov;
+    iov[0].iov_base = (void*)data;
+    iov[0].iov_len = size;
+
+    iocb->set_iovs(iov.data(), 1);
+    io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+#else
+    iocb->set_data((char*)data);
+    io_uring_prep_write(sqe, iodev->fd(), (const void*)iocb->get_data(), iocb->size, offset);
+#endif
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
@@ -182,19 +192,28 @@ void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int io
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
-    io_uring_prep_writev(sqe, iodev->fd(), iov, iovcnt, offset);
+    io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
 void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                      bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
-    iocb->set_data(data);
 
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
-    io_uring_prep_read(sqe, iodev->fd(), (void*)data, size, offset);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
+    std::array< iovec, 1 > iov;
+    iov[0].iov_base = data;
+    iov[0].iov_len = size;
+
+    iocb->set_iovs(iov.data(), 1);
+    io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+#else
+    iocb->set_data(data);
+    io_uring_prep_read(sqe, iodev->fd(), (void*)iocb->get_data(), iocb->size, offset);
+#endif
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
@@ -206,7 +225,7 @@ void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iov
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
-    io_uring_prep_readv(sqe, iodev->fd(), iov, iovcnt, offset);
+    io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 

@@ -18,6 +18,7 @@
 
 #ifdef __linux__
 #include <fcntl.h>
+#include <linux/version.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/mount.h>
@@ -110,6 +111,15 @@ IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.re
 IOManager::~IOManager() = default;
 
 static bool check_uring_capability() {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
+    if (syscall(__NR_io_uring_register, 0, IORING_UNREGISTER_BUFFERS, NULL, 0) && errno == ENOSYS) {
+        // No io_uring
+        return false;
+    } else {
+        // io_uring
+        return true;
+    }
+#else
     std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
                               IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
 
@@ -125,6 +135,7 @@ static bool check_uring_capability() {
     }
     free(probe);
     return supported;
+#endif
 }
 
 void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state_notifier_t& notifier,
@@ -171,7 +182,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     if (iface_adder) {
         iface_adder();
     } else {
-        if (m_is_uring_capable) {
+        if (m_is_uring_capable && !is_spdk) {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< UringDriveInterface >()));
         } else {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
@@ -322,7 +333,7 @@ void IOManager::start_spdk() {
         if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
 
         spdk_unaffinitize_thread();
-        
+
         // Lock the first core for non-reactor threads.
         const auto lcore = spdk_env_get_first_core();
         RELEASE_ASSERT(lcore != UINT32_MAX, "SPDK unable to get the first core, possibly no cpu available");
@@ -471,16 +482,16 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
         h->slot_num = slot_num;
         h->loop_type = loop_type;
 
-        const auto rc = spdk_env_thread_launch_pinned(
-            lcore,
-            [](void* arg) -> int {
-                param_holder* h = (param_holder*)arg;
-                set_thread_name(h->name.c_str());
-                iomanager._run_io_loop(h->slot_num, h->loop_type, nullptr, std::move(h->notifier));
-                delete h;
-                return 0;
-            },
-            (void*)h);
+        const auto rc = spdk_env_thread_launch_pinned(lcore,
+                                                      [](void* arg) -> int {
+                                                          param_holder* h = (param_holder*)arg;
+                                                          set_thread_name(h->name.c_str());
+                                                          iomanager._run_io_loop(h->slot_num, h->loop_type, nullptr,
+                                                                                 std::move(h->notifier));
+                                                          delete h;
+                                                          return 0;
+                                                      },
+                                                      (void*)h);
         RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
         return sys_thread_id_t{lcore};
@@ -528,12 +539,12 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
     }
     iface->set_scope(iface_scope);
 
-    const auto sent_count = iomanager.run_on(
-        iface_scope,
-        [this, iface](io_thread_addr_t taddr) {
-            iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
-        },
-        wait_type_t::sleep);
+    const auto sent_count =
+        iomanager.run_on(iface_scope,
+                         [this, iface](io_thread_addr_t taddr) {
+                             iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
+                         },
+                         wait_type_t::sleep);
 
     if (iface->is_spdk_interface()) {
         static std::once_flag flag1;
@@ -550,12 +561,12 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
         m_iface_list.erase(std::remove(m_iface_list.begin(), m_iface_list.end(), iface), m_iface_list.end());
     }
 
-    const auto sent_count = iomanager.run_on(
-        iface->scope(),
-        [this, iface](io_thread_addr_t taddr) {
-            iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
-        },
-        wait_type_t::sleep);
+    const auto sent_count =
+        iomanager.run_on(iface->scope(),
+                         [this, iface](io_thread_addr_t taddr) {
+                             iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
+                         },
+                         wait_type_t::sleep);
 
     LOGINFOMOD(iomgr, "Interface={} removed from {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
                m_iface_list.size());
@@ -1010,7 +1021,8 @@ void IOManager::mempool_metrics_populate() {
 }
 
 IOMempoolMetrics::IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp) :
-        sisl::MetricsGroup("IOMemoryPool", pool_name), m_mp{mp} {
+        sisl::MetricsGroup("IOMemoryPool", pool_name),
+        m_mp{mp} {
     REGISTER_GAUGE(iomempool_obj_size, "Size of the entry for this mempool");
     REGISTER_GAUGE(iomempool_free_count, "Total count of objects which are free in this pool");
     REGISTER_GAUGE(iomempool_alloced_count, "Total count of objects which are alloced in this pool");

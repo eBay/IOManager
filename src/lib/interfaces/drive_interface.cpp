@@ -213,7 +213,7 @@ std::shared_ptr< DriveInterface > DriveInterface::get_iface_for_drive(const std:
     drive_interface_type iface_type;
     if (iomanager.is_spdk_mode() && (dtype != drive_type::file_on_hdd) && (dtype != drive_type::block_hdd)) {
         iface_type = drive_interface_type::spdk;
-    } else if (iomanager.is_uring_capable()) {
+    } else if (iomanager.is_uring_capable() && !iomanager.is_spdk_mode()) {
         iface_type = drive_interface_type::uring;
     } else {
         iface_type = drive_interface_type::aio;
