@@ -27,8 +27,8 @@ IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
 
-void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                    thread_state_notifier_t&& thread_state_notifier) {
+void IOReactor::run(int worker_slot_num, loop_type_t ltype, const std::string& name,
+                    const iodev_selector_t& iodev_selector, thread_state_notifier_t&& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
         LOGINFO("Starting a new IOReactor while iomanager is stopping or stopped, not starting io loop");
@@ -37,9 +37,9 @@ void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_sele
 
     this_reactor = this;
     m_poll_interval = IM_DYNAMIC_CONFIG(poll.force_wakeup_by_time_ms);
-    m_user_controlled_loop = ((loop_type & USER_CONTROLLED_LOOP) != 0);
+    m_user_controlled_loop = ((ltype & USER_CONTROLLED_LOOP) != 0);
 
-    m_is_adaptive_loop = ((loop_type & ADAPTIVE_LOOP) != 0);
+    m_is_adaptive_loop = ((ltype & ADAPTIVE_LOOP) != 0);
     m_backoff_delay_min_us = IM_DYNAMIC_CONFIG(poll.backoff_delay_min_us);
     m_cur_backoff_delay_us = m_is_adaptive_loop ? m_backoff_delay_min_us : 0;
 
@@ -49,7 +49,9 @@ void IOReactor::run(int worker_slot_num, loop_type_t loop_type, const iodev_sele
         m_this_thread_notifier = std::move(thread_state_notifier);
 
         m_reactor_num = sisl::ThreadLocalContext::my_thread_num();
-        REACTOR_LOG(INFO, base, , "IOReactor started and assigned reactor id {}", m_reactor_num);
+        m_reactor_name = name.empty() ? fmt::format("{}-{}", m_reactor_num, loop_type()) : name;
+        REACTOR_LOG(INFO, base, , "IOReactor {} started of loop type={} and assigned reactor id {}", m_reactor_name,
+                    loop_type(), m_reactor_num);
 
         init();
         if (m_keep_running) { REACTOR_LOG(INFO, base, , "IOReactor is ready to go to listen loop"); }
@@ -77,7 +79,7 @@ void IOReactor::init() {
     }
 #endif
 
-    m_metrics = std::make_unique< IOThreadMetrics >(fmt::format("{}-{}", reactor_idx(), loop_type()));
+    m_metrics = std::make_unique< IOThreadMetrics >(m_reactor_name);
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
     start_io_thread(iomanager.make_io_thread(this));

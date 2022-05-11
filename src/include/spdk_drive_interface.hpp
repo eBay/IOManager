@@ -195,11 +195,11 @@ struct SpdkIocb : public drive_iocb {
     // used by io watchdog
     uint64_t unique_id{0};
     Clock::time_point op_start_time;
+    Clock::time_point issued_to_spdk_time;
 
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
-            drive_iocb{iodev, op_type, size, offset, cookie},
-            iface{iface} {
+            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = reinterpret_cast< SpdkDriveInterface* >(iodev->io_interface)->m_comp_cb;
@@ -215,10 +215,10 @@ struct SpdkIocb : public drive_iocb {
         str += fmt::format("spdk={}", owns_by_spdk);
 
         str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, owner_thread={}, batch_sz={}, "
-                           "resubmit_cnt={}, unique_id={}, elapsed_time_ms(op_start_time)={}",
+                           "resubmit_cnt={}, unique_id={}, elapsed_time_us(op_start_time)={}",
                            (void*)this, enum_name(op_type), size, offset, iovcnt, owner_thread,
                            batch_info_ptr ? batch_info_ptr->batch_io->size() : 0, resubmit_cnt, unique_id,
-                           get_elapsed_time_ms(op_start_time));
+                           get_elapsed_time_us(op_start_time));
 
         if (has_iovs()) {
             const auto* ivs{get_iovs()};

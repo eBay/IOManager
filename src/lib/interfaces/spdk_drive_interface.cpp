@@ -524,7 +524,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool success, void* ctx) 
     const auto flip_resubmit_cnt{flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io")};
     if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { success = false; }
 #endif
-
+    iomanager.this_thread_metrics().drive_latency_sum_us += get_elapsed_time_us(iocb->issued_to_spdk_time);
     iocb->owns_by_spdk = false;
 
     if (success) {
@@ -562,6 +562,9 @@ static void submit_io(void* b) {
 
     // preadd outstanding io's so that if completes quickly count will not become negative
     iocb->iface->m_outstanding_async_ios.fetch_add(1, std::memory_order_relaxed);
+    iocb->issued_to_spdk_time = Clock::now();
+    ++(iomanager.this_thread_metrics().drive_io_count);
+
     LOGDEBUGMOD(iomgr, "iocb submit: mode=actual, {}", iocb->to_string());
     if (iocb->op_type == DriveOpType::READ) {
         if (iocb->has_iovs()) {
@@ -655,8 +658,8 @@ inline bool SpdkDriveInterface::try_submit_io(SpdkIocb* iocb, bool part_of_batch
     if (iomanager.am_i_tight_loop_reactor()) {
         LOGDEBUGMOD(iomgr, "iocb submit: mode=tloop, {}", iocb->to_string());
         auto& thread_metrics = iomanager.this_thread_metrics();
-        ++thread_metrics.io_submissions;
-        ++thread_metrics.actual_ios;
+        ++thread_metrics.iface_io_batch_count;
+        ++thread_metrics.iface_io_actual_count;
         submit_io(iocb);
     } else if (iomanager.am_i_io_reactor()) {
         COUNTER_INCREMENT(m_metrics, num_async_io_non_spdk_thread, 1);
@@ -835,6 +838,10 @@ static thread_local SpdkBatchIocb* s_batch_info_ptr = nullptr;
 void SpdkDriveInterface::submit_batch() {
     // s_batch_info_ptr could be nullptr when client calls submit_batch
     if (s_batch_info_ptr) {
+        auto& thread_metrics = iomanager.this_thread_metrics();
+        ++thread_metrics.iface_io_batch_count;
+        thread_metrics.iface_io_actual_count += s_batch_info_ptr->batch_io->size();
+
         auto* msg = iomgr_msg::create(spdk_msg_type::QUEUE_BATCH_IO, m_my_msg_modid,
                                       reinterpret_cast< uint8_t* >(s_batch_info_ptr), sizeof(SpdkBatchIocb*));
         const auto sent_to{iomanager.multicast_msg(thread_regex::least_busy_worker, msg)};
@@ -891,8 +898,8 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         // if we support same user-thread to send both, we should not use iocb->batch_info_ptr to check whether it is
         // batch io in comp_cb (line: 470);
         DEBUG_ASSERT_EQ((void*)iocb->batch_info_ptr, nullptr);
-        ++thread_metrics.actual_ios;
-        ++thread_metrics.io_submissions;
+        ++thread_metrics.iface_io_actual_count;
+        ++thread_metrics.iface_io_batch_count;
         auto* msg = iomgr_msg::create(spdk_msg_type::QUEUE_IO, m_my_msg_modid, reinterpret_cast< uint8_t* >(iocb),
                                       sizeof(SpdkIocb));
         iomanager.multicast_msg(thread_regex::least_busy_worker, msg);
@@ -903,8 +910,6 @@ void SpdkDriveInterface::submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool pa
         s_batch_info_ptr->batch_io->push_back(iocb);
 
         if (s_batch_info_ptr->batch_io->size() == IM_DYNAMIC_CONFIG(spdk->num_batch_io_limit)) {
-            ++thread_metrics.io_submissions;
-            thread_metrics.actual_ios += s_batch_info_ptr->batch_io->size();
             // this batch is ready to be processed;
             submit_batch();
         }

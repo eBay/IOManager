@@ -454,7 +454,7 @@ void IOManager::create_reactor(const std::string& name, loop_type_t loop_type, t
 
 void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                                     thread_state_notifier_t&& addln_notifier) {
-    _run_io_loop(-1, loop_type, iodev_selector, std::move(addln_notifier));
+    _run_io_loop(-1, loop_type, "", iodev_selector, std::move(addln_notifier));
 }
 
 sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop_type_t loop_type, int slot_num,
@@ -482,22 +482,23 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
         h->slot_num = slot_num;
         h->loop_type = loop_type;
 
-        const auto rc = spdk_env_thread_launch_pinned(lcore,
-                                                      [](void* arg) -> int {
-                                                          param_holder* h = (param_holder*)arg;
-                                                          set_thread_name(h->name.c_str());
-                                                          iomanager._run_io_loop(h->slot_num, h->loop_type, nullptr,
-                                                                                 std::move(h->notifier));
-                                                          delete h;
-                                                          return 0;
-                                                      },
-                                                      (void*)h);
+        const auto rc = spdk_env_thread_launch_pinned(
+            lcore,
+            [](void* arg) -> int {
+                param_holder* h = (param_holder*)arg;
+                set_thread_name(h->name.c_str());
+                iomanager._run_io_loop(h->slot_num, h->loop_type, h->name, nullptr, std::move(h->notifier));
+                delete h;
+                return 0;
+            },
+            (void*)h);
+
         RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
         return sys_thread_id_t{lcore};
     } else {
-        auto sthread = sisl::named_thread(name, [slot_num, loop_type, n = std::move(notifier)]() mutable {
-            iomanager._run_io_loop(slot_num, loop_type, nullptr, std::move(n));
+        auto sthread = sisl::named_thread(name, [slot_num, loop_type, name, n = std::move(notifier)]() mutable {
+            iomanager._run_io_loop(slot_num, loop_type, name, nullptr, std::move(n));
         });
         sthread.detach();
         return sys_thread_id_t{std::move(sthread)};
@@ -572,8 +573,8 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
                m_iface_list.size());
 }
 
-void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector,
-                             thread_state_notifier_t&& addln_notifier) {
+void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
+                             const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier) {
     loop_type_t ltype = loop_type;
 
     std::shared_ptr< IOReactor > reactor;
@@ -585,7 +586,7 @@ void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const io
         reactor = std::make_shared< IOReactorEPoll >();
     }
     *(m_reactors.get()) = reactor;
-    reactor->run(iomgr_slot_num, ltype, iodev_selector, std::move(addln_notifier));
+    reactor->run(iomgr_slot_num, ltype, name, iodev_selector, std::move(addln_notifier));
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }

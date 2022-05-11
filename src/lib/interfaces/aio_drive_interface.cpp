@@ -220,8 +220,8 @@ void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t 
     } else {
         auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
         auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.io_submissions;
-        ++metrics.actual_ios;
+        ++metrics.iface_io_batch_count;
+        ++metrics.iface_io_actual_count;
 
         auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
         t_aio_ctx->inc_submitted_aio(ret);
@@ -244,8 +244,8 @@ void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, u
     } else {
         auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
         auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.io_submissions;
-        ++metrics.actual_ios;
+        ++metrics.iface_io_batch_count;
+        ++metrics.iface_io_actual_count;
 
         auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
         t_aio_ctx->inc_submitted_aio(ret);
@@ -273,8 +273,8 @@ void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovc
     } else {
         auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
         auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.io_submissions;
-        ++metrics.actual_ios;
+        ++metrics.iface_io_batch_count;
+        ++metrics.iface_io_actual_count;
 
         auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
         t_aio_ctx->inc_submitted_aio(ret);
@@ -302,8 +302,8 @@ void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcn
     } else {
         auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
         auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.io_submissions;
-        ++metrics.actual_ios;
+        ++metrics.iface_io_batch_count;
+        ++metrics.iface_io_actual_count;
 
         auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
         t_aio_ctx->inc_submitted_aio(ret);
@@ -323,11 +323,11 @@ void AioDriveInterface::submit_batch() {
     if (ibatch.n_iocbs == 0) { return; } // No batch to submit
 
     auto& metrics = iomanager.this_thread_metrics();
-    ++metrics.io_submissions;
+    ++metrics.iface_io_batch_count;
 
     auto n_issued = io_submit(t_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
     if (n_issued < 0) { n_issued = 0; }
-    metrics.actual_ios += n_issued;
+    metrics.iface_io_actual_count += n_issued;
     t_aio_ctx->inc_submitted_aio(n_issued);
 
     // For those which we are not able to issue, convert that to sync io

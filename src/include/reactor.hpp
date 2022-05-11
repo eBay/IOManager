@@ -53,8 +53,10 @@ public:
         REGISTER_GAUGE(iomgr_thread_rescheduled_in, "Times IOs rescheduled into this thread");
         REGISTER_GAUGE(iomgr_thread_outstanding_ops, "IO ops outstanding in this thread");
 
-        REGISTER_GAUGE(iomgr_thread_io_submissions, "Times IO submitted to this thread");
-        REGISTER_GAUGE(iomgr_thread_actual_ios, "Total IOs submitted to this thread including batch");
+        REGISTER_GAUGE(iomgr_thread_iface_io_batch_count, "Number of io batches submitted to this thread");
+        REGISTER_GAUGE(iomgr_thread_iface_io_actual_count, "Number of actual ios to this thread including batch");
+        REGISTER_GAUGE(iomgr_thread_drive_io_count, "Total IOs issued to driver below");
+        REGISTER_GAUGE(iomgr_thread_drive_latency_avg, "Average latency of drive ios in this thread");
         REGISTER_GAUGE(iomgr_thread_io_callbacks, "Times IO callback from driver to this thread");
         REGISTER_GAUGE(iomgr_thread_aio_event_in_callbacks, "Total aio events received to this thread");
 
@@ -79,8 +81,12 @@ public:
         GAUGE_UPDATE(*this, iomgr_thread_rescheduled_in, rescheduled_in);
         GAUGE_UPDATE(*this, iomgr_thread_outstanding_ops, outstanding_ops);
 
-        GAUGE_UPDATE(*this, iomgr_thread_io_submissions, io_submissions);
-        GAUGE_UPDATE(*this, iomgr_thread_actual_ios, actual_ios);
+        GAUGE_UPDATE(*this, iomgr_thread_iface_io_batch_count, iface_io_batch_count);
+        GAUGE_UPDATE(*this, iomgr_thread_iface_io_actual_count, iface_io_actual_count);
+        GAUGE_UPDATE(*this, iomgr_thread_drive_io_count, drive_io_count);
+        if (drive_io_count != 0) {
+            GAUGE_UPDATE(*this, iomgr_thread_drive_latency_avg, drive_latency_sum_us / drive_io_count);
+        }
         GAUGE_UPDATE(*this, iomgr_thread_io_callbacks, io_callbacks);
         GAUGE_UPDATE(*this, iomgr_thread_aio_event_in_callbacks, aio_events_in_callback);
     }
@@ -96,8 +102,10 @@ public:
     uint64_t rescheduled_in{0};
     int64_t outstanding_ops{0};
 
-    uint64_t io_submissions{0};
-    uint64_t actual_ios{0};
+    uint64_t iface_io_batch_count{0};
+    uint64_t iface_io_actual_count{0};
+    uint64_t drive_io_count{0};
+    uint64_t drive_latency_sum_us{0};
     uint64_t io_callbacks{0};
     uint64_t aio_events_in_callback{0};
 };
@@ -194,7 +202,8 @@ public:
 
 public:
     virtual ~IOReactor();
-    virtual void run(int worker_num, loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
+    virtual void run(int worker_num, loop_type_t loop_type, const std::string& name = nullptr,
+                     const iodev_selector_t& iodev_selector = nullptr,
                      thread_state_notifier_t&& thread_state_notifier = nullptr);
     bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
     bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
@@ -264,6 +273,7 @@ protected:
     std::unique_ptr< timer > m_thread_timer;
     thread_state_notifier_t m_this_thread_notifier;
 
+    std::string m_reactor_name;
     iodev_selector_t m_iodev_selector = nullptr;
     uint32_t m_n_iodevices = 0;
 
