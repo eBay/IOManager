@@ -28,6 +28,10 @@ thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};
 
 uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) {
     // TODO: For now setup as interrupt mode instead of pollmode
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
+    RELEASE_ASSERT(0, "Not expected to run io_uring below kernel 5.4!");
+#endif
+
     int ret = io_uring_queue_init(UringDriveInterface::per_thread_qdepth, &m_ring, 0);
     if (ret) { folly::throwSystemError(fmt::format("Unable to create uring queue created ret={}", ret)); }
 
@@ -165,23 +169,22 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
 
 void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
                                       uint8_t* cookie, bool part_of_batch) {
-    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
-
-    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-    if (sqe == nullptr) { return; }
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
     std::array< iovec, 1 > iov;
     iov[0].iov_base = (void*)data;
     iov[0].iov_len = size;
 
-    iocb->set_iovs(iov.data(), 1);
-    io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+    async_writev(iodev, iov.data(), 1, size, offset, cookie, part_of_batch);
 #else
+    RELEASE_ASSERT(0, "async_write not expected to arrive here.");
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
     iocb->set_data((char*)data);
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
+
     io_uring_prep_write(sqe, iodev->fd(), (const void*)iocb->get_data(), iocb->size, offset);
-#endif
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
+#endif
 }
 
 void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
@@ -198,23 +201,23 @@ void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int io
 
 void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
                                      bool part_of_batch) {
-    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
-
-    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-    if (sqe == nullptr) { return; }
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
     std::array< iovec, 1 > iov;
     iov[0].iov_base = data;
     iov[0].iov_len = size;
 
-    iocb->set_iovs(iov.data(), 1);
-    io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+    async_readv(iodev, iov.data(), 1, size, offset, cookie, part_of_batch);
 #else
+    RELEASE_ASSERT(0, "async_read not expected to arrive here.");
+    auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
     iocb->set_data(data);
+
+    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+    if (sqe == nullptr) { return; }
+
     io_uring_prep_read(sqe, iodev->fd(), (void*)iocb->get_data(), iocb->size, offset);
-#endif
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
+#endif
 }
 
 void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,

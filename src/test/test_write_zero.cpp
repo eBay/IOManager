@@ -78,8 +78,12 @@ public:
             ASSERT_EQ(ret, 0) << "fallocate of device " << dev << " for size " << dev_size << " failed";
         }
 
-        iomanager.start(1, SISL_OPTIONS["spdk"].as< bool >());
-        m_iodev = iomgr::DriveInterface::open_dev(dev, O_CREAT | O_RDWR | O_DIRECT);
+        const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
+        iomanager.start(1, is_spdk);
+
+        int oflags{O_CREAT | O_RDWR};
+        if (is_spdk) { oflags |= O_DIRECT; }
+        m_iodev = iomgr::DriveInterface::open_dev(dev, oflags);
         m_driveattr = iomgr::DriveInterface::get_attributes(dev);
 
         s_runner.start();
@@ -98,13 +102,6 @@ public:
     void write_zero_test() {
         auto remain_size{m_size};
         auto cur_offset{m_offset};
-        const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-
-        if (!is_spdk) {
-            // FIXME: uring test fails, SDSTOR-xxxx;
-            s_runner.job_done();
-            return;
-        }
 
         m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_write_completion, 2));
 
