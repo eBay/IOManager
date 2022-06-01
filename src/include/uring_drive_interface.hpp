@@ -34,6 +34,8 @@ public:
 
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
+        REGISTER_COUNTER(retry_on_partial_read, "number of times ios are retried on partial read");
+
         register_me_to_farm();
     }
 

@@ -259,6 +259,7 @@ void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]
         int ret = io_uring_peek_cqe(&t_uring_ch->m_ring, &cqe);
         if (ret < 0) {
             if (ret != -EAGAIN) {
+                COUNTER_INCREMENT(m_metrics, completion_errors, 1);
                 folly::throwSystemError(fmt::format("io_uring_wait_cqe throw error={}", strerror(errno)));
             } else {
                 LOGTRACEMOD(iomgr, "Received EAGAIN on uring peek cqe");
@@ -273,11 +274,31 @@ void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]
 
         // Don't access cqe beyond this point.
         if (iocb->result >= 0) {
-            LOGTRACEMOD(iomgr, "Received completion event, iocb={} Result={}", (void*)iocb, iocb->result);
-            complete_io(iocb);
+            if (static_cast< uint64_t >(iocb->result) == iocb->size) {
+                // all read buffer is filled by uring;
+                LOGTRACEMOD(iomgr, "Received completion event, iocb={} Result={}", (void*)iocb, iocb->result);
+                complete_io(iocb);
+            } else {
+                // ***** Paritial Read Handling ******** //
+                LOGDEBUGMOD(iomgr, "Received completion event with partial result, iocb={} size={} Result={}, retry={}",
+                            (void*)iocb, iocb->size, iocb->result, iocb->resubmit_cnt);
+                if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                    LOGMSG_ASSERT(false, "Don't expect partial read to exceed retry limit={}",
+                                  IM_DYNAMIC_CONFIG(max_resubmit_cnt));
+                    complete_io(iocb);
+                }
+
+                COUNTER_INCREMENT(m_metrics, retry_on_partial_read, 1);
+                iocb->update_iovs_on_partial_result();
+                // retry I/O with remaining unset data;
+                t_uring_ch->m_iocb_waitq.push(iocb);
+            }
         } else {
-            LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}", (void*)iocb, iocb->result);
+            LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}, retry={}", (void*)iocb, iocb->result,
+                        iocb->resubmit_cnt);
             if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                DEBUG_ASSERT(false, "Don't expect op={} retry exceed limit={}", iocb->op_type,
+                             IM_DYNAMIC_CONFIG(max_resubmit_cnt));
                 complete_io(iocb);
             } else {
                 // Retry IO by pushing it to waitq which will get scheduled later.

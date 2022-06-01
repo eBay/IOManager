@@ -52,7 +52,11 @@ struct drive_iocb {
     typedef std::unique_ptr< iovec[] > large_iov_array;
 
     drive_iocb(IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset, void* cookie) :
-            iodev(iodev), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
+            iodev(iodev),
+            op_type(op_type),
+            size(size),
+            offset(offset),
+            user_cookie(cookie) {
 #ifndef NDEBUG
         iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -83,6 +87,52 @@ struct drive_iocb {
 
     char* get_data() const { return std::get< char* >(user_data); }
     bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
+
+    void update_iovs_on_partial_result() {
+        DEBUG_ASSERT_EQ(op_type, DriveOpType::READ, "Only expecting READ op for be returned with partial results.");
+
+        const auto iovs = get_iovs();
+        uint32_t num_iovs_unset{1};
+        uint64_t remaining_iov_len{0}, size_unset{size - result};
+        uint64_t iov_len_part{0};
+        // count remaining size from last iov
+        for (auto i{iovcnt - 1}; i >= 0; --i, ++num_iovs_unset) {
+            remaining_iov_len += iovs[i].iov_len;
+            if (remaining_iov_len == size_unset) {
+                break;
+            } else if (remaining_iov_len > size_unset) {
+                // we've had some left over within a single iov, calculate the size needs to be read;
+                iov_len_part = (iovs[i].iov_len - (remaining_iov_len - size_unset));
+                break;
+            }
+
+            // keep visiting next iov;
+        }
+
+        DEBUG_ASSERT_GE(remaining_iov_len, size_unset);
+
+        std::vector< iovec > iovs_unset;
+        iovs_unset.reserve(num_iovs_unset);
+
+        // if a single iov entry is partial read, we need remember the size and resume read from there;
+        uint32_t start_idx{0};
+        if (iov_len_part > 0) {
+            iovs_unset[start_idx].iov_len = iov_len_part;
+            iovs_unset[start_idx].iov_base = reinterpret_cast< uint8_t* >(iovs[iovcnt - num_iovs_unset].iov_base) +
+                (iovs[iovcnt - num_iovs_unset].iov_len - iov_len_part);
+            ++start_idx;
+        }
+
+        // copy the unfilled iovs to iovs_unset;
+        for (auto i{start_idx}; i < num_iovs_unset; ++i) {
+            iovs_unset[i].iov_len = iovs[iovcnt - num_iovs_unset + i].iov_len;
+            iovs_unset[i].iov_base = iovs[iovcnt - num_iovs_unset + i].iov_base;
+        }
+
+        set_iovs(iovs_unset.data(), num_iovs_unset);
+        size = size_unset;
+        offset += result;
+    }
 
     std::string to_string() const {
         std::string str;

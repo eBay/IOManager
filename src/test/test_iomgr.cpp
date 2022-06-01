@@ -173,6 +173,7 @@ static void do_verify() {
 
 static void on_io_completion(int64_t res, uint8_t* cookie) {
     // LOGINFO("An IO is completed");
+    RELEASE_ASSERT_EQ(res, 0, "Expected io to be successful");
     io_req* req{reinterpret_cast< io_req* >(cookie)};
     delete req;
 
