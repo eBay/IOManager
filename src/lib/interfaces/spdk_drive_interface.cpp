@@ -48,7 +48,7 @@ namespace iomgr {
 
 namespace {
 io_thread_t _non_io_thread{std::make_shared< io_thread >()};
-thread_local bool s_temp_thread_created{false};
+thread_local uint32_t s_temp_thread_count{0};
 } // namespace
 
 #ifndef NDEBUG
@@ -87,24 +87,23 @@ struct creat_ctx {
 };
 
 static spdk_thread* create_temp_spdk_thread() {
-    auto* sthread = spdk_get_thread();
-    if (!s_temp_thread_created) {
-        if (sthread != nullptr) { return sthread; } // We are already tight loop reactor
 
+    auto* sthread = spdk_get_thread();
+    if (s_temp_thread_count++ > 0) {
+        DEBUG_ASSERT_NOTNULL((void*)sthread);
+    } else {
+        DEBUG_ASSERT_EQ((void*)sthread, nullptr);
         sthread = IOReactorSPDK::create_spdk_thread();
         if (sthread == nullptr) { throw std::runtime_error("SPDK Thread Create failed"); }
         spdk_set_thread(sthread);
-        s_temp_thread_created = true;
     }
     return sthread;
 }
 
 static void destroy_temp_spdk_thread() {
-    if (s_temp_thread_created) {
+    if (--s_temp_thread_count == 0) {
         auto* sthread = spdk_get_thread();
         DEBUG_ASSERT_NOTNULL((void*)sthread);
-        // NOTE: The set to false must be here or later not to allow overwrite with spdk_set_thread before getting value
-        s_temp_thread_created = false;
 
         spdk_thread_exit(sthread);
         while (!spdk_thread_is_exited(sthread)) {
