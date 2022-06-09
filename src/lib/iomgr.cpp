@@ -106,7 +106,12 @@ static bool assign_core_if_available(uint32_t lcore) {
     return inserted;
 }
 
-IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) { m_iface_list.reserve(inbuilt_interface_count + 5); }
+IOManager::IOManager() : m_thread_idx_reserver(max_io_threads) {
+    m_iface_list.reserve(inbuilt_interface_count + 5);
+    for (size_t i{0}; i < max_mempool_count; ++i) {
+        m_iomgr_internal_pools[i] = nullptr;
+    }
+}
 
 IOManager::~IOManager() = default;
 
@@ -694,8 +699,8 @@ spdk_mempool* IOManager::get_mempool(size_t size) {
 
 void* IOManager::create_mempool(size_t element_size, size_t element_count) {
     if (m_is_spdk) {
-        const uint64_t idx{get_mempool_idx(element_size)};
-        spdk_mempool* mempool{m_iomgr_internal_pools[idx]};
+        const uint64_t idx = get_mempool_idx(element_size);
+        spdk_mempool* mempool = m_iomgr_internal_pools[idx];
         if (mempool != nullptr) {
             if (spdk_mempool_count(mempool) == element_count) {
                 return mempool;
