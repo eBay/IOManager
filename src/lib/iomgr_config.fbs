@@ -69,7 +69,7 @@ table Poll {
 
 table TrfClient {
     // grant token mount directory
-    grant_path_prefix: string;
+    grant_path: string;
 
     // Server addr to download the token (default: https://trustfabric.vip.ebay.com/v2/token)
     server: string;

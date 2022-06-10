@@ -15,23 +15,23 @@ class IOMgrDynamicConfig {
 public:
     static constexpr std::string_view default_cpuset_path = "/sys/fs/cgroup/cpuset/cpuset.cpus";
     static constexpr std::string_view default_megacli_path = "/bin/megacli";
-    static constexpr std::string_view default_ssl_cert_file = "/mnt/am_home/.cert/global.storage.agent.cert";
-    static constexpr std::string_view default_ssl_key_file = "/mnt/am_home/.cert/global.storage.agent.key";
     static constexpr std::string_view default_auth_allowed_apps = "all";
-    static constexpr std::string_view default_issuer = "trustfabric";
-    static constexpr std::string_view default_tf_token_url = "https://trustfabric.vip.ebay.com";
-    static constexpr std::string_view default_server = "https://trustfabric.vip.ebay.com/v2/token";
-    static constexpr std::string_view default_grant_path_prefix = "/var/run/secrets/trustfabric/trustfabric";
 
     static std::string get_env(const std::string& env_str) {
         auto env_var = getenv(env_str.c_str());
         return (env_var != nullptr) ? std::string(env_var) : "";
     }
 
-    inline static const std::string default_app_name = get_env("APP_NAME");
-    inline static const std::string default_app_inst_name = get_env("APP_INST_NAME");
-    inline static const std::string default_pod_name = get_env("POD_NAME");
-    inline static const std::string default_app_env = get_env("APP_ENV");
+    inline static const std::string default_app_name{get_env("APP_NAME")};
+    inline static const std::string default_app_inst_name{get_env("APP_INST_NAME")};
+    inline static const std::string default_pod_name{get_env("POD_NAME")};
+    inline static const std::string default_app_env{get_env("APP_ENV")};
+    inline static const std::string default_ssl_cert_file{get_env("SSL_CERT")};
+    inline static const std::string default_ssl_key_file{get_env("SSL_KEY")};
+    inline static const std::string default_tf_token_url{get_env("TOKEN_URL")};
+    inline static const std::string default_issuer{get_env("TOKEN_ISSUER")};
+    inline static const std::string default_server{get_env("TOKEN_SERVER")};
+    inline static const std::string default_grant_path{get_env("TOKEN_GRANT")};
 
     // This method sets up the default for settings factory when there is no override specified in the json
     // file and .fbs cannot specify default because they are not scalar.
@@ -64,9 +64,9 @@ public:
                 server = std::string_view(default_server);
                 is_modified = true;
             }
-            auto& grant_path_prefix = s.security->trf_client->grant_path_prefix;
-            if (grant_path_prefix.empty()) {
-                grant_path_prefix = std::string_view(default_grant_path_prefix);
+            auto& grant_path = s.security->trf_client->grant_path;
+            if (grant_path.empty()) {
+                grant_path = std::string_view(default_grant_path);
                 is_modified = true;
             }
             auto& auth_allowed_apps = s.security->auth_manager->auth_allowed_apps;
