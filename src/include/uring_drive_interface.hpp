@@ -36,12 +36,15 @@ public:
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         REGISTER_COUNTER(retry_on_partial_read, "number of times ios are retried on partial read");
 
+        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_fsync_cnt, "outstanding fsync cnt", sisl::_publish_as::publish_as_gauge);
+
         register_me_to_farm();
     }
 
     ~UringDriveInterfaceMetrics() { deregister_me_from_farm(); }
 };
-
 // Per thread structure which has all details for uring
 class UringDriveInterface;
 struct uring_drive_channel {
@@ -91,6 +94,9 @@ public:
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
     virtual void submit_batch() override;
+    static void increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface);
+    static void decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface);
+    UringDriveInterfaceMetrics& get_metrics() { return m_metrics; }
 
 private:
     void init_iface_thread_ctx(const io_thread_t& thr) override;

@@ -161,7 +161,8 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
     // TODO: This is where we would wait for any outstanding io's to complete
 
     IOInterface::close_dev(iodev);
-
+    // reset counters
+    LOGINFOMOD(iomgr, "Device {} close device", iodev->devname);
     // AIO base devices are not added to any poll list, so it can be closed as is.
     close(iodev->fd());
     iodev->clear();
@@ -183,6 +184,7 @@ void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_
     if (sqe == nullptr) { return; }
 
     io_uring_prep_write(sqe, iodev->fd(), (const void*)iocb->get_data(), iocb->size, offset);
+    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 #endif
 }
@@ -196,6 +198,7 @@ void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int io
     if (sqe == nullptr) { return; }
 
     io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
@@ -216,6 +219,7 @@ void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
     if (sqe == nullptr) { return; }
 
     io_uring_prep_read(sqe, iodev->fd(), (void*)iocb->get_data(), iocb->size, offset);
+    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 #endif
 }
@@ -224,12 +228,13 @@ void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iov
                                       uint8_t* cookie, bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
     iocb->set_iovs(iov, iovcnt);
-
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
     io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
+    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
+
 }
 
 void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -241,8 +246,8 @@ void UringDriveInterface::fsync(IODevice* iodev, uint8_t* cookie) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::FSYNC, 0, 0, cookie);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
-
     io_uring_prep_fsync(sqe, iodev->fd(), IORING_FSYNC_DATASYNC);
+    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, false /* batching */);
 }
 
@@ -314,6 +319,44 @@ void UringDriveInterface::complete_io(drive_iocb* iocb) {
         auto res = (iocb->result > 0) ? 0 : iocb->result;
         m_comp_cb(res, (uint8_t*)iocb->user_cookie);
     }
+    decrement_outstanding_counter(iocb, this);
     sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
+}
+
+void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface) {
+    /* update outstanding counters */
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_INCREMENT(iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_INCREMENT(iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::FSYNC:
+        COUNTER_INCREMENT(iface->get_metrics(), outstanding_fsync_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
+    ++(iomanager.this_thread_metrics().outstanding_ops);
+}
+
+void UringDriveInterface::decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface) {
+    /* decrement */
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_DECREMENT(iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_DECREMENT(iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::FSYNC:
+        COUNTER_DECREMENT(iface->get_metrics(), outstanding_fsync_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+    --(iomanager.this_thread_metrics().outstanding_ops);
 }
 } // namespace iomgr
