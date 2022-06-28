@@ -19,6 +19,7 @@
 #include <sisl/file_watcher/file_watcher.hpp>
 #include <sisl/auth_manager/auth_manager.hpp>
 #include <sisl/auth_manager/trf_client.hpp>
+#include <sisl/auth_manager/security_config.hpp>
 
 namespace iomgr {
 
@@ -38,23 +39,23 @@ public:
     IOEnvironment& with_file_watcher();
     IOEnvironment& with_auth_security();
 
-    std::shared_ptr< sisl::HttpServer >& get_http_server() { return m_http_server; }
-    std::shared_ptr< sisl::AuthManager >& get_auth_manager() { return m_auth_manager; }
-    std::shared_ptr< sisl::TrfClient >& get_trf_client() { return m_trf_client; }
-    std::shared_ptr< sisl::FileWatcher >& get_file_watcher() { return m_file_watcher; }
-    std::string get_ssl_cert() {
-        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? IM_DYNAMIC_CONFIG(security->ssl_cert_file) : "";
+    std::shared_ptr< sisl::HttpServer > get_http_server() { return m_http_server; }
+    std::shared_ptr< sisl::AuthManager > get_auth_manager() { return m_auth_manager; }
+    std::shared_ptr< sisl::TrfClient > get_trf_client() { return m_trf_client; }
+    std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
+    std::string get_ssl_cert() const {
+        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
     }
-    std::string get_ssl_key() {
-        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? IM_DYNAMIC_CONFIG(security->ssl_key_file) : "";
+    std::string get_ssl_key() const {
+        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
     }
-
-    // watch for changes in cert related files
-    bool register_cert_reload_cb(const std::string& listener_id, const sisl::file_event_cb_t& handler);
-    bool unregister_cert_reload_cb(const std::string& listener_id);
 
 private:
-    IOEnvironment() = default;
+    IOEnvironment() {
+        // init default settings
+        IOMgrDynamicConfig::init_settings_default();
+        SecurityDynamicConfig::init_settings_default();
+    }
     ~IOEnvironment() {
         if (m_http_server) { m_http_server->stop(); }
         if (m_file_watcher) { m_file_watcher->stop(); }

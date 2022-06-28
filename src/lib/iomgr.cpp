@@ -152,7 +152,6 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         return;
     }
 
-    IOMgrDynamicConfig::init_settings_default();
     sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
