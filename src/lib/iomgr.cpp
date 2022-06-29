@@ -151,7 +151,7 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
     }
 
     IOMgrDynamicConfig::init_settings_default();
-    sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
+    sisl::VersionMgr::addVersion(PACKAGE_NAME, get_version());
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
     m_num_workers = num_threads;
@@ -510,7 +510,11 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
     }
 }
 
-extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
+extern const semver_t get_version() {
+    semver_t version {};
+    RELEASE_ASSERT_EQ(0, semver_parse(PACKAGE_VERSION, &version));
+    return version;
+}
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
@@ -982,7 +986,7 @@ void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, 
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().decrement(tag, sz);
 #endif
-    RELEASE_ASSERT_NE(b, nullptr, "buffer is null while freeing");
+    RELEASE_ASSERT_NOTNULL((void*)b, "buffer is null while freeing");
     spdk_mempool_put(iomanager.get_mempool(sz), b);
 }
 

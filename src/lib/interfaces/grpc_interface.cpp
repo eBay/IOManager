@@ -126,7 +126,7 @@ done:
     GRPC_LOG_IF_ERROR("pollset_add_fd", error);
 }
 
-grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_millis deadline) {
+grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_core::Timestamp deadline) {
     grpc_error* error{GRPC_ERROR_NONE};
 
     if (!iomanager.am_i_io_reactor()) { iomanager.become_user_reactor(INTERRUPT_LOOP | USER_CONTROLLED_LOOP); }
@@ -140,7 +140,7 @@ grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_work
 
     // TODO: Set this differently for spdk and epoll, because for spdk a separate poller needs to
     // add for deadline and call
-    iomanager.this_reactor()->set_poll_interval(deadline);
+    iomanager.this_reactor()->set_poll_interval(deadline.milliseconds_after_process_epoch());
     iomanager.this_reactor()->listen_once();
 
     if (ppworker) { *ppworker = pollset->m_workers.get(); }

@@ -105,7 +105,7 @@ public:
     void pollset_init(grpc_pollset* pollset, gpr_mu** mu);
     void pollset_shutdown(grpc_pollset* pollset, grpc_closure* closure);
     void pollset_destroy(grpc_pollset* pollset);
-    grpc_error* pollset_work(grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_millis deadline);
+    grpc_error* pollset_work(grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline);
     grpc_error* pollset_kick(grpc_pollset* pollset, grpc_pollset_worker* specific_worker);
     void pollset_add_fd(grpc_pollset* pollset, struct grpc_fd* fd);
     grpc_pollset_set* pollset_set_create(void);
@@ -158,7 +158,7 @@ static ::grpc_event_engine_vtable s_vtable = ::grpc_event_engine_vtable{
     [](grpc_pollset* pollset, gpr_mu** mu) { grpc_iface()->pollset_init(pollset, mu); },
     [](grpc_pollset* pollset, grpc_closure* closure) { grpc_iface()->pollset_shutdown(pollset, closure); },
     [](grpc_pollset* pollset) { grpc_iface()->pollset_destroy(pollset); },
-    [](grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_millis deadline) -> grpc_error* {
+    [](grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline) -> grpc_error* {
         return grpc_iface()->pollset_work(pollset, worker, deadline);
     },
     [](grpc_pollset* pollset, grpc_pollset_worker* specific_worker) -> grpc_error* {
