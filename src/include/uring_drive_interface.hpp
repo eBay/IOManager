@@ -35,6 +35,8 @@ public:
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
         REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         REGISTER_COUNTER(retry_on_partial_read, "number of times ios are retried on partial read");
+        REGISTER_COUNTER(overflow_errors, "number of CQ overflow occurrences");
+        REGISTER_COUNTER(num_of_drops, "number of dropped ios due to CQ overflow");
 
         REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
         REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
@@ -51,7 +53,10 @@ struct uring_drive_channel {
     struct io_uring m_ring;
     std::queue< drive_iocb* > m_iocb_waitq;
     io_device_ptr m_ring_ev_iodev;
+    // prepared_ios are IOs sent to uring but not submitted yet
     uint32_t m_prepared_ios{0};
+    // in_flight_ios are IOs submitted to uring, but not completed yet
+    uint32_t m_in_flight_ios{0};
 
     uring_drive_channel(UringDriveInterface* iface);
     ~uring_drive_channel();
@@ -65,6 +70,8 @@ struct uring_drive_channel {
     size_t waitq_size() const { return m_iocb_waitq.size(); }
     struct io_uring_sqe* get_sqe_or_enqueue(drive_iocb* iocb);
     void submit_ios();
+    // It assumes SQ size is same as CQ size, so we check the counters to make sure CQ doesn't overflow.
+    bool can_submit() const;
     void submit_if_needed(drive_iocb* iocb, struct io_uring_sqe*, bool part_of_batch);
     void drain_waitq();
 };
@@ -93,9 +100,10 @@ public:
     void fsync(IODevice* iodev, uint8_t* cookie) override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
+    void handle_completions();
     virtual void submit_batch() override;
-    static void increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface);
-    static void decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface);
+    static void increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface);
+    static void decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface);
     UringDriveInterfaceMetrics& get_metrics() { return m_metrics; }
 
 private:

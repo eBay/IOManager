@@ -57,6 +57,10 @@ uring_drive_channel::~uring_drive_channel() {
 }
 
 struct io_uring_sqe* uring_drive_channel::get_sqe_or_enqueue(drive_iocb* iocb) {
+    if (!can_submit()) {
+        m_iocb_waitq.push(iocb);
+        return nullptr;
+    }
     struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
     if (!sqe) {
         // No available slots. Before enqueing we submit ios which were added as part of batch processing.
@@ -70,8 +74,13 @@ struct io_uring_sqe* uring_drive_channel::get_sqe_or_enqueue(drive_iocb* iocb) {
 
 void uring_drive_channel::submit_ios() {
     if (m_prepared_ios != 0) {
-        io_uring_submit(&m_ring);
-        m_prepared_ios = 0;
+        const auto ret = io_uring_submit(&m_ring);
+        if (static_cast< int >(m_prepared_ios) < ret) {
+            DEBUG_ASSERT(false, "prepared ios must be always equal or greater than just-submitted ios");
+        }
+        DEBUG_ASSERT_GT(ret, 0, "Facing an error in io_uring_submit");
+        m_in_flight_ios += ret;
+        m_prepared_ios -= ret;
     }
 }
 
@@ -108,10 +117,18 @@ static void prep_sqe_from_iocb(drive_iocb* iocb, struct io_uring_sqe* sqe) {
     }
 }
 
+bool uring_drive_channel::can_submit() const {
+    return (m_in_flight_ios + m_prepared_ios) <= UringDriveInterface::per_thread_qdepth;
+}
+
 void uring_drive_channel::drain_waitq() {
     while (m_iocb_waitq.size() != 0) {
+        if (!can_submit()) { break; };
         struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
-        if (sqe == nullptr) { assert(0); }
+        if (sqe == nullptr) {
+            DEBUG_ASSERT(false, "Don't expect sqe to be full or unavailable");
+            return;
+        };
 
         drive_iocb* iocb = pop_waitq();
         prep_sqe_from_iocb(iocb, sqe);
@@ -180,11 +197,11 @@ void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_
     RELEASE_ASSERT(0, "async_write not expected to arrive here.");
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
     iocb->set_data((char*)data);
+    increment_outstanding_counter(iocb, this);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
     io_uring_prep_write(sqe, iodev->fd(), (const void*)iocb->get_data(), iocb->size, offset);
-    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 #endif
 }
@@ -193,12 +210,11 @@ void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int io
                                        uint8_t* cookie, bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
     iocb->set_iovs(iov, iovcnt);
-
+    increment_outstanding_counter(iocb, this);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
     io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
-    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 }
 
@@ -214,12 +230,11 @@ void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
     RELEASE_ASSERT(0, "async_read not expected to arrive here.");
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
     iocb->set_data(data);
-
+    increment_outstanding_counter(iocb, this);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
     io_uring_prep_read(sqe, iodev->fd(), (void*)iocb->get_data(), iocb->size, offset);
-    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
 #endif
 }
@@ -228,13 +243,12 @@ void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iov
                                       uint8_t* cookie, bool part_of_batch) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
     iocb->set_iovs(iov, iovcnt);
+    increment_outstanding_counter(iocb, this);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
 
     io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
-    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
-
 }
 
 void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
@@ -244,10 +258,11 @@ void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t o
 
 void UringDriveInterface::fsync(IODevice* iodev, uint8_t* cookie) {
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::FSYNC, 0, 0, cookie);
+    increment_outstanding_counter(iocb, this);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
     if (sqe == nullptr) { return; }
+
     io_uring_prep_fsync(sqe, iodev->fd(), IORING_FSYNC_DATASYNC);
-    increment_outstanding_counter(iocb, this);
     t_uring_ch->submit_if_needed(iocb, sqe, false /* batching */);
 }
 
@@ -258,10 +273,20 @@ void UringDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]
     uint64_t temp = 0;
     [[maybe_unused]] auto rsize = read(iodev->fd(), &temp, sizeof(uint64_t));
     LOGTRACEMOD(iomgr, "Received completion on ev_fd = {}", iodev->fd());
+    handle_completions();
+}
 
+void UringDriveInterface::handle_completions() {
     do {
         struct io_uring_cqe* cqe;
         int ret = io_uring_peek_cqe(&t_uring_ch->m_ring, &cqe);
+        if (*(t_uring_ch->m_ring.cq.koverflow)) {
+            COUNTER_INCREMENT(m_metrics, overflow_errors, 1);
+            COUNTER_INCREMENT(m_metrics, num_of_drops, *(t_uring_ch->m_ring.cq.koverflow));
+            folly::throwSystemError(fmt::format("CQ overflow - number of dropped io requests : {} - {}",
+                                                *(t_uring_ch->m_ring.cq.koverflow), strerror(errno)));
+            break;
+        }
         if (ret < 0) {
             if (ret != -EAGAIN) {
                 COUNTER_INCREMENT(m_metrics, completion_errors, 1);
@@ -319,11 +344,12 @@ void UringDriveInterface::complete_io(drive_iocb* iocb) {
         auto res = (iocb->result > 0) ? 0 : iocb->result;
         m_comp_cb(res, (uint8_t*)iocb->user_cookie);
     }
+    --t_uring_ch->m_in_flight_ios;
     decrement_outstanding_counter(iocb, this);
     sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
 }
 
-void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface) {
+void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface) {
     /* update outstanding counters */
     switch (iocb->op_type) {
     case DriveOpType::READ:
@@ -338,11 +364,10 @@ void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, 
     default:
         LOGDFATAL("Invalid operation type {}", iocb->op_type);
     }
-
     ++(iomanager.this_thread_metrics().outstanding_ops);
 }
 
-void UringDriveInterface::decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface * iface) {
+void UringDriveInterface::decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface) {
     /* decrement */
     switch (iocb->op_type) {
     case DriveOpType::READ:
