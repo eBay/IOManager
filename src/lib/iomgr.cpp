@@ -438,6 +438,7 @@ void IOManager::stop_spdk() {
     for (spdk_mempool* mempool : m_iomgr_internal_pools) {
         if (mempool != nullptr) { spdk_mempool_free(mempool); }
     }
+    m_iomgr_internal_pools.fill(nullptr);
 }
 
 void IOManager::create_reactors() {
