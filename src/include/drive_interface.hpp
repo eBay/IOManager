@@ -61,6 +61,7 @@ struct drive_iocb {
         iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
 #endif
         user_data.emplace< 0 >();
+        op_start_time = Clock::now();
     }
 
     virtual ~drive_iocb() = default;
@@ -165,6 +166,8 @@ struct drive_iocb {
 #ifndef NDEBUG
     uint64_t iocb_id;
 #endif
+    Clock::time_point op_start_time;
+    Clock::time_point op_submit_time;
 
 private:
     // Inline or additional memory

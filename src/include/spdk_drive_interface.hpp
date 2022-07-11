@@ -194,17 +194,14 @@ struct SpdkIocb : public drive_iocb {
     bool owns_by_spdk{false};
     // used by io watchdog
     uint64_t unique_id{0};
-    Clock::time_point op_start_time;
-    Clock::time_point issued_to_spdk_time;
 
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
-            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
+            drive_iocb{iodev, op_type, size, offset, cookie},
+            iface{iface} {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = reinterpret_cast< SpdkDriveInterface* >(iodev->io_interface)->m_comp_cb;
-
-        op_start_time = Clock::now();
     }
 
     std::string to_string() const {

@@ -153,51 +153,50 @@ static void create_bdev_done(void* cb_ctx, size_t bdev_cnt, int rc) {
 }
 
 static void create_nvme_bdev(const std::shared_ptr< creat_ctx >& ctx) {
-    iomanager.run_on(
-        thread_regex::least_busy_worker,
-        [ctx](io_thread_addr_t taddr) {
-            auto address_c = ctx->address.c_str();
-            spdk_nvme_transport_id trid;
-            std::memset(&trid, 0, sizeof(trid));
-            trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
+    iomanager.run_on(thread_regex::least_busy_worker,
+                     [ctx](io_thread_addr_t taddr) {
+                         auto address_c = ctx->address.c_str();
+                         spdk_nvme_transport_id trid;
+                         std::memset(&trid, 0, sizeof(trid));
+                         trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
 
-            auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
-            if (rc < 0) {
-                LOGERROR("Failed to parse given str: {}", address_c);
-                ctx->err = std::make_error_condition(std::errc::io_error);
-                ctx->done();
-                return;
-            }
+                         auto rc = spdk_nvme_transport_id_parse(&trid, address_c);
+                         if (rc < 0) {
+                             LOGERROR("Failed to parse given str: {}", address_c);
+                             ctx->err = std::make_error_condition(std::errc::io_error);
+                             ctx->done();
+                             return;
+                         }
 
-            if (trid.trtype == SPDK_NVME_TRANSPORT_PCIE) {
-                spdk_pci_addr pci_addr;
-                if (spdk_pci_addr_parse(&pci_addr, trid.traddr) < 0) {
-                    LOGERROR("Invalid traddr={}", address_c);
-                    ctx->err = std::make_error_condition(std::errc::io_error);
-                    ctx->done();
-                    return;
-                }
-                spdk_pci_addr_fmt(trid.traddr, sizeof(trid.traddr), &pci_addr);
-            } else {
-                if (trid.subnqn[0] == '\0') {
-                    snprintf(trid.subnqn, sizeof(trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
-                }
-            }
+                         if (trid.trtype == SPDK_NVME_TRANSPORT_PCIE) {
+                             spdk_pci_addr pci_addr;
+                             if (spdk_pci_addr_parse(&pci_addr, trid.traddr) < 0) {
+                                 LOGERROR("Invalid traddr={}", address_c);
+                                 ctx->err = std::make_error_condition(std::errc::io_error);
+                                 ctx->done();
+                                 return;
+                             }
+                             spdk_pci_addr_fmt(trid.traddr, sizeof(trid.traddr), &pci_addr);
+                         } else {
+                             if (trid.subnqn[0] == '\0') {
+                                 snprintf(trid.subnqn, sizeof(trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
+                             }
+                         }
 
-            ctx->creator = iomanager.iothread_self();
+                         ctx->creator = iomanager.iothread_self();
 
-            /* Enumerate all of the controllers */
-            spdk_nvme_host_id hostid{};
-            if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names.data(), ctx->names.size(), nullptr, 0,
-                                      create_bdev_done, ctx.get(), nullptr);
-                0 != rc) {
-                LOGERROR("Failed creating NVMe BDEV from {}, error_code: {}", trid.traddr, rc);
-                ctx->err = std::make_error_condition(std::errc::io_error);
-                ctx->done();
-                return;
-            }
-        },
-        wait_type_t::no_wait);
+                         /* Enumerate all of the controllers */
+                         spdk_nvme_host_id hostid{};
+                         if (rc = bdev_nvme_create(&trid, &hostid, "iomgr", ctx->names.data(), ctx->names.size(),
+                                                   nullptr, 0, create_bdev_done, ctx.get(), nullptr);
+                             0 != rc) {
+                             LOGERROR("Failed creating NVMe BDEV from {}, error_code: {}", trid.traddr, rc);
+                             ctx->err = std::make_error_condition(std::errc::io_error);
+                             ctx->done();
+                             return;
+                         }
+                     },
+                     wait_type_t::no_wait);
 
     ctx->wait();
 }
@@ -349,14 +348,13 @@ io_device_ptr SpdkDriveInterface::create_open_dev_internal(const std::string& de
 
 void SpdkDriveInterface::open_dev_internal(const io_device_ptr& iodev) {
     int rc{-1};
-    iomanager.run_on(
-        iodev->creator,
-        [this, iodev, &rc](io_thread_addr_t taddr) {
-            spdk_bdev_desc* desc{nullptr};
-            rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, nullptr, &desc);
-            if (rc == 0) { iodev->dev = backing_dev_t(desc); }
-        },
-        wait_type_t::sleep);
+    iomanager.run_on(iodev->creator,
+                     [this, iodev, &rc](io_thread_addr_t taddr) {
+                         spdk_bdev_desc* desc{nullptr};
+                         rc = spdk_bdev_open_ext(iodev->alias_name.c_str(), true, bdev_event_cb, nullptr, &desc);
+                         if (rc == 0) { iodev->dev = backing_dev_t(desc); }
+                     },
+                     wait_type_t::sleep);
 
     if (rc != 0) {
         folly::throwSystemError(fmt::format("Unable to open the device={} error={}", iodev->alias_name, rc));
@@ -409,12 +407,11 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
     IOInterface::close_dev(iodev);
     DEBUG_ASSERT(iodev->creator != nullptr, "Expect creator of iodev to be non null");
 
-    iomanager.run_on(
-        iodev->creator,
-        [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev), this](io_thread_addr_t taddr) {
-            spdk_bdev_close(bdev_desc);
-        },
-        wait_type_t::sleep);
+    iomanager.run_on(iodev->creator,
+                     [bdev_desc = std::get< spdk_bdev_desc* >(iodev->dev), this](io_thread_addr_t taddr) {
+                         spdk_bdev_close(bdev_desc);
+                     },
+                     wait_type_t::sleep);
 
     iodev->clear();
 }
@@ -523,7 +520,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool success, void* ctx) 
     const auto flip_resubmit_cnt{flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io")};
     if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { success = false; }
 #endif
-    iomanager.this_thread_metrics().drive_latency_sum_us += get_elapsed_time_us(iocb->issued_to_spdk_time);
+    iomanager.this_thread_metrics().drive_latency_sum_us += get_elapsed_time_us(iocb->op_submit_time);
     iocb->owns_by_spdk = false;
 
     if (success) {
@@ -561,7 +558,7 @@ static void submit_io(void* b) {
 
     // preadd outstanding io's so that if completes quickly count will not become negative
     iocb->iface->m_outstanding_async_ios.fetch_add(1, std::memory_order_relaxed);
-    iocb->issued_to_spdk_time = Clock::now();
+    iocb->op_submit_time = Clock::now();
     ++(iomanager.this_thread_metrics().drive_io_count);
 
     LOGDEBUGMOD(iomgr, "iocb submit: mode=actual, {}", iocb->to_string());
