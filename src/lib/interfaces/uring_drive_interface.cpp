@@ -315,10 +315,11 @@ void UringDriveInterface::handle_completions() {
                 // ***** Paritial Read Handling ******** //
                 LOGDEBUGMOD(iomgr, "Received completion event with partial result, iocb={} size={} Result={}, retry={}",
                             (void*)iocb, iocb->size, iocb->result, iocb->resubmit_cnt);
-                if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                if (iocb->part_read_resubmit_cnt++ > IM_DYNAMIC_CONFIG(partial_read_max_resubmit_cnt)) {
                     LOGMSG_ASSERT(false, "Don't expect partial read to exceed retry limit={}",
-                                  IM_DYNAMIC_CONFIG(max_resubmit_cnt));
-                    complete_io(iocb);
+                                  IM_DYNAMIC_CONFIG(partial_read_max_resubmit_cnt));
+
+                    // in production, keep retrying until we get all the data;
                 }
 
                 COUNTER_INCREMENT(m_metrics, retry_on_partial_read, 1);

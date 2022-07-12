@@ -162,7 +162,8 @@ struct drive_iocb {
     int iovcnt = 0;
     int64_t result{-1};
     bool sync_io_completed{false};
-    uint32_t resubmit_cnt = 0;
+    uint32_t resubmit_cnt{0};
+    uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
 #ifndef NDEBUG
     uint64_t iocb_id;
 #endif
