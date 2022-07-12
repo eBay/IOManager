@@ -27,7 +27,11 @@ public:
                 cpuset_path = default_cpuset_path;
                 is_modified = true;
             }
-
+            auto& secure_zone = s.io_env->secure_zone;
+            if (SISL_OPTIONS.count("secure_zone")) {
+                secure_zone = SISL_OPTIONS["secure_zone"].as< bool >();
+                is_modified = true;
+            }
             // Any more default overrides or set non-scalar entries come here
         });
 

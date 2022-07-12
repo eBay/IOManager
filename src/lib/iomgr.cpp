@@ -64,7 +64,9 @@ SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
                    ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
-                   ::cxxopts::value< uint32_t >(), "count"))
+                   ::cxxopts::value< uint32_t >(), "count"),
+                  (secure_zone, "", "secure_zone", "Turn on security features in io environment",
+                   cxxopts::value< bool >(), "true or false"))
 
 namespace iomgr {
 
@@ -150,7 +152,6 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         return;
     }
 
-    IOMgrDynamicConfig::init_settings_default();
     sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;

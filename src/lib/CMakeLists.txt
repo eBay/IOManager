@@ -19,6 +19,7 @@ set (IOMGR_SRC
       interfaces/generic_interface.cpp
       interfaces/spdk_nvmf_interface.cpp
       interfaces/grpc_interface.cpp
+      io_environment.cpp
       )
 
 add_library (iomgr STATIC ${IOMGR_SRC})

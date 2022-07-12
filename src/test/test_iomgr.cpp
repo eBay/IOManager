@@ -27,6 +27,7 @@ extern "C" {
 }
 
 #include <iomgr.hpp>
+#include "io_environment.hpp"
 
 using log_level = spdlog::level::level_enum;
 
@@ -220,7 +221,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    iomanager.start(nthreads, SISL_OPTIONS["spdk"].as< bool >());
+    ioenvironment.with_iomgr(nthreads, SISL_OPTIONS["spdk"].as< bool >());
     std::ostringstream ss;
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());

@@ -15,6 +15,7 @@
 #include <iomgr.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
+#include "io_environment.hpp"
 
 #include <gtest/gtest.h>
 
@@ -79,7 +80,7 @@ public:
         }
 
         const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-        iomanager.start(1, is_spdk);
+        ioenvironment.with_iomgr(1, is_spdk);
 
         int oflags{O_CREAT | O_RDWR};
         if (is_spdk) { oflags |= O_DIRECT; }
