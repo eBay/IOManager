@@ -250,7 +250,7 @@ int main(int argc, char* argv[]) {
         RELEASE_ASSERT_NOTNULL(mempool, "Mempool was not created successfully");
         LOGINFO("Allocated mempool size = {}", io_size);
         uint8_t* mempool_buf{iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size)};
-        RELEASE_ASSERT_NOTNULL(mempool_buf, "Mempool buffer was not created successfully");
+        RELEASE_ASSERT_NOTNULL((void*)mempool_buf, "Mempool buffer was not created successfully");
         iomanager.iobuf_pool_free(mempool_buf, io_size);
     }
 

@@ -489,16 +489,16 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
         h->slot_num = slot_num;
         h->loop_type = loop_type;
 
-        const auto rc = spdk_env_thread_launch_pinned(
-            lcore,
-            [](void* arg) -> int {
-                param_holder* h = (param_holder*)arg;
-                set_thread_name(h->name.c_str());
-                iomanager._run_io_loop(h->slot_num, h->loop_type, h->name, nullptr, std::move(h->notifier));
-                delete h;
-                return 0;
-            },
-            (void*)h);
+        const auto rc = spdk_env_thread_launch_pinned(lcore,
+                                                      [](void* arg) -> int {
+                                                          param_holder* h = (param_holder*)arg;
+                                                          set_thread_name(h->name.c_str());
+                                                          iomanager._run_io_loop(h->slot_num, h->loop_type, h->name,
+                                                                                 nullptr, std::move(h->notifier));
+                                                          delete h;
+                                                          return 0;
+                                                      },
+                                                      (void*)h);
 
         RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
@@ -984,7 +984,7 @@ void SpdkAlignedAllocImpl::aligned_pool_free(uint8_t* const b, const size_t sz, 
 #ifdef _PRERELEASE
     sisl::AlignedAllocator::metrics().decrement(tag, sz);
 #endif
-    RELEASE_ASSERT_NE(b, nullptr, "buffer is null while freeing");
+    RELEASE_ASSERT_NOTNULL((void*)b, "buffer is null while freeing");
     spdk_mempool_put(iomanager.get_mempool(sz), b);
 }
 
