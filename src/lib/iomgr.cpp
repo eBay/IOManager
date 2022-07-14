@@ -516,9 +516,12 @@ extern const version::Semver200_version get_version() { return version::Semver20
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
-    {
-        std::unique_lock lg(m_iface_list_mtx);
-        m_drive_ifaces.push_back(iface);
+    m_drive_ifaces.push_back(iface);
+}
+
+void IOManager::drive_interface_submit_batch() {
+    for (auto& iface : m_drive_ifaces) {
+        iface->submit_batch();
     }
 }
 
@@ -527,11 +530,8 @@ std::shared_ptr< DriveInterface > IOManager::get_drive_interface(const drive_int
         LOGERRORMOD(iomgr, "Attempting to access spdk's drive interface on non-spdk mode");
         return nullptr;
     }
-    {
-        std::unique_lock lg(m_iface_list_mtx);
-        for (auto& iface : m_drive_ifaces) {
-            if (iface->interface_type() == type) { return iface; }
-        }
+    for (auto& iface : m_drive_ifaces) {
+        if (iface->interface_type() == type) { return iface; }
     }
     LOGERRORMOD(iomgr, "Unable to find drive interfaces of type {}", type);
     return nullptr;

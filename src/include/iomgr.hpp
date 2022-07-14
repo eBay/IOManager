@@ -76,7 +76,7 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...) -> overloaded< Ts... >;
+overloaded(Ts...)->overloaded< Ts... >;
 
 class IOMempoolMetrics : public sisl::MetricsGroup {
 public:
@@ -222,7 +222,6 @@ public:
      * thread_regex::random_user or thread_regex::any_worker.
      */
     void add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope = thread_regex::all_io);
-    void add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope = thread_regex::all_io);
     std::shared_ptr< DriveInterface > get_drive_interface(const drive_interface_type type);
 
     /***
@@ -484,6 +483,8 @@ public:
 
     IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
 
+    void drive_interface_submit_batch();
+
 private:
     IOManager();
     ~IOManager();
@@ -512,6 +513,8 @@ private:
     IOReactor* round_robin_reactor() const;
 
     [[nodiscard]] bool is_spdk_inited() const;
+
+    void add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope = thread_regex::all_io);
 
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
