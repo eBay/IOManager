@@ -20,31 +20,30 @@ class IOMgrConan(ConanFile):
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         "prerelease": ['True', 'False'],
         }
-    default_options = (
-        'shared=False',
-        'fPIC=True',
-        'coverage=False',
-        'sanitize=False',
-        'testing=full',
-        'prerelease=True',
-        )
+    default_options = {
+        'shared':       False,
+        'fPIC':         True,
+        'coverage':     False,
+        'sanitize':     False,
+        'testing':      'full',
+        'prerelease':   True,
+    }
 
     requires = (
             "flip/[~=3, include_prerelease=True]@sds/master",
             "sisl/[~=7, include_prerelease=True]@sisl/master",
 
             "boost/1.73.0",
-            "grpc/1.37.0",
-            ("fmt/8.0.1", "override"),
             "folly/2020.05.04.00",
-            "nlohmann_json/3.8.0",
-            "libevent/2.1.11",
-            "spdk/21.07.x",
-            "openssl/1.1.1k",
-            "isa-l/2.21.0",
-            "semver/1.1.0",
+            "grpc/1.37.0",
             "grpc_internal/1.37.0",
-            "liburing/2.1"
+            "libevent/2.1.11",
+            "liburing/2.1",
+            "nlohmann_json/3.8.0",
+            "semver/1.1.0",
+            "spdk/21.07.x",
+
+            ("fmt/8.0.1", "override"),
             )
     build_requires = (
                 "gtest/1.10.0",
