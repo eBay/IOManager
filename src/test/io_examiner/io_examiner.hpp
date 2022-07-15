@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <sisl/logging/logging.h>
+#if 0
 #include <isa-l/crc.h>
+#endif
 
 #include <sisl/fds/bitset.hpp>
 #include <sisl/utility/enum.hpp>
