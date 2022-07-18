@@ -345,13 +345,18 @@ void UringDriveInterface::handle_completions() {
 }
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
-    if (m_comp_cb) {
-        auto res = (iocb->result > 0) ? 0 : iocb->result;
-        m_comp_cb(res, (uint8_t*)iocb->user_cookie);
-    }
-    --(t_uring_ch->m_in_flight_ios);
+    const auto cookie = iocb->user_cookie;
+    const auto iocb_result = iocb->result;
+
     decrement_outstanding_counter(iocb, this);
     sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
+
+    --(t_uring_ch->m_in_flight_ios);
+
+    if (m_comp_cb) {
+        auto res = (iocb_result > 0) ? 0 : iocb_result;
+        m_comp_cb(res, (uint8_t*)cookie);
+    }
 }
 
 void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface) {
