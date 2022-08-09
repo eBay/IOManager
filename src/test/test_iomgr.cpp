@@ -221,11 +221,8 @@ int main(int argc, char* argv[]) {
 
     // Start the IOManager
     iomanager.start(nthreads, SISL_OPTIONS["spdk"].as< bool >());
-    char version_str[100] = {'\0'};
-    auto ver = iomgr::get_version();
-    (void) semver_render(&ver, version_str);
     std::ostringstream ss;
-    ss << version_str;
+    ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());
 
     bool created{false};

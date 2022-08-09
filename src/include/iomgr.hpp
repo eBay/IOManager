@@ -20,7 +20,7 @@
 #include <sys/time.h>
 #endif
 
-#include <sisl/version.hpp>
+#include <semver/semver200.h>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
@@ -124,7 +124,7 @@ public:
 /**
  * @brief Get the IOManager version
  */
-extern const semver_t get_version();
+extern const version::Semver200_version get_version();
 
 class IOWatchDog;
 class IOManager {
