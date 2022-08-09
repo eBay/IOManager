@@ -2,32 +2,18 @@ cmake_minimum_required(VERSION 3.10)
 project(iomgr)
 
 set(CMAKE_CXX_STANDARD 17)
-enable_testing()
 
 include (cmake/Flags.cmake)
 
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/src/lib/generated)
-
 if(EXISTS ${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup()
 else()
-    message(WARNING "The file conanbuildinfo.cmake doesn't exist, you have to run conan install first")
-    return()
+    message(WARNING "Conan Build file does not exist, trying to build without!")
 endif()
 
 if(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
-    message(STATUS "Debug build")
-    if((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")) 
-        remove_flag("-O[0-4]")
-        add_flags("-O0")
-    endif()
-
-    if (NOT ${CONAN_SETTINGS_COMPILER} STREQUAL "clang" AND NOT ${CONAN_SETTINGS_COMPILER} STREQUAL "apple-clang")
-        include (cmake/debug_flags.cmake)
-    endif ()
+    include (cmake/debug_flags.cmake)
 else()
-    message(STATUS "Release build")
     if((${CMAKE_CXX_COMPILER_ID} STREQUAL "GNU") OR (${CMAKE_CXX_COMPILER_ID} STREQUAL "Clang")) 
         remove_flag("-O[0-4]")
         add_flags("-O2")
@@ -41,16 +27,15 @@ else ()
     message(STATUS "Build with Memory Sanitizer OFF")
 endif()
 
-include(${CONAN_SISL_ROOT}/cmake/settings_gen.cmake)
-
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
 endif ()
 
+enable_testing()
+
 add_subdirectory(src/)
-add_subdirectory(src/test)
 
 # build info
 string(TOUPPER "${CMAKE_BUILD_TYPE}" UC_CMAKE_BUILD_TYPE)

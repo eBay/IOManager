@@ -1,35 +1,42 @@
+cmake_minimum_required(VERSION 3.10)
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter -fconcepts")
 
-find_package (Threads REQUIRED)
+find_package (GTest REQUIRED)
 
-
-enable_testing()
-
+link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 include_directories (BEFORE .. ../include)
 
-if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode") OR 
-        ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
+set (TEST_DEPS
+        iomgr 
+        sisl::sisl
+        ${spdk_LIBRARY_LIST}
+        ${dpdk_LIBRARY_LIST}
+        GTest::gmock
+    )
+
+if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "spdk_mode") OR 
+        ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))
     set(TEST_IOMGR_FILES test_iomgr.cpp)
     add_executable(test_iomgr ${TEST_IOMGR_FILES})
-    target_link_libraries(test_iomgr iomgr ${CONAN_LIBS} )
+    target_link_libraries(test_iomgr ${TEST_DEPS} )
 
     set(TEST_MSG_FILES test_msg.cpp)
     add_executable(test_msg ${TEST_MSG_FILES})
-    target_link_libraries(test_msg iomgr ${CONAN_LIBS} )
+    target_link_libraries(test_msg ${TEST_DEPS} )
 
     set(TEST_IOJOB_FILES test_io_job.cpp)
     add_executable(test_iojob ${TEST_IOJOB_FILES})
-    target_link_libraries(test_iojob iomgr ${CONAN_LIBS} atomic )
+    target_link_libraries(test_iojob ${TEST_DEPS} atomic )
     
     set(TEST_WRITEZERO_FILES test_write_zero.cpp)
     add_executable(test_write_zero ${TEST_WRITEZERO_FILES})
-    target_link_libraries(test_write_zero iomgr ${CONAN_LIBS} )
+    target_link_libraries(test_write_zero ${TEST_DEPS} )
 
     set(TEST_TIMER_FILES test_timer.cpp)
     add_executable(test_timer ${TEST_TIMER_FILES})
-    target_link_libraries(test_timer iomgr ${CONAN_LIBS} )
+    target_link_libraries(test_timer ${TEST_DEPS} )
 
-    if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
+    if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)
         add_test(NAME TestTimer-Epoll COMMAND test_timer)
         add_test(NAME TestIOJob-Epoll COMMAND test_iojob)
@@ -39,7 +46,7 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
         SET_TESTS_PROPERTIES(TestMsg-Epoll PROPERTIES DEPENDS TestWriteZero-Epoll)
     endif()
 
-    if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "spdk_mode"))
+    if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "spdk_mode"))
         # TODO: Disabled till we get the spdk test_iomgr failure is fixed
         add_test(NAME TestIOMgr-Spdk COMMAND test_iomgr --spdk true)
 

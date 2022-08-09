@@ -93,7 +93,7 @@ public:
     grpc_fd* fd_create(int fd, const char* name, bool track_err);
     int fd_wrapped_fd(grpc_fd* fd);
     void fd_orphan(grpc_fd* fd, grpc_closure* on_done, int* release_fd, const char* reason);
-    void fd_shutdown(grpc_fd* fd, grpc_error* why);
+    void fd_shutdown(grpc_fd* fd, grpc_error_handle why);
     void fd_notify_on_read(grpc_fd* fd, grpc_closure* closure);
     void fd_notify_on_write(grpc_fd* fd, grpc_closure* closure);
     void fd_notify_on_error(grpc_fd* fd, grpc_closure* closure);
@@ -105,8 +105,8 @@ public:
     void pollset_init(grpc_pollset* pollset, gpr_mu** mu);
     void pollset_shutdown(grpc_pollset* pollset, grpc_closure* closure);
     void pollset_destroy(grpc_pollset* pollset);
-    grpc_error* pollset_work(grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline);
-    grpc_error* pollset_kick(grpc_pollset* pollset, grpc_pollset_worker* specific_worker);
+    grpc_error_handle pollset_work(grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline);
+    grpc_error_handle pollset_kick(grpc_pollset* pollset, grpc_pollset_worker* specific_worker);
     void pollset_add_fd(grpc_pollset* pollset, struct grpc_fd* fd);
     grpc_pollset_set* pollset_set_create(void);
     void pollset_set_destroy(grpc_pollset_set* pollset_set);
@@ -120,7 +120,7 @@ public:
     bool is_any_background_poller_thread(void);
     void shutdown_background_closure(void);
     void shutdown_engine(void);
-    bool add_closure_to_background_poller(grpc_closure* closure, grpc_error* error);
+    bool add_closure_to_background_poller(grpc_closure* closure, grpc_error_handle error);
 
 private:
     void process_pollset_events(grpc_pollset* pollset, [[maybe_unused]] int e);
@@ -147,7 +147,7 @@ static ::grpc_event_engine_vtable s_vtable = ::grpc_event_engine_vtable{
     [](grpc_fd* fd, grpc_closure* on_done, int* release_fd, const char* reason) {
         grpc_iface()->fd_orphan(fd, on_done, release_fd, reason);
     },
-    [](grpc_fd* fd, grpc_error* why) { grpc_iface()->fd_shutdown(fd, why); },
+    [](grpc_fd* fd, grpc_error_handle why) { grpc_iface()->fd_shutdown(fd, why); },
     [](grpc_fd* fd, grpc_closure* closure) { grpc_iface()->fd_notify_on_read(fd, closure); },
     [](grpc_fd* fd, grpc_closure* closure) { grpc_iface()->fd_notify_on_write(fd, closure); },
     [](grpc_fd* fd, grpc_closure* closure) { grpc_iface()->fd_notify_on_error(fd, closure); },
@@ -158,12 +158,15 @@ static ::grpc_event_engine_vtable s_vtable = ::grpc_event_engine_vtable{
     [](grpc_pollset* pollset, gpr_mu** mu) { grpc_iface()->pollset_init(pollset, mu); },
     [](grpc_pollset* pollset, grpc_closure* closure) { grpc_iface()->pollset_shutdown(pollset, closure); },
     [](grpc_pollset* pollset) { grpc_iface()->pollset_destroy(pollset); },
-    [](grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline) -> grpc_error* {
+    [](grpc_pollset* pollset, grpc_pollset_worker** worker, grpc_core::Timestamp deadline) -> grpc_error_handle {
         return grpc_iface()->pollset_work(pollset, worker, deadline);
     },
-    [](grpc_pollset* pollset, grpc_pollset_worker* specific_worker) -> grpc_error* {
+    [](grpc_pollset* pollset, grpc_pollset_worker* specific_worker) -> grpc_error_handle {
         return grpc_iface()->pollset_kick(pollset, specific_worker);
     },
+    nullptr,
+    nullptr,
+    nullptr,
     nullptr,
     nullptr,
     nullptr,
@@ -197,6 +200,6 @@ static ::grpc_event_engine_vtable s_vtable = ::grpc_event_engine_vtable{
     bind_this(GrpcInterface::shutdown_engine, 0),
     bind_this(GrpcInterface::add_closure_to_background_poller, 2)}; */
 };
-[[maybe_unused]] static const struct ::grpc_event_engine_vtable* grpc_init_nuiomgr(bool explicitly_requested) {
+[[maybe_unused]] static const struct ::grpc_event_engine_vtable* grpc_init_nuiomgr() {
     return &s_vtable;
 }
