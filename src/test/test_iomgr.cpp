@@ -225,6 +225,7 @@ int main(int argc, char* argv[]) {
     char version_str[100] = {'\0'};
     auto ver = iomgr::get_version();
     (void) semver_render(&ver, version_str);
+    semver_free(&ver);
     std::ostringstream ss;
     ss << version_str;
     LOGINFO("IOManager ver. {}", ss.str());
