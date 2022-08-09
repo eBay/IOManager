@@ -46,11 +46,13 @@ uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) {
     m_ring_ev_iodev = iomanager.generic_interface()->make_io_device(
         backing_dev_t(ev_fd), EPOLLIN, 0, nullptr, true,
         std::bind(&UringDriveInterface::on_event_notification, iface, _1, _2, _3));
+    iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->handle_completions(); });
 }
 
 uring_drive_channel::~uring_drive_channel() {
     io_uring_queue_exit(&m_ring);
     if (m_ring_ev_iodev != nullptr) {
+        iomanager.this_reactor()->detach_iomgr_sentinel_cb();
         iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev);
         close(m_ring_ev_iodev->fd());
     }
@@ -80,6 +82,7 @@ void uring_drive_channel::submit_ios() {
         }
         DEBUG_ASSERT_GT(ret, 0, "Facing an error in io_uring_submit");
         m_in_flight_ios += ret;
+
         m_prepared_ios -= ret;
     }
 }
@@ -312,16 +315,18 @@ void UringDriveInterface::handle_completions() {
                 // ***** Paritial Read Handling ******** //
                 LOGDEBUGMOD(iomgr, "Received completion event with partial result, iocb={} size={} Result={}, retry={}",
                             (void*)iocb, iocb->size, iocb->result, iocb->resubmit_cnt);
-                if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                if (iocb->part_read_resubmit_cnt++ > IM_DYNAMIC_CONFIG(partial_read_max_resubmit_cnt)) {
                     LOGMSG_ASSERT(false, "Don't expect partial read to exceed retry limit={}",
-                                  IM_DYNAMIC_CONFIG(max_resubmit_cnt));
-                    complete_io(iocb);
+                                  IM_DYNAMIC_CONFIG(partial_read_max_resubmit_cnt));
+
+                    // in production, keep retrying until we get all the data;
                 }
 
                 COUNTER_INCREMENT(m_metrics, retry_on_partial_read, 1);
                 iocb->update_iovs_on_partial_result();
                 // retry I/O with remaining unset data;
                 t_uring_ch->m_iocb_waitq.push(iocb);
+                --(t_uring_ch->m_in_flight_ios);
             }
         } else {
             LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}, retry={}", (void*)iocb, iocb->result,
@@ -340,13 +345,18 @@ void UringDriveInterface::handle_completions() {
 }
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
-    if (m_comp_cb) {
-        auto res = (iocb->result > 0) ? 0 : iocb->result;
-        m_comp_cb(res, (uint8_t*)iocb->user_cookie);
-    }
-    --t_uring_ch->m_in_flight_ios;
+    const auto cookie = iocb->user_cookie;
+    const auto iocb_result = iocb->result;
+
     decrement_outstanding_counter(iocb, this);
     sisl::ObjectAllocator< drive_iocb >::deallocate(iocb);
+
+    --(t_uring_ch->m_in_flight_ios);
+
+    if (m_comp_cb) {
+        auto res = (iocb_result > 0) ? 0 : iocb_result;
+        m_comp_cb(res, (uint8_t*)cookie);
+    }
 }
 
 void UringDriveInterface::increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface) {

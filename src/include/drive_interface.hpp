@@ -61,6 +61,7 @@ struct drive_iocb {
         iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
 #endif
         user_data.emplace< 0 >();
+        op_start_time = Clock::now();
     }
 
     virtual ~drive_iocb() = default;
@@ -161,10 +162,13 @@ struct drive_iocb {
     int iovcnt = 0;
     int64_t result{-1};
     bool sync_io_completed{false};
-    uint32_t resubmit_cnt = 0;
+    uint32_t resubmit_cnt{0};
+    uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
 #ifndef NDEBUG
     uint64_t iocb_id;
 #endif
+    Clock::time_point op_start_time;
+    Clock::time_point op_submit_time;
 
 private:
     // Inline or additional memory

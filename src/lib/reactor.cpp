@@ -93,6 +93,7 @@ bool IOReactor::listen_once() {
     if (m_keep_running) {
         auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
         if (sentinel_cb) { sentinel_cb(); }
+        if (m_iomgr_sentinel_cb) { m_iomgr_sentinel_cb(); }
 
         bool need_backoff{false};
         for (const auto& backoff_cb : m_can_backoff_cbs) {
@@ -318,4 +319,7 @@ void IOReactor::unregister_poll_interval_cb(const poll_cb_idx_t idx) {
 }
 
 void IOReactor::add_backoff_cb(can_backoff_cb_t&& cb) { m_can_backoff_cbs.push_back(std::move(cb)); }
+
+void IOReactor::attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb) { m_iomgr_sentinel_cb = cb; }
+void IOReactor::detach_iomgr_sentinel_cb() { m_iomgr_sentinel_cb = nullptr; }
 } // namespace iomgr

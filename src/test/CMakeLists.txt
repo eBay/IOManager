@@ -11,23 +11,23 @@ if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL
         ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
     set(TEST_IOMGR_FILES test_iomgr.cpp)
     add_executable(test_iomgr ${TEST_IOMGR_FILES})
-    target_link_libraries(test_iomgr ${CONAN_LIBS} iomgr sisl flip)
+    target_link_libraries(test_iomgr iomgr ${CONAN_LIBS} )
 
     set(TEST_MSG_FILES test_msg.cpp)
     add_executable(test_msg ${TEST_MSG_FILES})
-    target_link_libraries(test_msg ${CONAN_LIBS} iomgr sisl flip)
+    target_link_libraries(test_msg iomgr ${CONAN_LIBS} )
 
     set(TEST_IOJOB_FILES test_io_job.cpp)
     add_executable(test_iojob ${TEST_IOJOB_FILES})
-    target_link_libraries(test_iojob ${CONAN_LIBS} iomgr sisl flip isal atomic)
+    target_link_libraries(test_iojob iomgr ${CONAN_LIBS} atomic )
     
     set(TEST_WRITEZERO_FILES test_write_zero.cpp)
     add_executable(test_write_zero ${TEST_WRITEZERO_FILES})
-    target_link_libraries(test_write_zero ${CONAN_LIBS} iomgr sisl flip)
+    target_link_libraries(test_write_zero iomgr ${CONAN_LIBS} )
 
     set(TEST_TIMER_FILES test_timer.cpp)
     add_executable(test_timer ${TEST_TIMER_FILES})
-    target_link_libraries(test_timer ${CONAN_LIBS} iomgr sisl flip)
+    target_link_libraries(test_timer iomgr ${CONAN_LIBS} )
 
     if (("${CONAN_TEST_TARGET}" STREQUAL "full") OR ("${CONAN_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)

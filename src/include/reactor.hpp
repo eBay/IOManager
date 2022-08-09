@@ -245,6 +245,8 @@ public:
     void unregister_poll_interval_cb(const poll_cb_idx_t idx);
     IOThreadMetrics& thread_metrics() { return *(m_metrics.get()); }
     void add_backoff_cb(can_backoff_cb_t&& cb);
+    void attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb);
+    void detach_iomgr_sentinel_cb();
 
 protected:
     virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
@@ -285,6 +287,7 @@ protected:
     std::vector< can_backoff_cb_t > m_can_backoff_cbs;
     uint64_t m_cur_backoff_delay_us{0};
     uint64_t m_backoff_delay_min_us{0};
+    listen_sentinel_cb_t m_iomgr_sentinel_cb;
 };
 } // namespace iomgr
 

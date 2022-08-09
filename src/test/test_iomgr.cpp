@@ -27,6 +27,7 @@ extern "C" {
 }
 
 #include <iomgr.hpp>
+#include "io_environment.hpp"
 
 using log_level = spdlog::level::level_enum;
 
@@ -220,7 +221,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    iomanager.start(nthreads, SISL_OPTIONS["spdk"].as< bool >());
+    ioenvironment.with_iomgr(nthreads, SISL_OPTIONS["spdk"].as< bool >());
     std::ostringstream ss;
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());
@@ -249,7 +250,7 @@ int main(int argc, char* argv[]) {
         RELEASE_ASSERT_NOTNULL(mempool, "Mempool was not created successfully");
         LOGINFO("Allocated mempool size = {}", io_size);
         uint8_t* mempool_buf{iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size)};
-        RELEASE_ASSERT_NOTNULL(mempool_buf, "Mempool buffer was not created successfully");
+        RELEASE_ASSERT_NOTNULL((void*)mempool_buf, "Mempool buffer was not created successfully");
         iomanager.iobuf_pool_free(mempool_buf, io_size);
     }
 

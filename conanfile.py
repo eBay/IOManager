@@ -4,7 +4,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.5.1"
+    version = "8.5.6"
 
     revision_mode = "scm"
     license = "Proprietary"
@@ -20,14 +20,14 @@ class IOMgrConan(ConanFile):
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         "prerelease": ['True', 'False'],
         }
-    default_options = (
-        'shared=False',
-        'fPIC=True',
-        'coverage=False',
-        'sanitize=False',
-        'testing=full',
-        'prerelease=True',
-        )
+    default_options = {
+        'shared':       False,
+        'fPIC':         True,
+        'coverage':     False,
+        'sanitize':     False,
+        'testing':      'full',
+        'prerelease':   True,
+    }
 
     requires = (
             "flip/[~=3.2, include_prerelease=True]@sds/develop",

@@ -64,7 +64,9 @@ SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
                    ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
-                   ::cxxopts::value< uint32_t >(), "count"))
+                   ::cxxopts::value< uint32_t >(), "count"),
+                  (secure_zone, "", "secure_zone", "Turn on security features in io environment",
+                   cxxopts::value< bool >(), "true or false"))
 
 namespace iomgr {
 
@@ -150,7 +152,6 @@ void IOManager::start(size_t const num_threads, bool is_spdk, const thread_state
         return;
     }
 
-    IOMgrDynamicConfig::init_settings_default();
     sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
     LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}]", PACKAGE_VERSION, num_threads, is_spdk);
     m_is_spdk = is_spdk;
@@ -438,6 +439,7 @@ void IOManager::stop_spdk() {
     for (spdk_mempool* mempool : m_iomgr_internal_pools) {
         if (mempool != nullptr) { spdk_mempool_free(mempool); }
     }
+    m_iomgr_internal_pools.fill(nullptr);
 }
 
 void IOManager::create_reactors() {
@@ -487,16 +489,16 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
         h->slot_num = slot_num;
         h->loop_type = loop_type;
 
-        const auto rc = spdk_env_thread_launch_pinned(
-            lcore,
-            [](void* arg) -> int {
-                param_holder* h = (param_holder*)arg;
-                set_thread_name(h->name.c_str());
-                iomanager._run_io_loop(h->slot_num, h->loop_type, h->name, nullptr, std::move(h->notifier));
-                delete h;
-                return 0;
-            },
-            (void*)h);
+        const auto rc = spdk_env_thread_launch_pinned(lcore,
+                                                      [](void* arg) -> int {
+                                                          param_holder* h = (param_holder*)arg;
+                                                          set_thread_name(h->name.c_str());
+                                                          iomanager._run_io_loop(h->slot_num, h->loop_type, h->name,
+                                                                                 nullptr, std::move(h->notifier));
+                                                          delete h;
+                                                          return 0;
+                                                      },
+                                                      (void*)h);
 
         RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
@@ -514,9 +516,12 @@ extern const version::Semver200_version get_version() { return version::Semver20
 
 void IOManager::add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope) {
     add_interface(std::dynamic_pointer_cast< IOInterface >(iface), iface_scope);
-    {
-        std::unique_lock lg(m_iface_list_mtx);
-        m_drive_ifaces.push_back(iface);
+    m_drive_ifaces.push_back(iface);
+}
+
+void IOManager::drive_interface_submit_batch() {
+    for (auto& iface : m_drive_ifaces) {
+        iface->submit_batch();
     }
 }
 
@@ -525,11 +530,8 @@ std::shared_ptr< DriveInterface > IOManager::get_drive_interface(const drive_int
         LOGERRORMOD(iomgr, "Attempting to access spdk's drive interface on non-spdk mode");
         return nullptr;
     }
-    {
-        std::unique_lock lg(m_iface_list_mtx);
-        for (auto& iface : m_drive_ifaces) {
-            if (iface->interface_type() == type) { return iface; }
-        }
+    for (auto& iface : m_drive_ifaces) {
+        if (iface->interface_type() == type) { return iface; }
     }
     LOGERRORMOD(iomgr, "Unable to find drive interfaces of type {}", type);
     return nullptr;
