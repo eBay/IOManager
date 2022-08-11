@@ -1,10 +1,21 @@
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter")
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${CONAN_PACKAGE_VERSION}\\\"")
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${CONAN_PACKAGE_NAME}\\\"")
-find_package (Threads REQUIRED)
-find_library(LIB_AIO aio)
+cmake_minimum_required(VERSION 3.10)
 
-include_directories (BEFORE .. ../include)
+set(PACKAGE_REVISION "0.0.0+unknown")
+if (DEFINED CONAN_PACKAGE_NAME)
+  set(PACKAGE_REVISION "${CONAN_PACKAGE_VERSION}")
+endif ()
+
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter -Wno-sign-compare")
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISION}\\\"")
+set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
+
+find_package(FlatBuffers REQUIRED)
+find_package(flip REQUIRED)
+find_package(grpc_internal REQUIRED)
+find_package(sisl REQUIRED)
+find_package(liburing REQUIRED)
+
+link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
 set (IOMGR_SRC
       iomgr.cpp
@@ -21,7 +32,15 @@ set (IOMGR_SRC
       interfaces/grpc_interface.cpp
       io_environment.cpp
       )
+add_library (iomgr ${IOMGR_SRC})
+target_link_libraries(iomgr
+        liburing::liburing
+        flip::flip
+        grpc_internal::grpc_internal
+	sisl::sisl
+	spdk::spdk
+    )
 
-add_library (iomgr STATIC ${IOMGR_SRC})
-
-settings_gen_cpp(${CONAN_BIN_DIRS_FLATBUFFERS} ${CMAKE_CURRENT_BINARY_DIR}/generated/ iomgr iomgr_config.fbs)
+include ("${sisl_LIB_DIRS}/../cmake/settings_gen.cmake")
+settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR} iomgr iomgr_config.fbs)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})

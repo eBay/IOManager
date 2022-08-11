@@ -35,7 +35,7 @@ void grpc_fd::remove_from_pollset(const safe_grpc_pollset& pollset) {
     m_pollsets.erase(pollset);
 }
 
-static bool append_grpc_error(grpc_error** composite, grpc_error* error, const char* desc) {
+static bool append_grpc_error(grpc_error_handle* composite, grpc_error_handle error, const char* desc) {
     if (error == GRPC_ERROR_NONE) return true;
     if (*composite == GRPC_ERROR_NONE) { *composite = GRPC_ERROR_CREATE_FROM_COPIED_STRING(desc); }
     *composite = grpc_error_add_child(*composite, error);
@@ -45,7 +45,7 @@ static bool append_grpc_error(grpc_error** composite, grpc_error* error, const c
 namespace iomgr {
 GrpcInterface::GrpcInterface() : IOInterface() {
     set_grpc_interface(this);
-    ::grpc_register_event_engine_factory("nuiomgr", grpc_init_nuiomgr, true /* add_to_head */);
+    ::grpc_register_event_engine_factory(grpc_init_nuiomgr(), true /* add_to_head */);
 }
 
 grpc_fd* GrpcInterface::fd_create(int fd, const char* name, bool track_err) {
@@ -70,7 +70,7 @@ void GrpcInterface::fd_set_error(grpc_fd* gfd) { gfd->m_error_closure.SetReady()
 bool GrpcInterface::fd_is_shutdown(grpc_fd* gfd) { return gfd->m_read_closure.IsShutdown(); }
 
 void GrpcInterface::pollset_init(grpc_pollset* pollset, gpr_mu** mu) {
-    grpc_error* error{GRPC_ERROR_NONE};
+    grpc_error_handle error{GRPC_ERROR_NONE};
 
     new ((void*)pollset) grpc_pollset();
     gpr_mu_init(&pollset->m_mu);
@@ -100,7 +100,7 @@ done:
 }
 
 void GrpcInterface::pollset_add_fd(grpc_pollset* pollset, grpc_fd* gfd) {
-    grpc_error* error{GRPC_ERROR_NONE};
+    grpc_error_handle error{GRPC_ERROR_NONE};
     {
         grpc_core::MutexLockForGprMu lock(&pollset->m_mu);
 
@@ -126,8 +126,8 @@ done:
     GRPC_LOG_IF_ERROR("pollset_add_fd", error);
 }
 
-grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_millis deadline) {
-    grpc_error* error{GRPC_ERROR_NONE};
+grpc_error_handle GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_core::Timestamp deadline) {
+    grpc_error_handle error{GRPC_ERROR_NONE};
 
     if (!iomanager.am_i_io_reactor()) { iomanager.become_user_reactor(INTERRUPT_LOOP | USER_CONTROLLED_LOOP); }
 
@@ -140,7 +140,7 @@ grpc_error* GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_work
 
     // TODO: Set this differently for spdk and epoll, because for spdk a separate poller needs to
     // add for deadline and call
-    iomanager.this_reactor()->set_poll_interval(deadline);
+    iomanager.this_reactor()->set_poll_interval(deadline.milliseconds_after_process_epoch());
     iomanager.this_reactor()->listen_once();
 
     if (ppworker) { *ppworker = pollset->m_workers.get(); }
