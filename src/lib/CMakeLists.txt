@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.11)
+cmake_minimum_required(VERSION 3.10)
 
 set(PACKAGE_REVISION "0.0.0+unknown")
 if (DEFINED CONAN_PACKAGE_NAME)
