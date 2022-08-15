@@ -16,6 +16,7 @@ class IOMgrConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        "prerelease": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         }
     default_options = {
@@ -24,7 +25,7 @@ class IOMgrConan(ConanFile):
         'coverage':     False,
         'sanitize':     False,
         'testing':      'full',
-        'sisl:prerelease':   True,
+        'prerelease':   True,
     }
 
 
@@ -40,10 +41,12 @@ class IOMgrConan(ConanFile):
         if self.options.shared:
             del self.options.fPIC
         if self.settings.build_type == "Debug":
+            self.options.prerelease = True
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
             if self.options.coverage or self.options.sanitize:
                 self.options['sisl'].malloc_impl = 'libc'
+        self.options['sisl'].prerelease = self.options.prerelease
 
     def build_requirements(self):
         self.build_requires("gtest/1.11.0")

@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 3.11)
 # This list is generated from the output of:
 #
 # gcc -Q --help=optimizers -O0
