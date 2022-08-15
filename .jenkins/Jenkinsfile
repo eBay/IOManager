@@ -99,7 +99,7 @@ pipeline {
                     }
                     axis {
                         name 'BUILD_TYPE'
-                        values 'debug', 'sanitize'
+                        values 'sanitize'
                     }
                 } }
 
@@ -120,7 +120,7 @@ pipeline {
                             expression { "${BUILD_TYPE}" != 'sanitize' }
                         } }
                         steps {
-                            sh "conan create ${BUILD_MISSING} -o iomgr:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
+                            sh "conan create ${BUILD_MISSING} -o ${PROJECT}:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
                         }
                     }
 
