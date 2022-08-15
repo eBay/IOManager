@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 3.11)
 # Copyright (c) 2012 - 2017, Lars Bilke
 # All rights reserved.
 #
