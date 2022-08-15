@@ -81,8 +81,13 @@ pipeline {
                         name 'PRERELEASE'
                         values 'True', 'False'
                     }
+                    axis {
+                        name 'MALLOC_IMPL'
+                        values 'libc', 'tcmalloc'
+                    }
                 }
-                excludes { exclude {
+                excludes {
+                  exclude {
                     axis {
                         name 'BUILD_TYPE'
                         values 'sanitize', 'test'
@@ -91,17 +96,28 @@ pipeline {
                         name 'COVERAGE'
                         values 'True'
                     }
-                }
-                    exclude {
+                  }
+                  exclude {
+                    axis {
+                        name 'BUILD_TYPE'
+                        values 'sanitize', 'test'
+                    }
+                    axis {
+                        name 'MALLOC_IMPL'
+                        values 'libc'
+                    }
+                  }
+                  exclude {
                     axis {
                         name 'PRERELEASE'
                         values 'False'
                     }
                     axis {
                         name 'BUILD_TYPE'
-                        values 'sanitize'
+                        values 'sanitize', 'debug'
                     }
-                } }
+                  }
+                }
 
                 stages {
                     stage('Adjust Tag for Master/PR') {
@@ -120,7 +136,7 @@ pipeline {
                             expression { "${BUILD_TYPE}" != 'sanitize' }
                         } }
                         steps {
-                            sh "conan create ${BUILD_MISSING} -o sisl:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
+                            sh "conan create ${BUILD_MISSING} -o sisl:malloc_impl=${MALLOC_IMPL} -o sisl:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
                         }
                     }
 
