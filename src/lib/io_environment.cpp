@@ -4,7 +4,7 @@ namespace iomgr {
 
 IOEnvironment& IOEnvironment::with_http_server() {
     if (!m_http_server) {
-        sisl::HttpServerConfig cfg;
+        iomgr::HttpServerConfig cfg;
         if (IM_DYNAMIC_CONFIG(io_env.secure_zone)) {
             cfg.is_tls_enabled = true;
             cfg.tls_cert_path = SECURITY_DYNAMIC_CONFIG(ssl_cert_file);
@@ -17,7 +17,7 @@ IOEnvironment& IOEnvironment::with_http_server() {
         cfg.bind_address = "0.0.0.0";
         cfg.server_port = IM_DYNAMIC_CONFIG(io_env.http_port);
         cfg.read_write_timeout_secs = 10;
-        m_http_server = std::make_shared< sisl::HttpServer >(cfg);
+        m_http_server = std::make_shared< iomgr::HttpServer >(cfg);
         m_http_server->start();
     }
 
