@@ -14,7 +14,6 @@ SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
 class IOMgrDynamicConfig {
 public:
     static constexpr std::string_view default_cpuset_path = "/sys/fs/cgroup/cpuset/cpuset.cpus";
-    static constexpr std::string_view default_megacli_path = "/bin/megacli";
 
     // This method sets up the default for settings factory when there is no override specified in the json
     // file and .fbs cannot specify default because they are not scalar.
