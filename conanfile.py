@@ -2,7 +2,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.5.7"
+    version = "8.6.0"
     homepage = "https://github.corp.ebay.com/SDS/iomgr"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox")
