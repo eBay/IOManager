@@ -258,7 +258,7 @@ void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const
     if (m_max_write_zeros == 0) {
         if (!m_zero_buf) {
             m_zero_buf = std::unique_ptr< uint8_t, std::function< void(uint8_t* const) > >{
-                sisl::AlignedAllocator::allocator().aligned_alloc(get_attributes(devname, dev_type).align_size,
+                sisl::AlignedAllocator::allocator().aligned_alloc(DriveInterface::get_attributes(devname).align_size,
                                                                   max_buf_size, sisl::buftag::common),
                 [](uint8_t* const ptr) {
                     if (ptr) sisl::AlignedAllocator::allocator().aligned_free(ptr, sisl::buftag::common);
