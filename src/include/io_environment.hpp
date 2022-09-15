@@ -11,7 +11,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
-#include <sisl/async_http/http_server.hpp>
+#include "http_server.hpp"
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic pop
 #endif
@@ -39,7 +39,7 @@ public:
     IOEnvironment& with_file_watcher();
     IOEnvironment& with_auth_security();
 
-    std::shared_ptr< sisl::HttpServer > get_http_server() { return m_http_server; }
+    std::shared_ptr< iomgr::HttpServer > get_http_server() { return m_http_server; }
     std::shared_ptr< sisl::AuthManager > get_auth_manager() { return m_auth_manager; }
     std::shared_ptr< sisl::TrfClient > get_trf_client() { return m_trf_client; }
     std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
@@ -60,7 +60,7 @@ private:
         if (m_http_server) { m_http_server->stop(); }
         if (m_file_watcher) { m_file_watcher->stop(); }
     }
-    std::shared_ptr< sisl::HttpServer > m_http_server;
+    std::shared_ptr< iomgr::HttpServer > m_http_server;
     std::shared_ptr< sisl::AuthManager > m_auth_manager;
     std::shared_ptr< sisl::TrfClient > m_trf_client;
     std::shared_ptr< sisl::FileWatcher > m_file_watcher;
