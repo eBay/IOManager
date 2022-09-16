@@ -93,7 +93,80 @@ static uint64_t get_max_write_zeros(const std::string& devname) {
     return max_zeros;
 }
 
+#ifdef MEGACLI_OPTION_ENABLED
+// NOTE: This piece of code is taken from stackoverflow
+// https://stackoverflow.com/questions/478898/how-do-i-execute-a-command-and-get-the-output-of-the-command-within-c-using-po
+std::string exec_command(const std::string& cmd) {
+    std::array< char, 128 > buffer;
+    std::string result;
+    std::unique_ptr< FILE, decltype(&pclose) > pipe(popen(cmd.c_str(), "r"), pclose);
+    if (!pipe) {
+        LOGINFO("Unable to execute the command {}, perhaps command doesn't exists", cmd);
+        return result;
+    }
+    while (std::fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
+}
+
+static std::string find_megacli_bin_path() {
+    static std::vector< std::string > paths{"/usr/sbin/megacli", "/bin/megacli", "/usr/lib/megacli", "/bin/MegaCli64"};
+    for (auto& p : paths) {
+        if (std::filesystem::exists(p)) { return p; }
+    }
+    return std::string("");
+}
+
+static std::string get_raid_hdd_vendor_model_megcli() {
+    // Find megacli bin in popular paths
+    const auto megacli_bin = find_megacli_bin_path();
+    if (megacli_bin.empty()) {
+        LOGINFO("Megacli is not available in this host, ignoring hdd model detection");
+        return megacli_bin;
+    }
+
+    // Run megacli command and parse to get the vendor number
+    const auto summary_cmd = fmt::format("{} -ShowSummary -aALL", megacli_bin);
+    const auto summary_out = exec_command(summary_cmd);
+    if (summary_out.empty()) {
+        LOGINFO("We are not able to find any raid/megacli command, ignorning");
+        return summary_out;
+    }
+
+    // Parse the output to see number of enclosure and pick
+    std::vector< std::string > summary_lines;
+    boost::split(summary_lines, summary_out, boost::is_any_of("\n"));
+    const std::regex pd_regex("^ +PD");
+    const std::regex id_regex("^ +Product Id +: +(.+)");
+    const std::regex vd_regex("^ +Virtual Drives");
+    std::smatch base_match;
+    bool pd_area{false};
+    std::string product_id; // Output where we get model/product id
+    for (auto& line : summary_lines) {
+        if (pd_area) {
+            if (std::regex_match(line, base_match, id_regex)) {
+                // The first sub_match is the whole string; the next sub_match is the first parenthesized expression.
+                if (base_match.size() == 2) {
+                    product_id = base_match[1].str();
+                    break;
+                }
+            } else if (std::regex_match(line, base_match, vd_regex)) {
+                pd_area = false;
+                break;
+            }
+        } else {
+            if (std::regex_match(line, base_match, pd_regex)) { pd_area = true; }
+        }
+    }
+    return product_id;
+}
+#endif
+
 static std::string get_raid_hdd_vendor_model() {
+#ifdef MEGACLI_OPTION_ENABLED
+    return get_raid_hdd_vendor_model_megcli();
+#else
     static constexpr int MAX_NUM_HDD_DEVS = 3;
     char* mdl = std::getenv("PRODUCTION_ID_data1");
     LOGMSG_ASSERT(mdl, "vendor model is empty - check $PRODUCTION_ID_data1");
@@ -107,6 +180,7 @@ static std::string get_raid_hdd_vendor_model() {
             idx, next_mdl);
     }
     return std::string(mdl);
+#endif
 }
 
 drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
