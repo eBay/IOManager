@@ -14,6 +14,7 @@ find_package(flip REQUIRED)
 find_package(grpc_internal REQUIRED)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
+find_package(evhtp REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 

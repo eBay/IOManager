@@ -60,6 +60,7 @@ class IOMgrConan(ConanFile):
         self.requires("nlohmann_json/3.10.5")
         self.requires("libevent/2.1.12")
         self.requires("spdk/21.07.x")
+        self.requires("evhtp/1.2.18.2")
 
         self.requires("flatbuffers/1.12.0", override=True)
         self.requires("openssl/1.1.1q", override=True)
