@@ -38,6 +38,7 @@ target_link_libraries(iomgr
         liburing::liburing
         flip::flip
         grpc_internal::grpc_internal
+        evhtp::evhtp
 	sisl::sisl
 	spdk::spdk
     )
