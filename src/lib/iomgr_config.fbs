@@ -84,7 +84,8 @@ table IomgrSettings {
     // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
     max_msgs_before_yield: uint32 = 100 (hotswap);
     max_resubmit_cnt: uint32 = 3 (hotswap); // max resubmit cnt of io in case of error 
-    partial_read_max_resubmit_cnt: uint32 = 16 (hotswap); // max resubmit cnt of io in case of partial read, only valid for uring
+    partial_read_max_resubmit_cnt: uint32 = 256 (hotswap); // max resubmit cnt of io in case of partial read, only valid for uring
+                                                           // TODO: this value should be set by consumer of iomgr, which should be (max_io_size / physical_page_sz) in worst case
 
     io_env: IoEnv;
 }
