@@ -10,12 +10,13 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISIO
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
 
 find_package(FlatBuffers REQUIRED)
-find_package(flip REQUIRED)
 find_package(grpc_internal REQUIRED)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
 find_package(evhtp REQUIRED)
+find_package(zmarok-semver REQUIRED)
 
+include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
 set (IOMGR_SRC
@@ -35,14 +36,14 @@ set (IOMGR_SRC
       )
 add_library (iomgr ${IOMGR_SRC})
 target_link_libraries(iomgr
-        liburing::liburing
-        flip::flip
-        grpc_internal::grpc_internal
-        evhtp::evhtp
-	sisl::sisl
-	spdk::spdk
+      liburing::liburing
+      grpc_internal::grpc_internal
+      evhtp::evhtp
+      sisl::sisl
+      spdk::spdk
     )
 
 include ("${sisl_LIB_DIRS}/../cmake/settings_gen.cmake")
 settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR} iomgr iomgr_config.fbs)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
+include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)

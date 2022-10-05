@@ -141,6 +141,11 @@ public:
     static drive_type detect_drive_type(const std::string& devname);
     static constexpr std::chrono::microseconds max_sync_io_poll_freq_us{5};
 
+    static void increment_outstanding_counter(const SpdkIocb* iocb);
+    static void decrement_outstanding_counter(const SpdkIocb* iocb);
+    static uint64_t increment_outstanding_asyncios(const SpdkIocb* iocb, uint64_t count = 1);
+    static uint64_t decrement_outstanding_asyncios(const SpdkIocb* iocb, uint64_t count = 1);
+
 private:
     drive_attributes get_attributes(const io_device_ptr& dev) const;
     io_device_ptr create_open_dev_internal(const std::string& devname, drive_type drive_type);
@@ -153,8 +158,6 @@ private:
 
     bool try_submit_io(SpdkIocb* iocb, bool part_of_batch);
     void submit_async_io_to_tloop_thread(SpdkIocb* iocb, bool part_of_batch);
-    static void increment_outstanding_counter(const SpdkIocb* iocb);
-    static void decrement_outstanding_counter(const SpdkIocb* iocb);
     void handle_msg(iomgr_msg* msg);
     ssize_t do_sync_io(SpdkIocb* iocb, const io_interface_comp_cb_t& comp_cb);
     void submit_sync_io_to_tloop_thread(SpdkIocb* iocb);
@@ -197,8 +200,7 @@ struct SpdkIocb : public drive_iocb {
 
     SpdkIocb(SpdkDriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset,
              void* cookie) :
-            drive_iocb{iodev, op_type, size, offset, cookie},
-            iface{iface} {
+            drive_iocb{iodev, op_type, size, offset, cookie}, iface{iface} {
         io_wait_entry.bdev = iodev->bdev();
         io_wait_entry.cb_arg = (void*)this;
         comp_cb = reinterpret_cast< SpdkDriveInterface* >(iodev->io_interface)->m_comp_cb;

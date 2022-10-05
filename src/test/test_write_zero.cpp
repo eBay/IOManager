@@ -15,9 +15,9 @@
 #include <iomgr.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
-#include "io_environment.hpp"
-
 #include <gtest/gtest.h>
+
+#include "io_environment.hpp"
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -217,8 +217,9 @@ protected:
 };
 
 TEST_F(WriteZeroTest, fill_zero_validate) {
-    iomanager.run_on(thread_regex::least_busy_worker, [this]([[maybe_unused]] auto taddr) { this->write_zero_test(); },
-                     wait_type_t::no_wait);
+    iomanager.run_on(
+        thread_regex::least_busy_worker, [this]([[maybe_unused]] auto taddr) { this->write_zero_test(); },
+        wait_type_t::no_wait);
     s_runner.wait();
 }
 

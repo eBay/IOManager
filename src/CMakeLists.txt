@@ -12,5 +12,6 @@ include_directories (BEFORE . include)
 add_subdirectory (lib)
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/lib)
+include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)
 
 add_subdirectory(test)

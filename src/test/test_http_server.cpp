@@ -15,8 +15,6 @@
 #include <thread>
 
 #include <cpr/cpr.h>
-#include <event2/http.h>
-
 #include <gtest/gtest.h>
 
 #if defined __clang__ or defined __GNUC__

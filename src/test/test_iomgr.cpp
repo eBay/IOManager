@@ -21,11 +21,6 @@
 #include <fcntl.h>
 #endif
 
-extern "C" {
-#include <spdk/env.h>
-#include <spdk/thread.h>
-}
-
 #include <iomgr.hpp>
 #include "io_environment.hpp"
 

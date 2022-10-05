@@ -15,7 +15,7 @@
 
 //#include "drive_type.hpp"
 
-#define IOMGR_LOG_MODS iomgr, spdk, io_wd
+#define IOMGR_LOG_MODS iomgr, spdk, io_wd, httpserver_lmod
 SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 
 struct spdk_thread;
@@ -196,6 +196,7 @@ struct iomgr_msg;
 struct timer;
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
+    friend class SpdkDriveInterface;
 
 public:
     static thread_local IOReactor* this_reactor;

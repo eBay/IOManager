@@ -2,7 +2,8 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.6.3"
+    version = "8.6.4"
+
     homepage = "https://github.corp.ebay.com/SDS/iomgr"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox")
@@ -49,8 +50,7 @@ class IOMgrConan(ConanFile):
         self.build_requires("gtest/1.11.0")
 
     def requirements(self):
-        self.requires("flip/[~=4, include_prerelease=True]@sds/master")
-        self.requires("sisl/[~=8, include_prerelease=True]@sisl/master")
+        self.requires("sisl/[~=8, include_prerelease=True]@oss/master")
 
         self.requires("boost/1.79.0")
         self.requires("folly/2022.01.31.00")
@@ -61,6 +61,7 @@ class IOMgrConan(ConanFile):
         self.requires("libevent/2.1.12")
         self.requires("spdk/21.07.x")
         self.requires("evhtp/1.2.18.2")
+        self.requires("zmarok-semver/1.1.0")
 
         self.requires("flatbuffers/1.12.0", override=True)
         self.requires("openssl/1.1.1q", override=True)

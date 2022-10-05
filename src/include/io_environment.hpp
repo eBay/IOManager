@@ -7,15 +7,6 @@
 #include "iomgr.hpp"
 #include "iomgr_config.hpp"
 
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-function-type"
-#endif
-#include "http_server.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
-
 #include <sisl/file_watcher/file_watcher.hpp>
 #include <sisl/auth_manager/auth_manager.hpp>
 #include <sisl/auth_manager/trf_client.hpp>
@@ -23,6 +14,7 @@
 
 namespace iomgr {
 
+class HttpServer;
 class IOEnvironment {
 public:
     static IOEnvironment& get_instance() {
@@ -51,15 +43,9 @@ public:
     }
 
 private:
-    IOEnvironment() {
-        // init default settings
-        IOMgrDynamicConfig::init_settings_default();
-        SecurityDynamicConfig::init_settings_default();
-    }
-    ~IOEnvironment() {
-        if (m_http_server) { m_http_server->stop(); }
-        if (m_file_watcher) { m_file_watcher->stop(); }
-    }
+    IOEnvironment();
+    ~IOEnvironment();
+
     std::shared_ptr< iomgr::HttpServer > m_http_server;
     std::shared_ptr< sisl::AuthManager > m_auth_manager;
     std::shared_ptr< sisl::TrfClient > m_trf_client;

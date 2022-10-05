@@ -337,7 +337,7 @@ void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const
                 [](uint8_t* const ptr) {
                     if (ptr) sisl::AlignedAllocator::allocator().aligned_free(ptr, sisl::buftag::common);
                 }};
-            if (m_zero_buf) std::memset(m_zero_buf.get(), 0, max_buf_size);
+            if (m_zero_buf) std::fill(m_zero_buf.get(), m_zero_buf.get() + max_buf_size, 0);
         }
     }
 }

@@ -1,6 +1,25 @@
 #include "io_environment.hpp"
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
+#include "http_server.hpp"
+#if defined __clang__ or defined __GNUC__
+#pragma GCC diagnostic pop
+#endif
 
 namespace iomgr {
+
+IOEnvironment::IOEnvironment() {
+    // init default settings
+    IOMgrDynamicConfig::init_settings_default();
+    SecurityDynamicConfig::init_settings_default();
+}
+
+IOEnvironment::~IOEnvironment() {
+    if (m_http_server) { m_http_server->stop(); }
+    if (m_file_watcher) { m_file_watcher->stop(); }
+}
 
 IOEnvironment& IOEnvironment::with_http_server() {
     if (!m_http_server) {

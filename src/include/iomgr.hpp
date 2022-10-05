@@ -20,7 +20,7 @@
 #include <sys/time.h>
 #endif
 
-#include <semver/semver200.h>
+#include <semver200.h>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
@@ -76,7 +76,7 @@ struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
-overloaded(Ts...)->overloaded< Ts... >;
+overloaded(Ts...) -> overloaded< Ts... >;
 
 class IOMempoolMetrics : public sisl::MetricsGroup {
 public:

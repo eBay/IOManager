@@ -37,16 +37,17 @@
 #include <event2/http.h>
 #include <event2/thread.h>
 #include <event2/util.h>
+extern "C" {
 #include <evhtp.h>
 #include <evhtp/evhtp.h>
 #include <evhtp/sslutils.h>
+}
 #include <sys/stat.h>
 #endif
 
 #include <boost/intrusive_ptr.hpp>
 #include <boost/intrusive/slist.hpp>
 #include <boost/smart_ptr/intrusive_ref_counter.hpp>
-#include <evhtp/evhtp.h>
 #include <nlohmann/json.hpp>
 
 #include <sisl/auth_manager/auth_manager.hpp>
@@ -54,8 +55,6 @@
 #include <sisl/options/options.h>
 #include <sisl/utility/obj_life_counter.hpp>
 #include <sisl/utility/thread_factory.hpp>
-
-SISL_LOGGING_DECL(httpserver_lmod)
 
 namespace iomgr {
 
