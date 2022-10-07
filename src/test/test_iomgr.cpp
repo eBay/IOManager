@@ -114,16 +114,11 @@ static void do_read_io(size_t offset) {
 }
 
 static void issue_preload() {
-    if (work.next_io_offset >= work.offset_end) {
-        work.is_preload_phase = false;
-        LOGINFO("We are done with the preload");
-        return;
-    }
-
     while (work.available_qs > 0) {
         --work.available_qs;
         do_write_io(work.next_io_offset);
         work.next_io_offset += io_size;
+        ++work.nios_issued;
     }
 }
 
@@ -145,7 +140,8 @@ static void issue_rw_io() {
 }
 
 static void do_verify() {
-    LOGINFO("All IOs completed for this thread, running verification");
+    LOGINFO("All IOs completed (total_excluding_preload={}) for this thread, running verification",
+            work.nios_completed);
     auto sthread = sisl::named_thread("verify_thread", []() mutable {
         const auto loop_type{SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP};
         iomanager.run_io_loop(loop_type, nullptr, [](bool is_started) {
@@ -174,11 +170,25 @@ static void on_io_completion(int64_t res, uint8_t* cookie) {
     delete req;
 
     ++work.available_qs;
+    ++work.nios_completed;
     if (work.is_preload_phase) {
-        issue_preload();
-    } else {
-        ++work.nios_completed;
-        if ((work.nios_completed % 10000) == 0) { LOGINFO("Total {} ios completed", work.nios_completed); }
+        if (work.next_io_offset >= work.offset_end) {
+            if (work.nios_completed == work.nios_issued) {
+                LOGINFO("We are done with the preload of size={} with num_ios={}", io_size * work.nios_completed,
+                        work.nios_completed);
+                work.is_preload_phase = false;
+                work.nios_completed = 0;
+                work.nios_issued = 0;
+            }
+        } else {
+            issue_preload();
+        }
+    }
+
+    if (!work.is_preload_phase) {
+        if ((work.nios_completed) && (work.nios_completed % 10000) == 0) {
+            LOGINFO("Total {} ios completed", work.nios_completed);
+        }
         if (work.nios_issued < max_ios_per_thread) {
             issue_rw_io();
         } else if (work.nios_completed == max_ios_per_thread) {
