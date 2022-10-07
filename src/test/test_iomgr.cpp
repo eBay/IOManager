@@ -236,6 +236,7 @@ int main(int argc, char* argv[]) {
     g_driveattr = iomgr::DriveInterface::get_attributes(dev_path);
     g_iodev->drive_interface()->attach_completion_cb(on_io_completion);
 
+    iomanager.set_io_memory_limit(1073741824UL);
     uint8_t* buf{iomanager.iobuf_alloc(g_driveattr.align_size, 8192)};
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
