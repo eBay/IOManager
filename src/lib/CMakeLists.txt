@@ -44,14 +44,9 @@ list(APPEND IOMGR_LIB_DEPS
       spdk::spdk
     )
 
-if (${CONAN_CXX_FLAGS_SISL} MATCHES "USING_TCMALLOC")
-  message("Use TCMalloc as Malloc implementation")
-  list(APPEND IOMGR_LIB_DEPS gperftools::gperftools)
-endif()
-
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 
-include ("${sisl_LIB_DIRS}/../cmake/settings_gen.cmake")
+include ("${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake")
 settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR} iomgr iomgr_config.fbs)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)
