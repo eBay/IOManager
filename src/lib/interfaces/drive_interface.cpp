@@ -18,7 +18,7 @@
 #include <array>
 
 #include <fmt/format.h>
-#include <flip/flip.hpp>
+#include <sisl/flip/flip.hpp>
 #include <boost/algorithm/string.hpp>
 
 #include "iomgr.hpp"

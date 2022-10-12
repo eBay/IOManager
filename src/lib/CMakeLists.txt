@@ -16,7 +16,6 @@ find_package(liburing REQUIRED)
 find_package(evhtp REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
-include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
 set (IOMGR_SRC
@@ -49,4 +48,3 @@ target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 include ("${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake")
 settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR} iomgr iomgr_config.fbs)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
-include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)

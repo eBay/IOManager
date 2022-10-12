@@ -5,7 +5,6 @@ find_package (GTest REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 include_directories (BEFORE .. ../include)
-include_directories (BEFORE ${CONAN_INCLUDE_DIRS_SISL}/sisl)
 
 set (TEST_DEPS
         iomgr 

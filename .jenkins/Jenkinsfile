@@ -71,52 +71,24 @@ pipeline {
                 axes {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'sanitize', 'debug', 'test'
+                        values 'sanitize', 'release', 'debug', 'test'
                     }
                     axis {
                         name 'COVERAGE'
                         values 'False'
-                    }
-                    axis {
-                        name 'PRERELEASE'
-                        values 'True', 'False'
-                    }
-                    axis {
-                        name 'MALLOC_IMPL'
-                        values 'libc', 'tcmalloc'
                     }
                 }
-                excludes {
-                  exclude {
-                    axis {
-                        name 'BUILD_TYPE'
-                        values 'sanitize', 'test'
+                excludes { 
+                    exclude {
+                        axis {
+                            name 'BUILD_TYPE'
+                            values 'sanitize', 'test', 'release'
+                        }
+                        axis {
+                            name 'COVERAGE'
+                            values 'True'
+                        }
                     }
-                    axis {
-                        name 'COVERAGE'
-                        values 'True'
-                    }
-                  }
-                  exclude {
-                    axis {
-                        name 'BUILD_TYPE'
-                        values 'sanitize', 'test'
-                    }
-                    axis {
-                        name 'MALLOC_IMPL'
-                        values 'libc'
-                    }
-                  }
-                  exclude {
-                    axis {
-                        name 'PRERELEASE'
-                        values 'False'
-                    }
-                    axis {
-                        name 'BUILD_TYPE'
-                        values 'sanitize', 'debug'
-                    }
-                  }
                 }
 
                 stages {
@@ -130,13 +102,42 @@ pipeline {
                         }
                     }
 
-                    stage("Build") {
+                    stage("PR Build") {
                         when { allOf {
-                            expression { "${COVERAGE}" == 'False' }
-                            expression { "${BUILD_TYPE}" != 'sanitize' }
+                            expression { "${COVERAGE}" == "False" }
+                            expression { "${BUILD_TYPE}" != "sanitize" }
+                            expression { "${BUILD_TYPE}" != "debug" }
+                            expression { (env.BRANCH_NAME =~ /PR-/) }
                         } }
                         steps {
-                            sh "conan create ${BUILD_MISSING} -o sisl:malloc_impl=${MALLOC_IMPL} -o sisl:prerelease=${PRERELEASE} -pr ${BUILD_TYPE} . ${PROJECT}/${TAG}"
+                            script {
+                                def PRERELEASE = 'True'
+                                def BUILD_PROFILE = "${BUILD_TYPE}"
+                                if ("${BUILD_TYPE}" == 'release') {
+                                    PRERELEASE = 'False'
+                                    BUILD_PROFILE = "test"
+                                }
+                                sh "conan create ${BUILD_MISSING} -o sisl:prerelease=${PRERELEASE} -o sisl:malloc_impl=tcmalloc -pr ${BUILD_PROFILE} . ${PROJECT}/${TAG}"
+                            }
+                        }
+                    }
+
+                    stage("Branch Build") {
+                        when { allOf {
+                            expression { "${COVERAGE}" == "False" }
+                            expression { "${BUILD_TYPE}" != "sanitize" }
+                            expression { !(env.BRANCH_NAME =~ /PR-/) }
+                        } }
+                        steps {
+                            script {
+                                def PRERELEASE = 'True'
+                                def BUILD_PROFILE = "${BUILD_TYPE}"
+                                if ("${BUILD_TYPE}" == "release") {
+                                    PRERELEASE = 'False'
+                                    BUILD_PROFILE = "test"
+                                }
+                                sh "conan create ${BUILD_MISSING} -o sisl:prerelease=${PRERELEASE} -o sisl:malloc_impl=tcmalloc -pr ${BUILD_PROFILE} . ${PROJECT}/${TAG}"
+                            }
                         }
                     }
 
@@ -145,7 +146,7 @@ pipeline {
                             expression { "${BUILD_TYPE}" == 'sanitize' }
                         } }
                         steps {
-                            sh "conan create ${BUILD_MISSING} -o ${PROJECT}:sanitize=True -pr debug . ${PROJECT}/${TAG}"
+                            sh "conan create ${BUILD_MISSING} -o ${PROJECT}:sanitize=True -o sisl:malloc_impl=libc -pr debug . ${PROJECT}/${TAG}"
                         }
                     }
 
@@ -165,6 +166,7 @@ pipeline {
                         when { not { anyOf {
                             branch "${STABLE_BRANCH}"
                             expression { "${COVERAGE}" == 'False' }
+                            expression { !(env.BRANCH_NAME =~ /PR-/) }
                         } } }
 
                         stages {
