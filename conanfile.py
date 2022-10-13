@@ -2,7 +2,7 @@ from conans import ConanFile, CMake, tools
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.6.8"
+    version = "8.6.9"
 
     homepage = "https://github.corp.ebay.com/SDS/iomgr"
     description = "Asynchronous event manager"
@@ -28,23 +28,17 @@ class IOMgrConan(ConanFile):
         'sisl:prerelease':   True,
     }
 
-
     generators = "cmake", "cmake_find_package"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
-
-    def config_options(self):
-        if self.settings.build_type != "Debug":
-            del self.options.sanitize
-            del self.options.coverage
 
     def configure(self):
         if self.options.shared:
             del self.options.fPIC
         if self.settings.build_type == "Debug":
+            if self.options.sanitize:
+                self.options['sisl'].sanitize = True
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
-            if self.options.coverage or self.options.sanitize:
-                self.options['sisl'].malloc_impl = 'libc'
 
     def build_requirements(self):
         self.build_requires("gtest/1.11.0")
