@@ -36,10 +36,10 @@ public:
     std::shared_ptr< sisl::TrfClient > get_trf_client() { return m_trf_client; }
     std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
     std::string get_ssl_cert() const {
-        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
+        return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
     }
     std::string get_ssl_key() const {
-        return (IM_DYNAMIC_CONFIG(io_env->secure_zone)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
+        return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
     }
 
 private:

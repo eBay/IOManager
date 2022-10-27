@@ -71,7 +71,8 @@ table IoEnv {
     http_port: uint32 = 5000;
     
     // Turn on security features
-    secure_zone: bool = false;
+    encryption: bool = false;
+    authorization: bool = false;
 }
 
 table IomgrSettings {
