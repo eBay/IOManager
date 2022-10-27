@@ -65,8 +65,9 @@ SISL_OPTION_GROUP(iomgr,
                    ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
                    ::cxxopts::value< uint32_t >(), "count"),
-                  (secure_zone, "", "secure_zone", "Turn on security features in io environment",
-                   cxxopts::value< bool >(), "true or false"))
+                  (encryption, "", "encryption", "Turn on encryption", cxxopts::value< bool >(), "true or false"),
+                  (authorization, "", "authorization", "Turn on authorization", cxxopts::value< bool >(),
+                   "true or false"))
 
 namespace iomgr {
 

@@ -24,7 +24,7 @@ IOEnvironment::~IOEnvironment() {
 IOEnvironment& IOEnvironment::with_http_server() {
     if (!m_http_server) {
         iomgr::HttpServerConfig cfg;
-        if (IM_DYNAMIC_CONFIG(io_env.secure_zone)) {
+        if (IM_DYNAMIC_CONFIG(io_env.encryption)) {
             cfg.is_tls_enabled = true;
             cfg.tls_cert_path = SECURITY_DYNAMIC_CONFIG(ssl_cert_file);
             cfg.tls_key_path = SECURITY_DYNAMIC_CONFIG(ssl_key_file);
@@ -53,13 +53,9 @@ IOEnvironment& IOEnvironment::with_file_watcher() {
 }
 
 IOEnvironment& IOEnvironment::with_auth_security() {
-    if (IM_DYNAMIC_CONFIG(io_env->secure_zone)) {
-        // setup Auth Manager
+    if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
         if (!m_auth_manager) { m_auth_manager = std::make_shared< sisl::AuthManager >(); }
-
         if (!m_trf_client) { m_trf_client = std::make_shared< sisl::TrfClient >(); }
-        // to watch cert file changes
-        with_file_watcher();
     }
 
     return get_instance();
