@@ -30,6 +30,8 @@ public:
     IOEnvironment& with_http_server();
     IOEnvironment& with_file_watcher();
     IOEnvironment& with_auth_security();
+    IOEnvironment& with_auth_manager();
+    IOEnvironment& with_trf_client();
 
     std::shared_ptr< iomgr::HttpServer > get_http_server() { return m_http_server; }
     std::shared_ptr< sisl::AuthManager > get_auth_manager() { return m_auth_manager; }
@@ -41,6 +43,7 @@ public:
     std::string get_ssl_key() const {
         return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
     }
+    void restart_http_server();
 
 private:
     IOEnvironment();

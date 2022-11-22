@@ -21,9 +21,17 @@ IOEnvironment::~IOEnvironment() {
     if (m_file_watcher) { m_file_watcher->stop(); }
 }
 
+void IOEnvironment::restart_http_server() {
+    m_http_server.reset();
+    with_http_server();
+}
+
 IOEnvironment& IOEnvironment::with_http_server() {
     if (!m_http_server) {
         iomgr::HttpServerConfig cfg;
+        cfg.bind_address = "0.0.0.0";
+        cfg.server_port = IM_DYNAMIC_CONFIG(io_env.http_port);
+        cfg.read_write_timeout_secs = 10;
         if (IM_DYNAMIC_CONFIG(io_env.encryption)) {
             cfg.is_tls_enabled = true;
             cfg.tls_cert_path = SECURITY_DYNAMIC_CONFIG(ssl_cert_file);
@@ -33,10 +41,10 @@ IOEnvironment& IOEnvironment::with_http_server() {
             cfg.is_tls_enabled = false;
             cfg.is_auth_enabled = false;
         }
-        cfg.bind_address = "0.0.0.0";
-        cfg.server_port = IM_DYNAMIC_CONFIG(io_env.http_port);
-        cfg.read_write_timeout_secs = 10;
-        m_http_server = std::make_shared< iomgr::HttpServer >(cfg);
+
+        // get auth_manager if auth is enabled
+        with_auth_manager();
+        m_http_server = std::make_shared< iomgr::HttpServer >(cfg, get_auth_manager());
         m_http_server->start();
     }
 
@@ -52,9 +60,18 @@ IOEnvironment& IOEnvironment::with_file_watcher() {
     return get_instance();
 }
 
-IOEnvironment& IOEnvironment::with_auth_security() {
+IOEnvironment& IOEnvironment::with_auth_security() { return with_auth_manager().with_trf_client(); }
+
+IOEnvironment& IOEnvironment::with_auth_manager() {
     if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
         if (!m_auth_manager) { m_auth_manager = std::make_shared< sisl::AuthManager >(); }
+    }
+
+    return get_instance();
+}
+
+IOEnvironment& IOEnvironment::with_trf_client() {
+    if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
         if (!m_trf_client) { m_trf_client = std::make_shared< sisl::TrfClient >(); }
     }
 
