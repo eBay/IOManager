@@ -146,7 +146,16 @@ public:
             m_internal_event{nullptr},
             m_auth_mgr{auth_mgr} {}
 
-    HttpServer(const HttpServerConfig& cfg) : HttpServer{cfg, {}} {}
+    HttpServer(const HttpServerConfig& cfg) :
+            m_cfg{cfg},
+            m_handlers{},
+            m_ev_base{nullptr},
+            m_htp{nullptr},
+            m_internal_event{nullptr},
+            m_auth_mgr{nullptr} {}
+
+    HttpServer(const HttpServerConfig& cfg, const std::shared_ptr< sisl::AuthManager > auth_mgr) :
+            HttpServer{cfg, {}, auth_mgr} {}
 
     virtual ~HttpServer() {
         std::lock_guard lock{m_event_mutex};
