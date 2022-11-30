@@ -1,7 +1,17 @@
-//
-// Created by Kadayam, Hari on 2019-04-25.
-//
-
+/************************************************************************
+ * Modifications Copyright 2017-2019 eBay Inc.
+ * Author/Developer(s): Harihara Kadayam
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *    https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ **************************************************************************/
 #ifndef IOMGR_DRIVE_INTERFACE_HPP
 #define IOMGR_DRIVE_INTERFACE_HPP
 
@@ -52,11 +62,7 @@ struct drive_iocb {
     typedef std::unique_ptr< iovec[] > large_iov_array;
 
     drive_iocb(IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset, void* cookie) :
-            iodev(iodev),
-            op_type(op_type),
-            size(size),
-            offset(offset),
-            user_cookie(cookie) {
+            iodev(iodev), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
 #ifndef NDEBUG
         iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
 #endif

@@ -1,7 +1,17 @@
-//
-// Created by Rishabh Mittal on 04/20/2018
-//
-
+/************************************************************************
+ * Modifications Copyright 2017-2019 eBay Inc.
+ * Author/Developer(s): Harihara Kadayam
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *    https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ **************************************************************************/
 #include <cerrno>
 #include <chrono>
 #include <filesystem>
@@ -490,16 +500,16 @@ sys_thread_id_t IOManager::create_reactor_internal(const std::string& name, loop
         h->slot_num = slot_num;
         h->loop_type = loop_type;
 
-        const auto rc = spdk_env_thread_launch_pinned(lcore,
-                                                      [](void* arg) -> int {
-                                                          param_holder* h = (param_holder*)arg;
-                                                          set_thread_name(h->name.c_str());
-                                                          iomanager._run_io_loop(h->slot_num, h->loop_type, h->name,
-                                                                                 nullptr, std::move(h->notifier));
-                                                          delete h;
-                                                          return 0;
-                                                      },
-                                                      (void*)h);
+        const auto rc = spdk_env_thread_launch_pinned(
+            lcore,
+            [](void* arg) -> int {
+                param_holder* h = (param_holder*)arg;
+                set_thread_name(h->name.c_str());
+                iomanager._run_io_loop(h->slot_num, h->loop_type, h->name, nullptr, std::move(h->notifier));
+                delete h;
+                return 0;
+            },
+            (void*)h);
 
         RELEASE_ASSERT_GE(rc, 0, "Unable to start reactor thread on core {}", lcore);
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
@@ -548,12 +558,12 @@ void IOManager::add_interface(std::shared_ptr< IOInterface > iface, thread_regex
     }
     iface->set_scope(iface_scope);
 
-    const auto sent_count =
-        iomanager.run_on(iface_scope,
-                         [this, iface](io_thread_addr_t taddr) {
-                             iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
-                         },
-                         wait_type_t::sleep);
+    const auto sent_count = iomanager.run_on(
+        iface_scope,
+        [this, iface](io_thread_addr_t taddr) {
+            iface->on_io_thread_start(iomanager.this_reactor()->addr_to_thread(taddr));
+        },
+        wait_type_t::sleep);
 
     if (iface->is_spdk_interface()) {
         static std::once_flag flag1;
@@ -570,12 +580,12 @@ void IOManager::remove_interface(const std::shared_ptr< IOInterface >& iface) {
         m_iface_list.erase(std::remove(m_iface_list.begin(), m_iface_list.end(), iface), m_iface_list.end());
     }
 
-    const auto sent_count =
-        iomanager.run_on(iface->scope(),
-                         [this, iface](io_thread_addr_t taddr) {
-                             iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
-                         },
-                         wait_type_t::sleep);
+    const auto sent_count = iomanager.run_on(
+        iface->scope(),
+        [this, iface](io_thread_addr_t taddr) {
+            iface->on_io_thread_stopped(iomanager.this_reactor()->addr_to_thread(taddr));
+        },
+        wait_type_t::sleep);
 
     LOGINFOMOD(iomgr, "Interface={} removed from {} threads, total_interfaces={}", (void*)iface.get(), sent_count,
                m_iface_list.size());
@@ -1030,8 +1040,7 @@ void IOManager::mempool_metrics_populate() {
 }
 
 IOMempoolMetrics::IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp) :
-        sisl::MetricsGroup("IOMemoryPool", pool_name),
-        m_mp{mp} {
+        sisl::MetricsGroup("IOMemoryPool", pool_name), m_mp{mp} {
     REGISTER_GAUGE(iomempool_obj_size, "Size of the entry for this mempool");
     REGISTER_GAUGE(iomempool_free_count, "Total count of objects which are free in this pool");
     REGISTER_GAUGE(iomempool_alloced_count, "Total count of objects which are alloced in this pool");

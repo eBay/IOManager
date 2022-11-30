@@ -1,6 +1,17 @@
-//
-// Created by Kadayam, Hari on 2021-08-05.
-//
+/************************************************************************
+ * Modifications Copyright 2017-2019 eBay Inc.
+ * Author/Developer(s): Harihara Kadayam
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *    https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed
+ * under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+ * CONDITIONS OF ANY KIND, either express or implied. See the License for the
+ * specific language governing permissions and limitations under the License.
+ **************************************************************************/
 extern "C" {
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
@@ -126,7 +137,8 @@ done:
     GRPC_LOG_IF_ERROR("pollset_add_fd", error);
 }
 
-grpc_error_handle GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker, grpc_core::Timestamp deadline) {
+grpc_error_handle GrpcInterface::pollset_work(grpc_pollset* pollset, grpc_pollset_worker** ppworker,
+                                              grpc_core::Timestamp deadline) {
     grpc_error_handle error{GRPC_ERROR_NONE};
 
     if (!iomanager.am_i_io_reactor()) { iomanager.become_user_reactor(INTERRUPT_LOOP | USER_CONTROLLED_LOOP); }
