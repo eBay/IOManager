@@ -342,11 +342,13 @@ void UringDriveInterface::handle_completions() {
         } else {
             LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}, retry={}", (void*)iocb, iocb->result,
                         iocb->resubmit_cnt);
-            if (iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+            if ((iocb->result != -EAGAIN) && iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+                // EAGAIN won't increase resubmit_cnt;
                 DEBUG_ASSERT(false, "Don't expect op={} retry exceed limit={}", iocb->op_type,
                              IM_DYNAMIC_CONFIG(max_resubmit_cnt));
                 complete_io(iocb);
             } else {
+                // if disk driver return EAGAIN, keep retrying unconditionally;
                 // Retry IO by pushing it to waitq which will get scheduled later.
                 t_uring_ch->m_iocb_waitq.push(iocb);
             }
