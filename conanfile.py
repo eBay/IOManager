@@ -1,14 +1,16 @@
-from conans import ConanFile, CMake, tools
+from os.path import join
+from conan import ConanFile
+from conan.tools.files import copy
+from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
     version = "8.6.13"
-
-    homepage = "https://github.corp.ebay.com/SDS/iomgr"
+    homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
-    topics = ("ebay", "nublox")
-    url = "https://github.corp.ebay.com/SDS/iomgr"
-    license = "Proprietary"
+    topics = ("ebay", "nublox", "aio")
+    url = "https://github.com/eBay/IOManager"
+    license = "Apache-2.0"
 
     settings = "arch", "os", "compiler", "build_type"
 
@@ -29,7 +31,7 @@ class IOMgrConan(ConanFile):
     }
 
     generators = "cmake", "cmake_find_package"
-    exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*"
+    exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
 
     def configure(self):
         if self.options.shared:
@@ -85,12 +87,13 @@ class IOMgrConan(ConanFile):
             cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
-        self.copy("*.h", dst="include/iomgr", src="src", keep_path=False)
-        self.copy("*.hpp", dst="include/iomgr", src="src", keep_path=False)
-        self.copy("*.a", dst="lib", keep_path=False)
-        self.copy("*.so", dst="lib", keep_path=False, symlinks=True)
-        self.copy("*.dylib", dst="lib", keep_path=False, symlinks=True)
-        self.copy("*.dll", dst="lib", keep_path=False)
+        copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
+        copy(self, "*.h", join(self.source_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
+        copy(self, "*.hpp", join(self.source_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
+        copy(self, "*.a", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
+        copy(self, "*.so", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
+        copy(self, "*.dylib", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
+        copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
         self.cpp_info.libs = ["iomgr"]
