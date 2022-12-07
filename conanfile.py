@@ -88,8 +88,9 @@ class IOMgrConan(ConanFile):
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
-        copy(self, "*.h", join(self.source_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
-        copy(self, "*.hpp", join(self.source_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
+        copy(self, "*.h", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
+        copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
+        copy(self, "*iomgr_config_generated.h", join(self.build_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
         copy(self, "*.a", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
         copy(self, "*.so", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
         copy(self, "*.dylib", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
