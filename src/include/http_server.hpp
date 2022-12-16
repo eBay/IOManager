@@ -30,6 +30,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 #ifdef __linux__
 #include <event2/dns.h>
@@ -541,6 +543,12 @@ private:
         server->_internal_event_handler(socket, events);
     }
 
+    static bool file_available(const char* filename){
+        struct stat f_stat;
+        auto rc = ::stat(filename, &f_stat);
+        return !rc && f_stat.st_size;
+    }
+
     std::unique_ptr< evhtp_ssl_cfg_t > get_ssl_opts_() {
         struct stat f_stat;
         auto ssl_config{std::make_unique< evhtp_ssl_cfg_t >()};
@@ -549,19 +557,18 @@ private:
         ssl_config->pemfile = (char*)m_cfg.tls_cert_path.c_str();
         ssl_config->privfile = (char*)m_cfg.tls_key_path.c_str();
 
-        if (ssl_config->pemfile) {
-            if (::stat(ssl_config->pemfile, &f_stat) != 0) {
-                LOGERROR("Cannot load SSL cert: {}", ssl_config->pemfile);
-                return nullptr;
-            }
+        while (!file_available(ssl_config->pemfile)) {
+            LOGERROR("Cannot load SSL cert: {}! will try again in 10 seconds", ssl_config->pemfile);
+            std::this_thread::sleep_for(std::chrono::seconds(10));
         }
 
-        if (ssl_config->privfile) {
-            if (::stat(ssl_config->privfile, &f_stat) != 0) {
-                LOGERROR("Cannot load SSL key: {}", ssl_config->privfile);
-                return nullptr;
-            }
+        while (!file_available(ssl_config->privfile)) {
+            LOGERROR("Cannot load SSL key: {}! will try again in 10 seconds", ssl_config->privfile);
+            std::this_thread::sleep_for(std::chrono::seconds(10));
         }
+
+        LOGINFO("The key: {}  and cert: {} successfully loaded",  ssl_config->pemfile , ssl_config->privfile);
+
 
         return ssl_config;
     }
