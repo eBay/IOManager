@@ -550,7 +550,6 @@ private:
     }
 
     std::unique_ptr< evhtp_ssl_cfg_t > get_ssl_opts_() {
-        struct stat f_stat;
         auto ssl_config{std::make_unique< evhtp_ssl_cfg_t >()};
 
         ssl_config->ssl_opts = 0; // SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1;
@@ -567,7 +566,7 @@ private:
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
 
-        LOGINFO("The key: {}  and cert: {} successfully loaded",  ssl_config->pemfile , ssl_config->privfile);
+        LOGINFO("The cert: {} and key: {} have been successfully loaded!",  ssl_config->pemfile , ssl_config->privfile);
 
 
         return ssl_config;
