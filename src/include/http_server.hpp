@@ -557,12 +557,12 @@ private:
         ssl_config->privfile = (char*)m_cfg.tls_key_path.c_str();
 
         while (!file_available(ssl_config->pemfile)) {
-            LOGERROR("Cannot load SSL cert: {}! will try again in 10 seconds", ssl_config->pemfile);
+            LOGWARN("Cannot load SSL cert: {}! will try again in 10 seconds", ssl_config->pemfile);
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
 
         while (!file_available(ssl_config->privfile)) {
-            LOGERROR("Cannot load SSL key: {}! will try again in 10 seconds", ssl_config->privfile);
+            LOGWARN("Cannot load SSL key: {}! will try again in 10 seconds", ssl_config->privfile);
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
 
