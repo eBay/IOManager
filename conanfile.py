@@ -55,7 +55,7 @@ class IOMgrConan(ConanFile):
         self.requires("liburing/2.1")
         self.requires("nlohmann_json/3.10.5")
         self.requires("libevent/2.1.12")
-        self.requires("spdk/21.07.x")
+        self.requires("spdk/21.07.y")
         self.requires("evhtp/1.2.18.2")
         self.requires("zmarok-semver/1.1.0")
 
