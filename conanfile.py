@@ -53,7 +53,7 @@ class IOMgrConan(ConanFile):
         self.requires("grpc/1.48.0")
         self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
-        self.requires("nlohmann_json/3.10.5")
+        self.requires("nlohmann_json/3.11.2")
         self.requires("libevent/2.1.12")
         self.requires("spdk/21.07.y")
         self.requires("evhtp/1.2.18.2")
