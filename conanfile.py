@@ -31,7 +31,7 @@ class IOMgrConan(ConanFile):
 
     requires = (
             "flip/[~=2, include_prerelease=True]@sds/master",
-            "sisl/[~=5, include_prerelease=True]@sisl/master",
+            "sisl/5.1.1",
             "sds_tools/[~=0, include_prerelease=True]@sds/master",
 
             "boost/1.73.0",
@@ -43,6 +43,7 @@ class IOMgrConan(ConanFile):
             "openssl/1.1.1k",
             "isa-l/2.21.0",
             "semver/1.1.0",
+            ("zlib/1.2.12", "override"),
             )
     build_requires = (
                 "gtest/1.10.0",
