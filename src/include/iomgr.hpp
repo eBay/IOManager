@@ -322,7 +322,8 @@ public:
             };
             auto ctx{std::make_shared< Context >()};
 
-            auto temp_cb = [cb_func = fn, ctx, wait_closure = cb_wait_closure](io_thread_addr_t addr) {
+            auto temp_cb = [cb_func = std::move(fn), ctx,
+                            wait_closure = std::move(cb_wait_closure)](io_thread_addr_t addr) mutable {
                 cb_func(addr);
                 if (ctx->pending_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
                     std::atomic_thread_fence(std::memory_order_acquire);
