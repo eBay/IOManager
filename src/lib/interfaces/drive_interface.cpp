@@ -32,10 +32,11 @@
 #include <sisl/flip/flip.hpp>
 #include <boost/algorithm/string.hpp>
 
-#include "iomgr.hpp"
-#include "drive_interface.hpp"
-#include "kernel_drive_interface.hpp"
-#include "spdk_drive_interface.hpp"
+#include <iomgr/iomgr.hpp>
+#include <iomgr/drive_interface.hpp>
+#include "interfaces/kernel_drive_interface.hpp"
+#include "interfaces/spdk_drive_interface.hpp"
+#include "reactor.hpp"
 
 namespace iomgr {
 std::unordered_map< std::string, drive_type > DriveInterface::s_dev_type;

@@ -25,11 +25,6 @@
 #include <string>
 #include <vector>
 
-#ifdef __linux__
-#include <event.h>
-#include <sys/time.h>
-#endif
-
 #include <semver200.h>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
@@ -41,27 +36,11 @@
 #include <sisl/utility/enum.hpp>
 #include <sisl/utility/thread_buffer.hpp>
 
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-#include <folly/Synchronized.h>
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
-
-#include "drive_interface.hpp"
-#include "io_interface.hpp"
-#include "iomgr_msg.hpp"
-#include "iomgr_timer.hpp"
-#include "iomgr_types.hpp"
-#include "reactor.hpp"
-
-struct spdk_bdev_desc;
-struct spdk_bdev;
-struct spdk_nvmf_qpair;
-struct spdk_mempool;
-struct rte_mempool;
+#include <iomgr/iomgr_msg.hpp>
+#include <iomgr/iomgr_timer.hpp>
+#include <iomgr/iomgr_types.hpp>
+#include <iomgr/drive_interface.hpp>
+#include <iomgr/io_device.hpp>
 
 namespace iomgr {
 
@@ -72,6 +51,9 @@ static constexpr int inbuilt_interface_count = 1;
 
 class DriveInterface;
 class GrpcInterface;
+class IOManagerImpl;
+class IOThreadMetrics;
+class GenericIOInterface;
 
 ENUM(iomgr_state, uint16_t,
      stopped,        // Stopped - this is the initial state
@@ -81,26 +63,19 @@ ENUM(iomgr_state, uint16_t,
      running,        // Active, ready to take traffic
      stopping);
 
+struct iomgr_params {
+    size_t num_threads{0};
+    bool is_spdk{false};
+    uint32_t app_mem_size_mb{0};
+    uint32_t hugepage_size_mb{0};
+};
+
 template < class... Ts >
 struct overloaded : Ts... {
     using Ts::operator()...;
 };
 template < class... Ts >
 overloaded(Ts...) -> overloaded< Ts... >;
-
-class IOMempoolMetrics : public sisl::MetricsGroup {
-public:
-    IOMempoolMetrics(const std::string& pool_name, const struct spdk_mempool* mp);
-    ~IOMempoolMetrics() {
-        detach_gather_cb();
-        deregister_me_from_farm();
-    }
-
-    void on_gather();
-
-private:
-    const struct spdk_mempool* m_mp;
-};
 
 struct synchronized_async_method_ctx {
 public:
@@ -145,6 +120,8 @@ public:
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
+    friend class IOManagerSpdkImpl;
+    friend class IOManagerEpollImpl;
 
     static IOManager& instance() {
         static IOManager inst;
@@ -154,25 +131,27 @@ public:
     // TODO: Make this a dynamic config (albeit non-hotswap)
     static constexpr uint32_t max_msg_modules{64};
     static constexpr uint32_t max_io_threads{1024}; // Keep in mind increasing this cause increased mem footprint
-    static constexpr uint64_t max_mempool_buf_size{256 * 1024};
-    static constexpr uint64_t min_mempool_buf_size{512};
-    static constexpr uint64_t max_mempool_count{sisl::logBase2(max_mempool_buf_size - min_mempool_buf_size)};
+
     /********* Start/Stop Control Related Operations ********/
 
     /**
      * @brief Start the IOManager. This is expected to be among the first call while application is started to enable
      * for it to do IO. Without this start, any other iomanager call would fail.
      *
-     * @param num_threads Total number of worker reactors to start with. Expected to be > 0
-     * @param is_spdk Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
-     * automatically started as spdk worker reactors.
+     * @param Parameters containing
+     *  num_threads: Total number of worker reactors to start with. Expected to be > 0
+     *  is_spdk: Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
+     *  automatically started as spdk worker reactors.
+     *  app_mem_size_mb: If the application using IOManager to be limited to specific size. If not specified takes
+     *  system memory into account.
+     *  hugepage_size_mb: Huge page size to be allocated. If not specified, will use system huge page size restriction
      * @param notifier [OPTONAL] A callback every time a new reactor is started or stopped. This will be called from the
      * reactor thread which is starting or stopping.
      * @param iface_adder [OPTIONAL] Callback to add interface by the caller during iomanager start. If null, then
      * iomanager will add all the default interfaces essential to do the IO.
      */
-    void start(size_t num_threads, bool is_spdk = false, const thread_state_notifier_t& notifier = nullptr,
-               const interface_adder_t& iface_adder = nullptr);
+    void start(const iomgr_params& params, const thread_state_notifier_t& notifier = nullptr,
+               interface_adder_t&& iface_adder = nullptr);
 
     /**
      * @brief Stop the IOManager. It is expected to the last call after all IOs are completed and before application
@@ -384,34 +363,15 @@ public:
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
 
-    bool am_i_io_reactor() const {
-        auto* r{this_reactor()};
-        return r && r->is_io_reactor();
-    }
+    bool am_i_io_reactor() const;
+    bool am_i_tight_loop_reactor() const;
+    bool am_i_worker_reactor() const;
+    bool am_i_adaptive_reactor() const;
+    void set_my_reactor_adaptive(bool adaptive);
 
-    bool am_i_tight_loop_reactor() const {
-        auto* r{this_reactor()};
-        return r && r->is_tight_loop_reactor();
-    }
-
-    bool am_i_worker_reactor() const {
-        auto* r{this_reactor()};
-        return r && r->is_worker();
-    }
-
-    bool am_i_adaptive_reactor() const {
-        auto* r{this_reactor()};
-        return r && r->is_adaptive_loop();
-    }
-
-    void set_my_reactor_adaptive(bool adaptive) {
-        auto* r{this_reactor()};
-        if (r) { r->set_adaptive_loop(adaptive); }
-    }
-
-    [[nodiscard]] uint32_t num_workers() const { return m_num_workers; }
-    [[nodiscard]] bool is_spdk_mode() const { return m_is_spdk; }
-    [[nodiscard]] bool is_uring_capable() const { return m_is_uring_capable; }
+    uint32_t num_workers() const { return m_num_workers; }
+    bool is_spdk_mode() const { return m_is_spdk; }
+    bool is_uring_capable() const { return m_is_uring_capable; }
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -448,15 +408,6 @@ public:
         }
     }
 
-    uint64_t get_mempool_idx(size_t size) const {
-        DEBUG_ASSERT_EQ(size % min_mempool_buf_size, 0, "Mempool size must be modulo mempool buf size");
-        DEBUG_ASSERT_GE(size, min_mempool_buf_size,
-                        "Mempool size must be greater than or equal to minimum mempool buf size");
-        return sisl::logBase2(size / min_mempool_buf_size);
-    }
-    spdk_mempool* get_mempool(size_t size);
-    void* create_mempool(size_t element_size, size_t element_count);
-
     /******** IO Thread related infra ********/
     io_thread_t make_io_thread(IOReactor* reactor);
     thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
@@ -477,23 +428,19 @@ public:
     void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
     uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
     size_t iobuf_size(uint8_t* buf) const;
-    void set_io_memory_limit(size_t limit);
-    [[nodiscard]] size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
-    [[nodiscard]] size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
+    size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
+    size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
 
     /******** Timer related Operations ********/
     timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
                                          timer_callback_t&& timer_fn);
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
                                          timer_callback_t&& timer_fn, bool wait_to_schedule = false);
-    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false) {
-        return thdl.first->cancel(thdl, wait_to_cancel);
-    }
+    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false);
     void set_poll_interval(const int interval);
     int get_poll_interval() const;
 
     IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
-
     void drive_interface_submit_batch();
 
 private:
@@ -502,28 +449,16 @@ private:
 
     void foreach_interface(const interface_cb_t& iface_cb);
     void create_reactors();
-    sys_thread_id_t create_reactor_internal(const std::string& name, loop_type_t loop_type, int slot_num,
-                                            thread_state_notifier_t&& notifier = nullptr);
     void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                       const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
 
     void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
     void reactor_stopped();                                     // Notification that IO thread is reliquished
 
-    void start_spdk();
-    void stop_spdk();
-
-    void hugetlbfs_umount();
-
-    void mempool_metrics_populate();
-    void register_mempool_metrics(struct rte_mempool* mp);
-
     void _pick_reactors(thread_regex r, const auto& cb);
     void all_reactors(const auto& cb);
     void specific_reactor(int thread_num, const auto& cb);
     IOReactor* round_robin_reactor() const;
-
-    [[nodiscard]] bool is_spdk_inited() const;
 
     void add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope = thread_regex::all_io);
 
@@ -533,7 +468,8 @@ private:
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors{0}; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors{0};
     uint32_t m_num_workers{0};
-    std::array< spdk_mempool*, max_mempool_count > m_iomgr_internal_pools;
+
+    std::unique_ptr< IOManagerImpl > m_impl;
 
     std::shared_mutex m_iface_list_mtx;
     std::vector< std::shared_ptr< IOInterface > > m_iface_list;
@@ -541,7 +477,6 @@ private:
 
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
     std::shared_ptr< GrpcInterface > m_default_grpc_iface;
-    folly::Synchronized< std::vector< uint64_t > > m_global_thread_contexts;
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 
@@ -564,32 +499,15 @@ private:
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};
-    bool m_spdk_reinit_needed{false};
-
     bool m_is_uring_capable{false};
-    bool m_is_cpu_pinning_enabled{false};
 
-    folly::Synchronized< std::unordered_map< std::string, IOMempoolMetrics > > m_mempool_metrics_set;
-    size_t m_mem_size_limit{std::numeric_limits< size_t >::max()};
-    size_t m_mem_soft_threshold_size{m_mem_size_limit};
-    size_t m_mem_aggressive_threshold_size{m_mem_size_limit};
+    size_t m_mem_size_limit{0};
+    size_t m_hugepage_limit{0};
+    size_t m_mem_soft_threshold_size{0};
+    size_t m_mem_aggressive_threshold_size{0};
 
     std::unique_ptr< IOWatchDog > m_io_wd{nullptr};
 };
 
-struct SpdkAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
-    uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
-    void aligned_free(uint8_t* b, const sisl::buftag tag) override;
-    uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
-    uint8_t* aligned_pool_alloc(const size_t align, const size_t sz, const sisl::buftag tag) override;
-    void aligned_pool_free(uint8_t* const b, const size_t sz, const sisl::buftag tag) override;
-    size_t buf_size(uint8_t* buf) const override;
-};
-
-struct IOMgrAlignedAllocImpl : public sisl::AlignedAllocatorImpl {
-    uint8_t* aligned_alloc(size_t align, size_t sz, const sisl::buftag tag) override;
-    void aligned_free(uint8_t* b, const sisl::buftag tag) override;
-    uint8_t* aligned_realloc(uint8_t* old_buf, size_t align, size_t new_sz, size_t old_sz = 0) override;
-};
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr

@@ -18,16 +18,8 @@
 #include <functional>
 #include <variant>
 #include <memory>
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-#include <folly/Synchronized.h>
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
-#include "reactor.hpp"
-#include "iomgr_types.hpp"
+
+#include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 class IOReactor;

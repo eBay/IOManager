@@ -12,15 +12,16 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#include "io_environment.hpp"
+#include <iomgr/io_environment.hpp>
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
-#include "http_server.hpp"
+#include <iomgr/http_server.hpp>
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic pop
 #endif
+#include "iomgr_config.hpp"
 
 namespace iomgr {
 
@@ -90,6 +91,13 @@ IOEnvironment& IOEnvironment::with_trf_client() {
     }
 
     return get_instance();
+}
+
+std::string IOEnvironment::get_ssl_cert() const {
+    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
+}
+std::string IOEnvironment::get_ssl_key() const {
+    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
 }
 
 } // namespace iomgr

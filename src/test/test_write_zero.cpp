@@ -12,12 +12,12 @@
 #endif
 
 #include <sisl/fds/utils.hpp>
-#include <iomgr.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <gtest/gtest.h>
 
-#include "io_environment.hpp"
+#include <iomgr/io_environment.hpp>
+#include <iomgr/iomgr.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -80,7 +80,7 @@ public:
         }
 
         const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-        ioenvironment.with_iomgr(1, is_spdk);
+        ioenvironment.with_iomgr(iomgr_params{.num_threads = 1, .is_spdk = is_spdk});
 
         int oflags{O_CREAT | O_RDWR};
         if (is_spdk) { oflags |= O_DIRECT; }

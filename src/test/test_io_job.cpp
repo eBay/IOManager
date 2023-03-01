@@ -13,8 +13,7 @@
 
 #include <gtest/gtest.h>
 
-#include <iomgr.hpp>
-
+#include <iomgr/iomgr.hpp>
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;

@@ -15,7 +15,7 @@
 #pragma once
 #include <sisl/settings/settings.hpp>
 #include <sisl/options/options.h>
-#include "iomgr_config_generated.h"
+#include "generated/iomgr_config_generated.h"
 
 SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
 
@@ -24,6 +24,9 @@ SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
 #define IM_DYNAMIC_CONFIG(...) SETTINGS_VALUE(iomgr_config, __VA_ARGS__)
 
 #define IM_SETTINGS_FACTORY() SETTINGS_FACTORY(iomgr_config)
+
+static std::vector< std::pair< uint32_t, double > > default_pool_dist{std::make_pair(4096, 50),
+                                                                      std::make_pair(65536, 20)};
 
 class IOMgrDynamicConfig {
 public:
@@ -50,6 +53,19 @@ public:
                 authorization = SISL_OPTIONS["authorization"].as< bool >();
                 is_modified = true;
             }
+
+            auto& default_pools = s.iomem->pool_sizes;
+            if (default_pools.size() == 0) {
+                LOGINFO("Default Pools is not initialized, possibly first boot - setting with defaults");
+                for (auto& [size, pct] : default_pool_dist) {
+                    std::remove_reference_t< decltype(default_pools.front()) > p;
+                    p->size = size;
+                    p->percent = pct;
+                    default_pools.push_back(p);
+                }
+                is_modified = true;
+            }
+
             // Any more default overrides or set non-scalar entries come here
         });
 

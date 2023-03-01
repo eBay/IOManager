@@ -28,8 +28,8 @@
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/fds/buffer.hpp>
 
-#include "kernel_drive_interface.hpp"
-#include "iomgr_types.hpp"
+#include "interfaces/kernel_drive_interface.hpp"
+#include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 class UringDriveInterfaceMetrics : public sisl::MetricsGroup {

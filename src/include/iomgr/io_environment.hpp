@@ -14,14 +14,12 @@
  **************************************************************************/
 #pragma once
 
-#include "iomgr.hpp"
-#include "iomgr_config.hpp"
-
 #include <sisl/file_watcher/file_watcher.hpp>
 #include <sisl/auth_manager/auth_manager.hpp>
 #include <sisl/auth_manager/trf_client.hpp>
 #include <sisl/auth_manager/security_config.hpp>
 
+#include <iomgr/iomgr.hpp>
 namespace iomgr {
 
 class HttpServer;
@@ -47,12 +45,8 @@ public:
     std::shared_ptr< sisl::AuthManager > get_auth_manager() { return m_auth_manager; }
     std::shared_ptr< sisl::TrfClient > get_trf_client() { return m_trf_client; }
     std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
-    std::string get_ssl_cert() const {
-        return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
-    }
-    std::string get_ssl_key() const {
-        return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
-    }
+    std::string get_ssl_cert() const;
+    std::string get_ssl_key() const;
     void restart_http_server();
 
 private:
@@ -63,6 +57,9 @@ private:
     std::shared_ptr< sisl::AuthManager > m_auth_manager;
     std::shared_ptr< sisl::TrfClient > m_trf_client;
     std::shared_ptr< sisl::FileWatcher > m_file_watcher;
+
+    uint32_t app_mem_size_mb{0}; // Overriding parameters if any
+    uint32_t hugepage_size_mb{0};
 };
 #define ioenvironment iomgr::IOEnvironment::get_instance()
 

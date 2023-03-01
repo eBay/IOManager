@@ -12,8 +12,8 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#include "uring_drive_interface.hpp"
-#include "iomgr.hpp"
+#include "interfaces/uring_drive_interface.hpp"
+#include <iomgr/iomgr.hpp>
 
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic push
@@ -33,6 +33,7 @@
 
 #include <sisl/fds/utils.hpp>
 #include <sisl/logging/logging.h>
+#include "epoll/reactor_epoll.hpp"
 
 namespace iomgr {
 thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};
@@ -208,7 +209,6 @@ void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_
 
     async_writev(iodev, iov.data(), 1, size, offset, cookie, part_of_batch);
 #else
-    RELEASE_ASSERT(0, "async_write not expected to arrive here.");
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::WRITE, size, offset, cookie);
     iocb->set_data((char*)data);
     increment_outstanding_counter(iocb, this);
@@ -241,7 +241,6 @@ void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
 
     async_readv(iodev, iov.data(), 1, size, offset, cookie, part_of_batch);
 #else
-    RELEASE_ASSERT(0, "async_read not expected to arrive here.");
     auto iocb = sisl::ObjectAllocator< drive_iocb >::make_object(iodev, DriveOpType::READ, size, offset, cookie);
     iocb->set_data(data);
     increment_outstanding_counter(iocb, this);

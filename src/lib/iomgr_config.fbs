@@ -24,7 +24,21 @@ table AioDriveInterface {
     zeros_by_ioctl: bool = false;
 }
 
+table PoolEntry {
+    // Size of each mempool entry
+    size : uint64; 
+
+    // Percentage of total pool memory
+    percent : double; 
+}
+
 table IOMemory {
+    // General Memory size available for the app in MiB
+    app_mem_size_mb: uint64 = 0;
+    
+    // If its a hugepage based available memory for hugepages (to do IO)
+    hugepage_size_mb: uint64 = 0;
+
     // Percentage of memory to be filled by app before we ask underlying mem allocator to free it up
     soft_mem_release_threshold: uint32 = 85;
 
@@ -36,6 +50,13 @@ table IOMemory {
 
     // Frequency in count of alloc/free to check if memory limit is exceeded
     limit_check_freq: uint32 = 1000;
+
+    // Array of pool sizes
+    pool_sizes : [PoolEntry];
+}
+
+table Thread {
+    num_workers: uint32 = 2;
 }
 
 table Poll {
@@ -76,9 +97,10 @@ table IoEnv {
 }
 
 table IomgrSettings {
+    iomem: IOMemory;
+    thread: Thread;
     spdk: SpdkDriveInterface;
     aio : AioDriveInterface;
-    iomem: IOMemory;
     poll: Poll;
     cpuset_path: string;
 

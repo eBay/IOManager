@@ -52,9 +52,9 @@ extern "C" {
 #include <spdk/nvme.h>
 }
 
-#include "include/iomgr.hpp"
-#include "include/reactor_spdk.hpp"
-#include "include/spdk_drive_interface.hpp"
+#include <iomgr/iomgr.hpp>
+#include "spdk/reactor_spdk.hpp"
+#include "interfaces/spdk_drive_interface.hpp"
 
 using namespace std::chrono_literals;
 
@@ -320,22 +320,22 @@ void IOWatchDog::io_timer() {
 
 io_device_ptr SpdkDriveInterface::open_dev(const std::string& devname, drive_type drive_type,
                                            [[maybe_unused]] int oflags) {
+    std::unique_lock lg{m_opened_dev_mtx};
     io_device_ptr iodev{nullptr};
-    m_opened_device.withWLock([this, &devname, &iodev, &drive_type](auto& m) {
-        auto it = m.find(devname);
-        if ((it == m.end()) || (it->second == nullptr)) {
-            iodev = create_open_dev_internal(devname, drive_type);
-            m.insert(std::make_pair<>(devname, iodev));
-        } else {
-            iodev = it->second;
-            if (!iodev->ready) { // Closed before, reopen it
-                open_dev_internal(iodev);
-            }
+    auto it = m_opened_device.find(devname);
+    if ((it == m_opened_device.end()) || (it->second == nullptr)) {
+        iodev = create_open_dev_internal(devname, drive_type);
+        m_opened_device.insert(std::make_pair<>(devname, iodev));
+    } else {
+        iodev = it->second;
+        if (!iodev->ready) { // Closed before, reopen it
+            open_dev_internal(iodev);
         }
+    }
 #ifdef REFCOUNTED_OPEN_DEV
-        iodev->opened_count.increment(1);
+    iodev->opened_count.increment(1);
 #endif
-    });
+
     return iodev;
 }
 

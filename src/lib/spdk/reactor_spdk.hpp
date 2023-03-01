@@ -14,7 +14,7 @@
  **************************************************************************/
 #pragma once
 #include "reactor.hpp"
-#include "io_interface.hpp"
+#include <iomgr/io_interface.hpp>
 #include <spdk/thread.h>
 
 struct spdk_thread;

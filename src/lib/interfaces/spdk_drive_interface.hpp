@@ -35,9 +35,9 @@
 
 #include <spdk/bdev.h>
 
-#include "drive_interface.hpp"
+#include <iomgr/drive_interface.hpp>
+#include <iomgr/iomgr_msg.hpp>
 #include "iomgr_config.hpp"
-#include "iomgr_msg.hpp"
 
 struct spdk_io_channel;
 struct spdk_thread;
@@ -182,7 +182,8 @@ private:
     std::mutex m_sync_cv_mutex;
     std::condition_variable m_sync_cv;
     SpdkDriveInterfaceMetrics m_metrics;
-    folly::Synchronized< std::unordered_map< std::string, io_device_ptr > > m_opened_device;
+    std::mutex m_opened_dev_mtx;
+    std::unordered_map< std::string, io_device_ptr > m_opened_device;
     std::atomic< size_t > m_outstanding_async_ios;
 };
 

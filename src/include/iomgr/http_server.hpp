@@ -57,6 +57,7 @@ extern "C" {
 #include <sisl/options/options.h>
 #include <sisl/utility/obj_life_counter.hpp>
 #include <sisl/utility/thread_factory.hpp>
+#include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 
@@ -543,7 +544,7 @@ private:
         server->_internal_event_handler(socket, events);
     }
 
-    static bool file_available(const char* filename){
+    static bool file_available(const char* filename) {
         struct stat f_stat;
         auto rc = ::stat(filename, &f_stat);
         return !rc && f_stat.st_size;
@@ -566,8 +567,7 @@ private:
             std::this_thread::sleep_for(std::chrono::seconds(10));
         }
 
-        LOGINFO("The cert: {} and key: {} have been successfully loaded!",  ssl_config->pemfile , ssl_config->privfile);
-
+        LOGINFO("The cert: {} and key: {} have been successfully loaded!", ssl_config->pemfile, ssl_config->privfile);
 
         return ssl_config;
     }

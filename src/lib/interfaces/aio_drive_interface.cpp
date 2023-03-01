@@ -53,9 +53,10 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include "include/iomgr.hpp"
-#include "include/aio_drive_interface.hpp"
-#include "include/iomgr_config.hpp"
+#include <iomgr/iomgr.hpp>
+#include "interfaces/aio_drive_interface.hpp"
+#include "iomgr_config.hpp"
+#include "reactor.hpp"
 
 namespace iomgr {
 #ifdef __APPLE__

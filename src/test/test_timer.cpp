@@ -11,8 +11,8 @@
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 
-#include <iomgr.hpp>
-#include "io_environment.hpp"
+#include <iomgr/iomgr.hpp>
+#include <iomgr/io_environment.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -68,7 +68,7 @@ void glob_setup() {
     g_iters = SISL_OPTIONS["num_timers"].as< uint64_t >();
     g_need_time_check = SISL_OPTIONS["time_check"].as< bool >();
 
-    ioenvironment.with_iomgr(g_io_threads, g_is_spdk);
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_io_threads, .is_spdk = g_is_spdk});
 }
 
 void glob_teardown() { iomanager.stop(); }

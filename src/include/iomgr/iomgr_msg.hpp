@@ -22,8 +22,7 @@
 #include <sisl/utility/enum.hpp>
 #include <sisl/utility/atomic_counter.hpp>
 #include <sisl/utility/obj_life_counter.hpp>
-#include "reactor.hpp"
-#include "iomgr_types.hpp"
+#include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 

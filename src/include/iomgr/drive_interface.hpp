@@ -23,8 +23,8 @@
 #include <unordered_map>
 #include <mutex>
 
-#include "io_interface.hpp"
-#include "iomgr_types.hpp"
+#include <iomgr/io_interface.hpp>
+#include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 ENUM(drive_interface_type, uint8_t, aio, spdk, uring)

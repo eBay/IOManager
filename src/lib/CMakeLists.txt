@@ -18,33 +18,38 @@ find_package(zmarok-semver REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
-set (IOMGR_SRC
-      iomgr.cpp
-      reactor.cpp
-      reactor_epoll.cpp
-      reactor_spdk.cpp
-      iomgr_timer.cpp
-      interfaces/drive_interface.cpp
-      interfaces/aio_drive_interface.cpp
-      interfaces/spdk_drive_interface.cpp
-      interfaces/uring_drive_interface.cpp
-      interfaces/generic_interface.cpp
-      interfaces/spdk_nvmf_interface.cpp
-      interfaces/grpc_interface.cpp
-      io_environment.cpp
-      )
-add_library (iomgr ${IOMGR_SRC})
-
-list(APPEND IOMGR_LIB_DEPS
+set(COMMON_DEPS
       liburing::liburing
-      grpc_internal::grpc_internal
-      evhtp::evhtp
       sisl::sisl
       spdk::spdk
+    )
+
+add_subdirectory(interfaces)
+add_subdirectory(spdk)
+add_subdirectory(epoll)
+
+set(IOMGR_OBJECTS
+    $<TARGET_OBJECTS:iomgr_config> 
+    $<TARGET_OBJECTS:iomgr_interfaces> 
+    $<TARGET_OBJECTS:iomgr_spdk> 
+    $<TARGET_OBJECTS:iomgr_epoll>
+    io_environment.cpp
+    iomgr.cpp
+    iomgr_timer.cpp
+    reactor.cpp
+)
+add_library(iomgr_config OBJECT)
+
+add_library (iomgr STATIC ${IOMGR_OBJECTS})
+
+set(IOMGR_LIB_DEPS
+      ${COMMON_DEPS}
+      grpc_internal::grpc_internal
+      evhtp::evhtp
     )
 
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 
 include ("${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake")
-settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR} iomgr iomgr_config.fbs)
+settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR}/generated iomgr_config iomgr_config.fbs)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})

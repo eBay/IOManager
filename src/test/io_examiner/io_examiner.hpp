@@ -9,7 +9,7 @@
 
 #include <sisl/fds/bitset.hpp>
 #include <sisl/utility/enum.hpp>
-#include "iomgr.hpp"
+#include <iomgr/iomgr.hpp>
 
 namespace iomgr {
 static constexpr uint16_t init_crc_16 = 0x8005;
@@ -86,7 +86,7 @@ public:
     IOExaminer(const uint32_t num_threads, const bool integrated_mode) : m_integrated_mode{integrated_mode} {
         RELEASE_ASSERT_EQ(integrated_mode, false, "Integrated mode not supported");
         m_vol_info.reserve(100);
-        if (!integrated_mode) { iomanager.start(num_threads, false /* is_spdk */); }
+        if (!integrated_mode) { iomanager.start(iomgr_params{.num_threads = num_threads, .is_spdk = false}); }
     }
 
     virtual ~IOExaminer() {

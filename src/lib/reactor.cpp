@@ -21,9 +21,9 @@ extern "C" {
 
 #include <sisl/logging/logging.h>
 #include <sisl/fds/obj_allocator.hpp>
-#include "include/iomgr.hpp"
-#include "include/reactor_epoll.hpp"
-#include "include/iomgr_config.hpp"
+#include <iomgr/iomgr.hpp>
+#include "epoll/reactor_epoll.hpp"
+#include "iomgr_config.hpp"
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -74,21 +74,6 @@ void IOReactor::run(int worker_slot_num, loop_type_t ltype, const std::string& n
 }
 
 void IOReactor::init() {
-#if 0
-    if (!iomanager.is_interface_registered()) {
-        if (!wait_for_iface_register) {
-            REACTOR_LOG(INFO, base, , "iomgr interfaces are not registered yet and not requested to wait, ",
-                        "it will not be an IO Reactor");
-            return;
-        }
-        REACTOR_LOG(INFO, base, ,
-                    "IOManager interfaces are not registered yet, waiting for interfaces to get registered");
-        iomanager.wait_for_interface_registration();
-        REACTOR_LOG(TRACE, iomgr, ,
-                    "All interfaces are registered to IOManager, can proceed with this thread initialization");
-    }
-#endif
-
     m_metrics = std::make_unique< IOThreadMetrics >(m_reactor_name);
 
     // Create a new IO lightweight thread (if need be) and add it to its list, notify everyone about the new thread
