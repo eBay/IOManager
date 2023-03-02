@@ -141,7 +141,7 @@ static uint32_t get_app_mem_limit() {
     uint32_t system_ram_mb = 512u;
 #else
     uint32_t system_ram_mb = UINT_MAX;
-    if (IM_DYNAMIC_CONFIG(iomem.app_mem_size_mb) != 0) { system_ram_mb = IM_DYNAMIC_CONFIG(iomem.app_mem_size); }
+    if (auto const mem_size = IM_DYNAMIC_CONFIG(iomem.app_mem_size_mb); mem_size != 0) { system_ram_mb = mem_size; }
     if (auto commit_size = get_committable_mem_mb(); commit_size > 0ul) {
         system_ram_mb = std::min((commit_size >> 1), system_ram_mb);
     }
