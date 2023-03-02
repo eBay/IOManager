@@ -142,9 +142,9 @@ public:
      *  num_threads: Total number of worker reactors to start with. Expected to be > 0
      *  is_spdk: Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
      *  automatically started as spdk worker reactors.
-     *  app_mem_size_mb: If the application using IOManager to be limited to specific size. If not specified takes
+     *  app_mem_size_mb: If the application using IOManager to be limited to specific size. If set to `0` takes
      *  system memory into account.
-     *  hugepage_size_mb: Huge page size to be allocated. If not specified, will use system huge page size restriction
+     *  hugepage_size_mb: Huge page size to be allocated. If set to `0`, will use system huge page size restriction
      * @param notifier [OPTONAL] A callback every time a new reactor is started or stopped. This will be called from the
      * reactor thread which is starting or stopping.
      * @param iface_adder [OPTIONAL] Callback to add interface by the caller during iomanager start. If null, then

@@ -13,12 +13,11 @@ find_package(flatbuffers REQUIRED)
 find_package(grpc_internal REQUIRED)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
-find_package(evhtp REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
-set(COMMON_DEPS
+list(APPEND COMMON_DEPS
       liburing::liburing
       sisl::sisl
       spdk::spdk
@@ -42,11 +41,13 @@ add_library(iomgr_config OBJECT)
 
 add_library (iomgr STATIC ${IOMGR_OBJECTS})
 
-set(IOMGR_LIB_DEPS
+list(APPEND IOMGR_LIB_DEPS
       ${COMMON_DEPS}
       grpc_internal::grpc_internal
-      evhtp::evhtp
     )
+if (${evhtp_FOUND})
+    list(APPEND IOMGR_LIB_DEPS evhtp::evhtp)
+endif()
 
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 
