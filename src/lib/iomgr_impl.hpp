@@ -4,6 +4,8 @@
 namespace iomgr {
 class IOManagerImpl {
 public:
+    virtual ~IOManagerImpl() = default;
+
     virtual void pre_interface_init() = 0;
     virtual void post_interface_init() = 0;
     virtual sys_thread_id_t create_reactor(const std::string& name, loop_type_t loop_type, int slot_num,
