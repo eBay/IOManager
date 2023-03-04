@@ -21,7 +21,9 @@
 extern "C" {
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
+#ifdef WITH_SPDK
 #include <spdk/thread.h>
+#endif
 }
 namespace iomgr {
 
