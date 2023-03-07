@@ -31,16 +31,36 @@
 
 #include <iomgr/iomgr.hpp>
 #include "iomgr_impl.hpp"
+#ifdef WITH_SPDK
 #include "spdk/iomgr_impl_spdk.hpp"
+#endif
 #include "epoll/iomgr_impl_epoll.hpp"
 #include "interfaces/aio_drive_interface.hpp"
+#ifdef WITH_SPDK
 #include "interfaces/spdk_drive_interface.hpp"
+#endif
 #include "interfaces/uring_drive_interface.hpp"
 
 #include "iomgr_helper.hpp"
 #include "iomgr_config.hpp"
 #include "epoll/reactor_epoll.hpp"
+#ifdef WITH_SPDK
 #include "spdk/reactor_spdk.hpp"
+
+// Must be included after sisl headers to avoid macro definition clash
+extern "C" {
+#include <spdk/log.h>
+#include <spdk/env.h>
+#include <spdk/thread.h>
+#include <spdk/bdev.h>
+#include <spdk/env_dpdk.h>
+#include <spdk/init.h>
+#include <spdk/rpc.h>
+#include <rte_errno.h>
+#include <rte_mempool.h>
+#include <rte_malloc.h>
+}
+#endif
 
 SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
