@@ -52,7 +52,7 @@ struct spdk_thread_timer_info {
     uint64_t term_num = 0;
     spdk_poller* poller = nullptr;
     std::shared_ptr< spdk_timer_info > tinfo;
-    io_thread_t owner_thread;
+    io_fiber_t owner_fiber;
 };
 
 typedef std::shared_ptr< spdk_thread_timer_info > spdk_thread_timer_ptr;
@@ -88,8 +88,6 @@ struct IODevice;
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
 using timer_backing_handle_t = std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, spdk_timer_ptr >;
 using timer_handle_t = std::pair< timer*, timer_backing_handle_t >;
-// using timer_handle_t =
-//    std::variant< timer_heap_t::handle_type, std::shared_ptr< IODevice >, spdk_timer_info*, spdk_thread_timer_info* >;
 static const timer_handle_t null_timer_handle = timer_handle_t(nullptr, std::shared_ptr< IODevice >(nullptr));
 
 /**
@@ -138,7 +136,7 @@ public:
     virtual void stop() = 0;
 
 protected:
-    bool is_thread_local() const { return std::holds_alternative< io_thread_t >(m_scope); }
+    bool is_thread_local() const { return std::holds_alternative< io_fiber_t >(m_scope); }
 
 protected:
     std::mutex m_list_mutex;   // Mutex that protects list and set

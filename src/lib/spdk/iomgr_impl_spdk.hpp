@@ -10,8 +10,8 @@ public:
     IOManagerSpdkImpl(uint64_t total_hugepage_size);
     void pre_interface_init() override;
     void post_interface_init() override;
-    sys_thread_id_t create_reactor(const std::string& name, loop_type_t loop_type, int slot_num,
-                                   thread_state_notifier_t&& notifier) override;
+    sys_thread_id_t create_reactor_impl(const std::string& name, loop_type_t loop_type, uint32_t num_fibers,
+                                        int slot_num, thread_state_notifier_t&& notifier) override;
     void pre_interface_stop() override;
     void post_interface_stop() override;
 
@@ -23,9 +23,11 @@ private:
 private:
     shared< SpdkMemPool > m_mempool;
     uint64_t m_total_hugepage_size;
-    bool m_spdk_reinit_needed{false};
+    bool m_spdk_prepared{false};
     bool m_is_cpu_pinning_enabled{false};
-    bool m_do_init_bdev{false};
+    bool m_do_init_bdev{true};
+
+    static bool g_spdk_env_prepared;
 };
 
 } // namespace iomgr

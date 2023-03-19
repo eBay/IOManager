@@ -32,6 +32,11 @@
 #include <unistd.h>
 #endif
 
+#ifdef __APPLE__
+#include <aio.h>
+#include <sys/uio.h>
+#endif
+
 #include <sisl/fds/buffer.hpp>
 #include <sisl/metrics/metrics.hpp>
 
@@ -46,246 +51,63 @@ static constexpr int max_batch_iocb_count = 4;
 static constexpr int max_batch_iov_cnt = IOV_MAX;
 
 #ifdef __linux__
-struct iocb_info_t : public iocb {
-    bool is_read;
-    char* user_data;
-    uint32_t size;
-    uint64_t offset;
-    int fd;
-    iovec* iov_ptr = nullptr;
-    iovec iovs[max_batch_iov_cnt];
-    int iovcnt;
-    uint32_t resubmit_cnt = 0;
+using kernel_iocb_t = struct iocb;
+#elif defined(__APPLE__)
+using kernel_iocb_t = aiocb_t;
+#endif
 
-    std::string to_string() const {
-        return fmt::format("is_read={}, size={}, offset={}, fd={}, iovcnt={}", is_read, size, offset, fd, iovcnt);
-    }
-};
-
-// inline iocb_info_t* to_iocb_info(user_io_info_t* p) { return container_of(p, iocb_info_t, user_io_info); }
-struct iocb_batch_t {
-    std::array< iocb_info_t*, max_batch_iocb_count > iocb_info;
-    int n_iocbs = 0;
-
-    iocb_batch_t() = default;
-
-    void reset() { n_iocbs = 0; }
-
-    std::string to_string() const {
-        std::stringstream ss;
-        ss << "Batch of " << n_iocbs << " : ";
-        for (auto i = 0; i < n_iocbs; ++i) {
-            auto i_info = iocb_info[i];
-            ss << "{(" << i << ") -> " << i_info->to_string() << " } ";
-        }
-        return ss.str();
-    }
-
-    struct iocb** get_iocb_list() {
-        return (struct iocb**)&iocb_info[0];
-    }
-};
-
-template < typename T, typename Container = std::deque< T > >
-class iterable_stack : public std::stack< T, Container > {
-    using std::stack< T, Container >::c;
-
-public:
-    // expose just the iterators of the underlying container
-    auto begin() { return std::begin(c); }
-    auto end() { return std::end(c); }
-
-    auto begin() const { return std::begin(c); }
-    auto end() const { return std::end(c); }
+struct drive_aio_iocb : public drive_iocb {
+    drive_aio_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset) :
+            drive_iocb{iface, iodev, op_type, size, offset} {}
+    kernel_iocb_t kernel_iocb;
 };
 
 struct IODevice;
 class IOReactor;
 struct aio_thread_context {
-    struct io_event events[MAX_COMPLETIONS] = {{}};
-    int ev_fd = 0;
-    io_context_t ioctx = 0;
-    std::stack< iocb_info_t* > iocb_free_list;
-    std::queue< iocb_info_t* > iocb_retry_list;
-    iocb_batch_t cur_iocb_batch;
-    bool timer_set = false;
-    uint64_t post_alloc_iocb = 0;
-    uint64_t submitted_aio = 0;
-    uint64_t max_submitted_aio;
-    std::shared_ptr< IODevice > ev_io_dev = nullptr; // fd info after registering with IOManager
-    poll_cb_idx_t poll_cb_idx;
+public:
+    std::array< io_event, MAX_COMPLETIONS > m_events;
+    int m_ev_fd{0};
+    io_context_t m_ioctx{0};
+    std::queue< drive_aio_iocb* > m_iocb_pending_list;
 
-    ~aio_thread_context() {
-        if (ev_fd) { close(ev_fd); }
-        io_destroy(ioctx);
+    std::array< kernel_iocb_t*, max_batch_iocb_count > m_iocb_batch;
+    uint32_t m_cur_batch_size{0};
 
-        while (!iocb_retry_list.empty()) {
-            auto info = iocb_retry_list.front();
-            iocb_retry_list.pop();
-            free_iocb((struct iocb*)info);
-        }
+    shared< IODevice > m_ev_io_dev; // fd info after registering with IOManager
+    poll_cb_idx_t m_poll_cb_idx;
+    bool m_timer_set{false};
 
-        while (!iocb_free_list.empty()) {
-            auto info = iocb_free_list.top();
-            delete info;
-            iocb_free_list.pop();
-        }
-    }
+    uint64_t m_submitted_ios{0};
 
-    void iocb_info_prealloc(uint32_t count) {
-        for (auto i = 0u; i < count; ++i) {
-            iocb_free_list.push(new iocb_info_t());
-        }
-        max_submitted_aio = count;
-    }
+public:
+    aio_thread_context();
+    ~aio_thread_context();
 
-    bool can_be_batched(int iovcnt) {
-        return ((iovcnt <= max_batch_iov_cnt) && (cur_iocb_batch.n_iocbs < max_batch_iocb_count));
-    }
+    drive_aio_iocb* prep_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, char* data, uint64_t size,
+                              uint64_t offset);
+    drive_aio_iocb* prep_iocb_v(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, const iovec* iov,
+                                int iovcnt, uint32_t size, uint64_t offset);
 
-    bool can_submit_aio() { return submitted_aio < max_submitted_aio ? true : false; }
-
-    iocb_info_t* alloc_iocb(uint32_t iovcnt = 0) {
-        iocb_info_t* info;
-        if (!iocb_free_list.empty()) {
-            info = iocb_free_list.top();
-            iocb_free_list.pop();
-        } else {
-            info = new iocb_info_t();
-            ++post_alloc_iocb;
-        }
-        if (iovcnt > max_batch_iov_cnt) {
-            info->iov_ptr = new iovec[iovcnt];
-        } else {
-            info->iov_ptr = info->iovs;
-        }
-        return info;
-    }
-
-    void dec_submitted_aio();
-
+    bool add_to_batch(drive_aio_iocb* diocb);
+    bool can_submit_io() const;
     void inc_submitted_aio(int count);
-
-    void push_retry_list(struct iocb* iocb) { iocb_retry_list.push(static_cast< iocb_info_t* >(iocb)); }
-
-    struct iocb* pop_retry_list() {
-        if (!iocb_retry_list.empty()) {
-            auto info = iocb_retry_list.front();
-            iocb_retry_list.pop();
-            return (static_cast< iocb* >(info));
-        }
-        return nullptr;
-    }
-
-    void free_iocb(struct iocb* iocb) {
-        auto info = static_cast< iocb_info_t* >(iocb);
-        if (info->iov_ptr != info->iovs) { delete (info->iov_ptr); }
-        info->iov_ptr = nullptr;
-        if (post_alloc_iocb == 0) {
-            iocb_free_list.push(info);
-        } else {
-            --post_alloc_iocb;
-            delete info;
-        }
-    }
-
-    void prep_iocb_for_resubmit(struct iocb* iocb) {
-        auto info = static_cast< iocb_info_t* >(iocb);
-        auto cookie = iocb->data;
-        if (info->is_read) {
-            if (info->user_data) {
-                io_prep_pread(iocb, info->fd, info->user_data, info->size, info->offset);
-            } else {
-                io_prep_preadv(iocb, info->fd, info->iov_ptr, info->iovcnt, info->offset);
-            }
-        } else {
-            if (info->user_data) {
-                io_prep_pwrite(iocb, info->fd, info->user_data, info->size, info->offset);
-            } else {
-                io_prep_pwritev(iocb, info->fd, info->iov_ptr, info->iovcnt, info->offset);
-            }
-        }
-        io_set_eventfd(iocb, ev_fd);
-        iocb->data = cookie;
-    }
-
-    struct iocb* prep_iocb(bool batch_io, int fd, bool is_read, const char* data, uint32_t size, uint64_t offset,
-                           void* cookie) {
-        auto i_info = alloc_iocb();
-        i_info->is_read = is_read;
-        i_info->user_data = (char*)data;
-        i_info->size = size;
-        i_info->offset = offset;
-        i_info->fd = fd;
-        i_info->iovcnt = 0;
-
-        struct iocb* iocb = static_cast< struct iocb* >(i_info);
-        (is_read) ? io_prep_pread(iocb, fd, (void*)data, size, offset)
-                  : io_prep_pwrite(iocb, fd, (void*)data, size, offset);
-        io_set_eventfd(iocb, ev_fd);
-        iocb->data = cookie;
-
-        LOGTRACE("Issuing IO info: {}, batch? = {}", i_info->to_string(), batch_io);
-        if (batch_io) {
-            assert(can_be_batched(0));
-            cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
-        }
-        return iocb;
-    }
-
-    struct iocb* prep_iocb_v(bool batch_io, int fd, bool is_read, const iovec* iov, int iovcnt, uint32_t size,
-                             uint64_t offset, uint8_t* cookie) {
-        auto i_info = alloc_iocb(iovcnt);
-
-        i_info->is_read = is_read;
-        i_info->user_data = nullptr;
-        i_info->size = size;
-        i_info->offset = offset;
-        i_info->fd = fd;
-        i_info->iovcnt = iovcnt;
-        memcpy(&i_info->iov_ptr[0], iov, sizeof(iovec) * iovcnt);
-        iov = i_info->iov_ptr;
-
-        struct iocb* iocb = static_cast< struct iocb* >(i_info);
-        if (batch_io) {
-            // In case of batch io we need to copy the iovec because caller might free the iovec resuling in
-            // corrupted data
-            cur_iocb_batch.iocb_info[cur_iocb_batch.n_iocbs++] = i_info;
-            LOGTRACE("cur_iocb_batch.n_iocbs = {} ", cur_iocb_batch.n_iocbs);
-        }
-        (is_read) ? io_prep_preadv(iocb, fd, iov, iovcnt, offset) : io_prep_pwritev(iocb, fd, iov, iovcnt, offset);
-        io_set_eventfd(iocb, ev_fd);
-        iocb->data = cookie;
-
-        LOGTRACE("Issuing IO info: {}, batch? = {}", i_info->to_string(), batch_io);
-        return iocb;
-    }
-
-    iocb_batch_t move_cur_batch() {
-        auto ret = cur_iocb_batch;
-        cur_iocb_batch.reset();
-        return ret;
-    }
+    void dec_submitted_aio();
+    void reset_batch();
+    static drive_aio_iocb* to_drive_iocb(kernel_iocb_t* kiocb);
 };
 
-class AioDriveInterfaceMetrics : public sisl::MetricsGroup {
+class AioDriveInterfaceMetrics : public DriveInterfaceMetrics {
 public:
     explicit AioDriveInterfaceMetrics(const char* inst_name = "AioDriveInterface") :
-            sisl::MetricsGroup("AioDriveInterface", inst_name) {
-        REGISTER_COUNTER(completion_errors, "Aio Completion errors");
-        REGISTER_COUNTER(write_io_submission_errors, "Aio write submission errors", "io_submission_errors",
-                         {"io_direction", "write"});
-        REGISTER_COUNTER(read_io_submission_errors, "Aio read submission errors", "io_submission_errors",
-                         {"io_direction", "read"});
+            DriveInterfaceMetrics{"AioDriveInterface", inst_name} {
         REGISTER_COUNTER(retry_io_eagain_error, "Retry IOs count because of kernel eagain");
         REGISTER_COUNTER(queued_aio_slots_full, "Count of IOs queued because of aio slots full");
 
         // TODO: This shouldn't be a counter, but part of get_status(), but we haven't setup one for iomgr, so keeping
         // as a metric as of now. Once added, will remove this counter/gauge.
         REGISTER_COUNTER(retry_list_size, "Retry list size", sisl::_publish_as::publish_as_gauge);
-
         REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
-        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
         register_me_to_farm();
     }
 
@@ -302,53 +124,50 @@ public:
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
 
-    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                      bool part_of_batch = false) override;
-    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
-    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void fsync(IODevice* iodev, uint8_t* cookie) override {
-        // LOGMSG_ASSERT(false, "fsync on aio drive interface is not supported");
-        if (m_comp_cb) m_comp_cb(0, cookie);
+    folly::Future< bool > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                       bool part_of_batch = false) override;
+    folly::Future< bool > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                     bool part_of_batch = false) override;
+    folly::Future< bool > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset);
+    folly::Future< bool > queue_fsync(IODevice* iodev) override {
+        LOGWARN("fsync on aio drive interface is not supported");
+        return folly::makeFuture< bool >(false);
     }
+
     virtual void submit_batch() override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
+    DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
+
     static std::vector< int > s_poll_interval_table;
     static void init_poll_interval_table();
 
 private:
-    void init_iface_thread_ctx(const io_thread_t& thr) override;
-    void clear_iface_thread_ctx(const io_thread_t& thr) override;
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void init_iface_reactor_context(IOReactor*) override;
+    void clear_iface_reactor_context(IOReactor*) override;
 
     void handle_completions();
 
-    /* return true if it queues io.
-     * return false if it do completion callback for error.
+    // Returns true if it is able to submit, else false
+    bool submit_io(drive_aio_iocb* diocb);
+    void issue_pending_ios();
+    void push_to_pending_list(drive_aio_iocb* diocb, bool because_no_slot);
+
+    /* return true if it is requeued the io and it will process later
+     * return false if given up and completed the io.
      */
-    bool handle_io_failure(struct iocb* iocb);
-    void retry_io();
-    void push_retry_list(struct iocb* iocb, const bool no_slot);
-    bool resubmit_iocb_on_err(struct iocb* iocb);
+    bool handle_io_failure(drive_aio_iocb* diocb, int error);
+    void complete_io(drive_aio_iocb* diocb);
 
 private:
-    static thread_local aio_thread_context* t_aio_ctx;
+    static thread_local std::unique_ptr< aio_thread_context > t_aio_ctx;
     std::mutex m_open_mtx;
     AioDriveInterfaceMetrics m_metrics;
 };
-#else
-class AioDriveInterface : public DriveInterface {
-public:
-    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr) {}
-    void init_iface_thread_ctx(const io_thread_t& thr) override;
-    void clear_iface_thread_ctx(const io_thread_t& thr) override;
-};
-#endif
 } // namespace iomgr

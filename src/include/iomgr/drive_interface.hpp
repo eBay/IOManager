@@ -17,12 +17,13 @@
 
 #include <fcntl.h>
 #include <cstdint>
-#include <nlohmann/json.hpp>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <mutex>
-
+#include <nlohmann/json.hpp>
+#include <folly/futures/Future.h>
+#include <boost/fiber/all.hpp>
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 
@@ -53,6 +54,28 @@ struct drive_attributes {
     }
 };
 
+class DriveInterfaceMetrics : public sisl::MetricsGroup {
+public:
+    explicit DriveInterfaceMetrics(const char* group_name, const char* inst_name) :
+            sisl::MetricsGroup(group_name, inst_name) {
+        REGISTER_COUNTER(completion_errors, "IO Completion errors");
+        REGISTER_COUNTER(write_io_submission_errors, "write submission errors", "io_submission_errors",
+                         {"io_direction", "write"});
+        REGISTER_COUNTER(read_io_submission_errors, "read submission errors", "io_submission_errors",
+                         {"io_direction", "read"});
+        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
+
+        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding unmap cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_fsync_cnt, "outstanding fsync cnt", sisl::_publish_as::publish_as_gauge);
+        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding write zero cnt", sisl::_publish_as::publish_as_gauge);
+    }
+
+    virtual ~DriveInterfaceMetrics() { deregister_me_from_farm(); }
+};
+
+class DriveInterface;
 struct drive_iocb {
 #ifndef NDEBUG
     static std::atomic< uint64_t > _iocb_id_counter;
@@ -61,8 +84,30 @@ struct drive_iocb {
     typedef std::array< iovec, inlined_iov_count > inline_iov_array;
     typedef std::unique_ptr< iovec[] > large_iov_array;
 
-    drive_iocb(IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset, void* cookie) :
-            iodev(iodev), op_type(op_type), size(size), offset(offset), user_cookie(cookie) {
+    IODevice* iodev;
+    DriveInterface* iface;
+    DriveOpType op_type;
+    uint64_t size;
+    uint64_t offset;
+    uint64_t unique_id{0}; // used by io watchdog
+    int iovcnt = 0;
+    int64_t result{-1};
+    std::variant< io_interface_comp_cb_t, folly::Promise< bool >, boost::fibers::promise< bool > > completion{nullptr};
+    uint32_t resubmit_cnt{0};
+    uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
+#ifndef NDEBUG
+    uint64_t iocb_id;
+#endif
+    Clock::time_point op_start_time;
+    Clock::time_point op_submit_time;
+
+private:
+    // Inline or additional memory
+    std::variant< inline_iov_array, large_iov_array, char* > user_data;
+
+public:
+    drive_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset) :
+            iodev(iodev), iface{iface}, op_type(op_type), size(size), offset(offset) {
 #ifndef NDEBUG
         iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -141,13 +186,19 @@ struct drive_iocb {
         offset += result;
     }
 
+    io_interface_comp_cb_t& cb_comp_promise() { return std::get< io_interface_comp_cb_t >(completion); }
+    folly::Promise< bool >& folly_comp_promise() { return std::get< folly::Promise< bool > >(completion); }
+    boost::fibers::promise< bool >& fiber_comp_promise() {
+        return std::get< boost::fibers::promise< bool > >(completion);
+    }
+
     std::string to_string() const {
         std::string str;
 #ifndef NDEBUG
         str = fmt::format("id={} ", iocb_id);
 #endif
-        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={} ", (void*)this, enum_name(op_type), size,
-                           offset, iovcnt);
+        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, unique_id={},", (void*)this,
+                           enum_name(op_type), size, offset, iovcnt, unique_id);
 
         if (has_iovs()) {
             auto ivs = get_iovs();
@@ -159,26 +210,6 @@ struct drive_iocb {
         }
         return str;
     }
-
-    IODevice* iodev;
-    DriveOpType op_type;
-    uint64_t size;
-    uint64_t offset;
-    void* user_cookie = nullptr;
-    int iovcnt = 0;
-    int64_t result{-1};
-    bool sync_io_completed{false};
-    uint32_t resubmit_cnt{0};
-    uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
-#ifndef NDEBUG
-    uint64_t iocb_id;
-#endif
-    Clock::time_point op_start_time;
-    Clock::time_point op_submit_time;
-
-private:
-    // Inline or additional memory
-    std::variant< inline_iov_array, large_iov_array, char* > user_data;
 };
 
 class IOWatchDog;
@@ -189,25 +220,28 @@ public:
     virtual drive_interface_type interface_type() const = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
 
-    virtual void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                             bool part_of_batch = false) = 0;
-    virtual void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                              uint8_t* cookie, bool part_of_batch = false) = 0;
-    virtual void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                            bool part_of_batch = false) = 0;
-    virtual void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                             uint8_t* cookie, bool part_of_batch = false) = 0;
-    virtual void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                             bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                              bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                               uint64_t offset, bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                             bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                              uint64_t offset, bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                              bool part_of_batch = false) = 0;
+    virtual folly::Future< bool > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) = 0;
+    virtual folly::Future< bool > queue_fsync(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
-    virtual ssize_t sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
-    virtual ssize_t sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
-    virtual void write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) = 0;
-    virtual void fsync(IODevice* iodev, uint8_t* cookie) = 0;
+
+    virtual void sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) = 0;
+    virtual void sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) = 0;
 
     virtual void attach_completion_cb(const io_interface_comp_cb_t& cb) { m_comp_cb = cb; }
+    virtual DriveInterfaceMetrics& get_metrics() = 0;
 
     static drive_attributes get_attributes(const std::string& dev_name);
     static drive_type get_drive_type(const std::string& dev_name);
@@ -216,6 +250,8 @@ public:
     static io_device_ptr open_dev(const std::string& dev_name, int oflags);
     static std::shared_ptr< DriveInterface > get_iface_for_drive(const std::string& dev_name, const drive_type dtype);
     static size_t get_size(IODevice* iodev);
+    static void increment_outstanding_counter(drive_iocb* iocb);
+    static void decrement_outstanding_counter(drive_iocb* iocb);
 
 protected:
     virtual size_t get_dev_size(IODevice* iodev) = 0;

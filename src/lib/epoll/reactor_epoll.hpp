@@ -25,18 +25,18 @@ public:
 
 private:
     const char* loop_type() const override { return "Epoll"; }
-    bool reactor_specific_init_thread(const io_thread_t& thr) override;
-    void reactor_specific_exit_thread(const io_thread_t& thr) override;
+    void init_impl() override;
+    void stop_impl() override;
     void listen() override;
     void on_msg_fd_notification();
     void process_messages();
     void on_user_iodev_notification(IODevice* iodev, int event);
-    int add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    int remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) override;
-    bool put_msg(iomgr_msg* msg) override;
+    int add_iodev_impl(const io_device_ptr& iodev) override;
+    int remove_iodev_impl(const io_device_ptr& iodev) override;
+    void put_msg(iomgr_msg* msg) override;
 
     bool is_tight_loop_reactor() const override { return false; };
-    bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const override;
+    bool is_iodev_addable(const io_device_const_ptr& iodev) const override;
 
     void idle_time_wakeup_poller();
 

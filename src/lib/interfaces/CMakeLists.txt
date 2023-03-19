@@ -6,7 +6,6 @@ target_sources(iomgr_interfaces PRIVATE
         drive_interface.cpp
         generic_interface.cpp
         spdk_drive_interface.cpp
-        spdk_nvmf_interface.cpp
         uring_drive_interface.cpp
       )
 target_link_libraries(iomgr_interfaces ${COMMON_DEPS})

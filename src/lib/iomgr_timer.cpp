@@ -57,12 +57,12 @@ void timer_epoll::stop() {
     }
     // Now close the common timer
     if (m_common_timer_io_dev && (m_common_timer_io_dev->fd() != -1)) {
-        iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev, wait_type_t::spin);
+        iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev, true /* wait */);
         close(m_common_timer_io_dev->fd());
     }
     // Now iterate over recurring timer list and remove them
     for (auto& iodev : m_recurring_timer_iodevs) {
-        iomanager.generic_interface()->remove_io_device(iodev, wait_type_t::spin);
+        iomanager.generic_interface()->remove_io_device(iodev, true /* wait */);
         close(iodev->fd());
     }
     m_stopped = true;
@@ -85,7 +85,7 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
         }
         raw_iodev = iodev.get();
 
-        // Associate recurring timer to the fd since they have 1-1 relotionship for fd
+        // Associate recurring timer to the fd since they have 1-1 relationship for fd
         iodev->tinfo = std::make_unique< timer_info >(nanos_after, cookie, std::move(timer_fn), this);
 
         PROTECTED_REGION(m_recurring_timer_iodevs.insert(iodev)); // Add to list of recurring timer fds
@@ -118,16 +118,22 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
     if (thandle == null_timer_handle) return;
     std::visit(overloaded{
-                   [&](std::shared_ptr< IODevice > iodev) {
+                   [&](cshared< IODevice >& iodev) {
                        LOGINFO("Removing recurring {} timer fd {} device ",
                                (is_thread_local() ? "per-thread" : "global"), iodev->fd());
                        if (iodev->fd() != -1) {
-                           if (wait_to_cancel) {
-                               iomanager.generic_interface()->remove_io_device(iodev, wait_type_t::spin);
+                           auto remove_lambda = [iodev]() {
+                               // We run sync version of remove_io_device, since we need to close fd only after all
+                               // reactors removed the fd.
+                               iomanager.generic_interface()->remove_io_device(iodev, true);
                                close(iodev->fd());
+                           };
+
+                           if (is_thread_local() || wait_to_cancel) {
+                               remove_lambda();
                            } else {
-                               iomanager.generic_interface()->remove_io_device(iodev, wait_type_t::callback,
-                                                                               [iodev]() { close(iodev->fd()); });
+                               iomanager.run_on_forget(reactor_regex::random_worker, fiber_regex::syncio_only,
+                                                       remove_lambda);
                            }
                        }
                        PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
@@ -145,8 +151,10 @@ void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
         return; // Nothing is expired. TODO: Update some spurious counter
     }
 
-    // Call the corresponding timer that timer is armed
-    ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev);
+    // Call the corresponding timer that timer is armed for number of times it has expired
+    for (uint64_t i{0}; i < exp_count; ++i) {
+        ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev);
+    }
 }
 
 void timer_epoll::on_timer_armed(IODevice* iodev) {
@@ -180,7 +188,7 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
             (is_recurring ? "recurring" : "non-recurring"), (is_thread_local() ? "per-thread" : "global"), fd);
     auto iodev =
         iomanager.generic_interface()->alloc_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr, m_scope, nullptr);
-    iomanager.generic_interface()->add_io_device(iodev, wait_to_setup ? wait_type_t::spin : wait_type_t::no_wait);
+    iomanager.generic_interface()->add_io_device(iodev, wait_to_setup);
     if (iodev == nullptr) {
         close(fd);
         return nullptr;
@@ -203,24 +211,18 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
     if (recurring && !is_thread_local()) {
         // In case of global timer, create multi-threaded version for recurring and let the timer callback choose to
         // run only one. For non-recurring, pick a random io thread and from that point onwards its single threaded
-        iomanager.run_on(
-            thread_regex::all_worker,
-            [stinfo](io_thread_addr_t taddr) {
-                stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo));
-            },
-            wait_to_schedule ? wait_type_t::spin : wait_type_t::no_wait);
+        iomanager.run_on(wait_to_schedule, reactor_regex::all_worker,
+                         [stinfo]() { stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo)); });
+
         thdl = timer_handle_t(this, stinfo);
         PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
     } else {
-        auto sched_in_thread = [stinfo](io_thread_addr_t taddr) {
-            stinfo->single_thread_timer = create_register_spdk_thread_timer(stinfo);
-        };
+        auto sched_in_thread = [stinfo]() { stinfo->single_thread_timer = create_register_spdk_thread_timer(stinfo); };
 
         if (is_thread_local()) {
-            sched_in_thread(0);
+            sched_in_thread();
         } else {
-            iomanager.run_on(thread_regex::random_worker, sched_in_thread,
-                             wait_to_schedule ? wait_type_t::spin : wait_type_t::no_wait);
+            iomanager.run_on(wait_to_schedule, reactor_regex::random_worker, sched_in_thread);
         }
         thdl = timer_handle_t(this, stinfo);
         PROTECTED_REGION(m_active_thread_timer_infos.insert(stinfo));
@@ -257,13 +259,10 @@ void timer_spdk::stop() {
 }
 
 void timer_spdk::cancel_thread_timer(const spdk_timer_ptr& st_info, bool wait_to_cancel) const {
-    iomanager.run_on(
-        st_info->single_thread_timer->owner_thread,
-        [st_info](io_thread_addr_t taddr) {
-            unregister_spdk_thread_timer(st_info->single_thread_timer);
-            st_info->single_thread_timer = nullptr;
-        },
-        wait_to_cancel ? wait_type_t::spin : wait_type_t::no_wait);
+    iomanager.run_on(wait_to_cancel, st_info->single_thread_timer->owner_fiber, [st_info]() {
+        unregister_spdk_thread_timer(st_info->single_thread_timer);
+        st_info->single_thread_timer = nullptr;
+    });
 }
 
 void timer_spdk::cancel_global_timer(const spdk_timer_ptr& stinfo) const {
@@ -273,13 +272,10 @@ void timer_spdk::cancel_global_timer(const spdk_timer_ptr& stinfo) const {
 
     // Do a non-wait version of broadcast unconditionally, so that we can avoid poller deregister and listening on them
     // issue on spdk thread
-    iomanager.run_on(
-        thread_regex::all_worker,
-        [stinfo](io_thread_addr_t taddr) {
-            unregister_spdk_thread_timer(stinfo->get_thread_timer_info());
-            stinfo->delete_thread_timer_info();
-        },
-        wait_type_t::no_wait);
+    iomanager.run_on_forget(reactor_regex::all_worker, [stinfo]() {
+        unregister_spdk_thread_timer(stinfo->get_thread_timer_info());
+        stinfo->delete_thread_timer_info();
+    });
 }
 
 spdk_thread_timer_ptr timer_spdk::create_register_spdk_thread_timer(const spdk_timer_ptr& stinfo) {
@@ -318,7 +314,7 @@ spdk_thread_timer_ptr spdk_timer_info::get_thread_timer_info() {
 
 spdk_thread_timer_info::spdk_thread_timer_info(const spdk_timer_ptr& sti) {
     tinfo = sti;
-    owner_thread = iomanager.iothread_self();
+    owner_fiber = iomanager.iofiber_self();
 }
 
 bool spdk_thread_timer_info::call_timer_cb_once() {

@@ -37,6 +37,8 @@ set(IOMGR_OBJECTS
     iomgr.cpp
     iomgr_timer.cpp
     reactor.cpp
+    watchdog.cpp
+    fiber_picker.cpp
 )
 add_library(iomgr_config OBJECT)
 

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <semver200.h>
+#include <boost/fiber/all.hpp>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
@@ -66,6 +67,7 @@ ENUM(iomgr_state, uint16_t,
 struct iomgr_params {
     size_t num_threads{0};
     bool is_spdk{false};
+    uint32_t num_fibers{4};
     uint32_t app_mem_size_mb{0};
     uint32_t hugepage_size_mb{0};
 };
@@ -76,35 +78,6 @@ struct overloaded : Ts... {
 };
 template < class... Ts >
 overloaded(Ts...) -> overloaded< Ts... >;
-
-struct synchronized_async_method_ctx {
-public:
-    std::mutex m;
-    std::condition_variable cv;
-    ssize_t outstanding_count{0};
-    void* custom_ctx{nullptr};
-
-    ~synchronized_async_method_ctx() {
-        DEBUG_ASSERT_EQ(outstanding_count, 0, "Expecting no outstanding ref of method");
-    }
-
-private:
-    static void done(void* arg, [[maybe_unused]] int rc) {
-        synchronized_async_method_ctx* pmctx = static_cast< synchronized_async_method_ctx* >(arg);
-        {
-            std::unique_lock< std::mutex > lk{pmctx->m};
-            --pmctx->outstanding_count;
-        }
-        pmctx->cv.notify_one();
-    }
-
-public:
-    auto get_done_cb() {
-        std::unique_lock< std::mutex > lk{m};
-        ++outstanding_count;
-        return (synchronized_async_method_ctx::done);
-    }
-};
 
 /**
  * @brief Get the IOManager version
@@ -120,6 +93,8 @@ public:
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
+    friend class AioDriveInterface;
+    friend class SpdkDriveInterface;
     friend class IOManagerSpdkImpl;
     friend class IOManagerEpollImpl;
 
@@ -129,11 +104,9 @@ public:
     }
 
     // TODO: Make this a dynamic config (albeit non-hotswap)
-    static constexpr uint32_t max_msg_modules{64};
-    static constexpr uint32_t max_io_threads{1024}; // Keep in mind increasing this cause increased mem footprint
+    static constexpr uint32_t max_io_fibers{1024}; // Keep in mind increasing this cause increased mem footprint
 
-    /********* Start/Stop Control Related Operations ********/
-
+    /////////////////////////////////// Start/Stop Control Related Operations //////////////////////////////
     /**
      * @brief Start the IOManager. This is expected to be among the first call while application is started to enable
      * for it to do IO. Without this start, any other iomanager call would fail.
@@ -165,31 +138,44 @@ public:
      * and thus will return only after the loop is exited
      *
      * @param loop_type_t Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll) etc..
+     * @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent
+     * sync io, but it comes at the cost of more stack memory. Defaults to 4
      * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
      * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
      * needs to ignore this device.
      * @param addln_notifier Callback which notifies after reactor is ready or shutting down (with true or false)
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
-    void run_io_loop(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
+    void run_io_loop(loop_type_t loop_type, uint32_t num_fibers = 4, const iodev_selector_t& iodev_selector = nullptr,
                      thread_state_notifier_t&& addln_notifier = nullptr) {
-        _run_io_loop(-1, loop_type, "", iodev_selector, std::move(addln_notifier));
+        _run_io_loop(-1, loop_type, num_fibers, "", iodev_selector, std::move(addln_notifier));
     }
 
-    void create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier = nullptr);
+    /// @brief Create a new thread and start reactor loop of given type in that thread. This created reactor will be
+    /// added to list of user reactors.
+    /// @param name : Name of the reactor (used for logging)
+    /// @param loop_type : Type of loop (tight loop), can be a combination either, TIGHT_LOOP | ADAPTIVE_LOOP or
+    /// INTERRUPT_LOOP | ADAPTIVE_LOOP or
+    /// @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent
+    /// sync io, but it comes at the cost of more stack memory. Defaults to 4
+    /// @param notifier : [OPTIONAL] Callback called from the new reactor thread with bool (start/stop)
+    void create_reactor(const std::string& name, loop_type_t loop_type, uint32_t num_fibers = 4u,
+                        thread_state_notifier_t&& notifier = nullptr);
 
     /**
      * @brief Convert the current thread to new user reactor
      *
      * @param is_tloop_reactor Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll)
-     * @param start_loop Should the API create a IO loop or is user themselves running an io loop.
+     * @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent sync
+     * io, but it comes at the cost of more stack memory. Defaults to 4
      * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
      * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
      * needs to ignore this device.
      * @param addln_notifier  Callback which notifies after reactor is ready or shutting down (with true or false)
      * parameter. This is per reactor override of the same callback as iomanager start.
      */
-    void become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
+    void become_user_reactor(loop_type_t loop_type, uint32_t num_fibers = 4u,
+                             const iodev_selector_t& iodev_selector = nullptr,
                              thread_state_notifier_t&& addln_notifier = nullptr);
 
     /**
@@ -198,8 +184,7 @@ public:
      */
     void stop_io_loop();
 
-    /********* Interface/Device Related Operations ********/
-
+    ////////////////////////////////// Interface/Device Related Operations ////////////////////////////////
     /**
      * @brief Add a new IOInterface to the iomanager. All iodevice added to IOManager have to be part of some interface.
      * By default iomanager automatically creates genericinterface and driveinterfaces. Any additional interface can
@@ -207,11 +192,10 @@ public:
      *
      * @param iface Shared pointer to the IOInterface to be added
      * @param iface_scope [OPTIONAL] Scope of which reactors these interface is to be added. By default it will be
-     * added to all IO reactors. While it can accept any thread_regex, really it is not practical to use
-     * thread_regex::random_user or thread_regex::any_worker.
+     * added to all IO reactors. While it can accept any reactor_regex, really it is not practical to use
+     * reactor_regex::random_user or reactor_regex::any_worker.
      */
-    void add_interface(std::shared_ptr< IOInterface > iface, thread_regex iface_scope = thread_regex::all_io);
-    std::shared_ptr< DriveInterface > get_drive_interface(const drive_interface_type type);
+    void add_interface(cshared< IOInterface >& iface, reactor_regex iface_scope = reactor_regex::all_io);
 
     /***
      * @brief Remove the IOInterface from the iomanager. Once removed, it will remove all the devices added to that
@@ -219,159 +203,126 @@ public:
      *
      * @param iface: Shared pointer to the IOInterface to be removed.
      */
-    void remove_interface(const std::shared_ptr< IOInterface >& iface);
+    void remove_interface(cshared< IOInterface >& iface);
 
-    /**
-     * @brief Reschedule the IO to a different device. This is used for SCST interfaces and given that it could be
-     * depreacted, this API is not used actively anymore. One can do this with using run_on() APIs
-     *
-     * @param iodev
-     * @param event
-     */
-    void device_reschedule(const io_device_ptr& iodev, int event);
+    ////////////////////////////////// Message Passing Section ////////////////////////////////
+    /// @brief Direct method to execute the spdk method into a fiber (running on remote reactor). This method doesn't
+    /// wait for any success or its return, it will simply fire it and return.
+    /// @param fiber: Fiber to run this method on. It could be current fiber in case it executes the method right away
+    /// @param fn: Function to execute
+    /// @param context: Any void context
+    int run_on_forget(io_fiber_t fiber, spdk_msg_signature_t fn, void* context);
 
-    // Direct run_on method for spdk without any msg creation
-    int run_on(const io_thread_t& thread, spdk_msg_signature_t fn, void* context);
+    int run_on_forget(io_fiber_t fiber, const auto& fn) {
+        return send_msg(fiber, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+    }
 
-    /**
-     * @brief Run the lambda/function passed on specific thread and optionally wait for its completion. If the
-     * caller is same as destination thread, it will run the method right away.
-     *
-     * @param thread The IO Thread returned from the destination iothread_self() to which the method is to run
-     * @param fn  Method to run
-     * @param wait_type wait_type A variant supporting 4 types,
-     *         1. nowait - Fire and forget, no need of waiting for the function to be completed.
-     *         2. sleep -  Wait by sleeping till the thread that executing completed running the method
-     *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
-     *                     the running method, then program will be deadlocked.
-     *         3. spin  -  Wait by spinning till the thread that executing completed running the method. While
-     *                     waiting, it can process other messages. So potentially stack could grow. If the calling
-     *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
-     *         4. Closure - Closure to be called after method is run in the caller thread.
-     *
-     * @return 1 for able to schedule the method to run, 0 otherwise
-     */
-    int run_on(const io_thread_t& thread, const auto& fn, const wait_type_t wtype = wait_type_t::no_wait,
-               const run_on_closure_t& cb_wait_closure = nullptr) {
-        bool sent{false};
-        if (wtype == wait_type_t::no_wait) {
-            // make rvalue copy of completion func
-            sent = send_msg(thread,
-                            iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id,
-                                              std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
-        } else if (wtype == wait_type_t::callback) {
-            DEBUG_ASSERT(0, "run_on direct thread with async closure is not supported yet");
-        } else if ((wtype == wait_type_t::spin) && IOManager::instance().am_i_io_reactor()) {
-            auto smsg = spin_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent = send_msg_and_wait(thread, std::dynamic_pointer_cast< sync_msg_base >(smsg));
+    int run_on_forget(reactor_regex rr, fiber_regex fr, const auto& fn) {
+        static thread_local std::vector< boost::fibers::future< bool > > s_future_list;
+        return multicast_msg(rr, fr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
+                             s_future_list);
+    }
+
+    int run_on_forget(reactor_regex rr, const auto& fn) { return run_on_forget(rr, fiber_regex::main_only, fn); }
+
+    int run_on_wait(io_fiber_t fiber, const auto& fn) {
+        DEBUG_ASSERT_EQ(am_i_sync_io_capable(), true,
+                        "It is prohibited to be waiting from a main fiber of io reactor as it can cause deadlock. If "
+                        "wait is needed, message can be executed on sync_io fibers");
+        return send_msg_and_wait(
+            fiber, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+    }
+
+    int run_on_wait(reactor_regex rr, fiber_regex fr, const auto& fn) {
+        DEBUG_ASSERT_EQ(am_i_sync_io_capable(), true,
+                        "It is prohibited to be waiting from a main fiber of io reactor as it can cause deadlock. If "
+                        "wait is needed, message can be executed on sync_io fibers");
+        return multicast_msg_and_wait(
+            rr, fr, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+    }
+
+    int run_on_wait(reactor_regex rr, const auto& fn) { return run_on_wait(rr, fiber_regex::main_only, fn); }
+
+    template < typename... Args >
+    int run_on(bool wait, Args&&... args) {
+        if (wait) {
+            return run_on_wait(args...);
         } else {
-            auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent = send_msg_and_wait(thread, std::dynamic_pointer_cast< sync_msg_base >(smsg));
-        }
-
-        return (sent ? 1 : 0);
-    }
-
-    /**
-     * @brief Run the lambda/function passed on multipled threads and optionally wait for theirs completion. If the
-     * caller is one among the destination thread, it will run the method right away in that thread.
-     *
-     * @param thread_regex Thread regex representing all the threads the method needs to run
-     * @param fn  Method to run (can be a lambda or std::function)
-     * @param wait_type wait_type A variant supporting 4 types,
-     *         1. nowait - Fire and forget, no need of waiting for the function to be completed.
-     *         2. sleep -  Wait by sleeping till all threads that executing completed running the method
-     *                     NOTE: This needs to be used carefully because if the caller sends another signal inside
-     *                     the running method, then program will be deadlocked.
-     *         3. spin  -  Wait by spinning till all threads that executing completed running the method. While
-     *                     waiting, it can process other messages. So potentially stack could grow. If the calling
-     *                     thread is not an IO thread, it sleeps (as if wait_type = sleep) instead of spinning
-     *         4. Closure - Closure to be called after method is run on all the threads.  Callback may come from another
-     *                      besides invoking one.
-     *
-     * @return number of threads this method was run.
-     */
-    int run_on(const thread_regex r, const auto& fn, const wait_type_t wtype = wait_type_t::no_wait,
-               const run_on_closure_t& cb_wait_closure = nullptr) {
-        int sent_count{0};
-
-        if ((wtype == wait_type_t::callback) && cb_wait_closure) {
-            struct Context {
-                std::atomic< ssize_t > pending_count{};
-            };
-            auto ctx{std::make_shared< Context >()};
-
-            auto temp_cb = [cb_func = std::move(fn), ctx,
-                            wait_closure = std::move(cb_wait_closure)](io_thread_addr_t addr) mutable {
-                cb_func(addr);
-                if (ctx->pending_count.fetch_sub(1, std::memory_order_relaxed) == 1) {
-                    std::atomic_thread_fence(std::memory_order_acquire);
-                    wait_closure();
-                }
-            };
-
-            sent_count =
-                multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, temp_cb));
-            if ((sent_count == 0) ||
-                (ctx->pending_count.fetch_add(sent_count, std::memory_order_relaxed) == -sent_count)) {
-                std::atomic_thread_fence(std::memory_order_acquire);
-                cb_wait_closure();
-            }
-
-            return sent_count;
-        }
-
-        // If the closure is not provided, its same as no_wait, so switch to no_wait
-        if ((wtype == wait_type_t::no_wait) || (wtype == wait_type_t::callback)) {
-            sent_count = multicast_msg(r, iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn));
-        } else if ((wtype == wait_type_t::spin) && IOManager::instance().am_i_io_reactor()) {
-            auto smsg = spin_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent_count = multicast_msg_and_wait(r, std::dynamic_pointer_cast< sync_msg_base >(smsg));
-        } else {
-            auto smsg = sync_iomgr_msg::create(iomgr_msg_type::RUN_METHOD, m_internal_msg_module_id, fn);
-            sent_count = multicast_msg_and_wait(r, std::dynamic_pointer_cast< sync_msg_base >(smsg));
-        }
-
-        if (cb_wait_closure) { cb_wait_closure(); }
-        return sent_count;
-    }
-
-    void run_async_method_synchronized(thread_regex r, const auto& fn) {
-        auto ctx{std::make_shared< synchronized_async_method_ctx >()};
-
-        const int executed_on{run_on(r, [&fn, ctx]([[maybe_unused]] auto taddr) {
-            fn(*ctx);
-            {
-                std::unique_lock< std::mutex > lk{ctx->m};
-                --(ctx->outstanding_count);
-            }
-            ctx->cv.notify_one();
-        })};
-
-        {
-            std::unique_lock< std::mutex > lk{ctx->m};
-            ctx->outstanding_count += executed_on;
-            ctx->cv.wait(lk, [ctx] { return (ctx->outstanding_count == 0); });
+            return run_on_forget(args...);
         }
     }
 
-    /********* Access related methods ***********/
-    const io_thread_t& iothread_self() const;
-    IOReactor* this_reactor() const;
-    IOThreadMetrics& this_thread_metrics();
-
+    ///////////////////////////// Access related methods /////////////////////////////
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
+    uint32_t num_workers() const { return m_num_workers; }
+    bool is_spdk_mode() const { return m_is_spdk; }
+    bool is_uring_capable() const { return m_is_uring_capable; }
 
+    //////////////////////////// Reactor/Fiber related methods ///////////////////////
     bool am_i_io_reactor() const;
     bool am_i_tight_loop_reactor() const;
     bool am_i_worker_reactor() const;
     bool am_i_adaptive_reactor() const;
+    bool am_i_sync_io_capable() const;
     void set_my_reactor_adaptive(bool adaptive);
+    io_fiber_t iofiber_self() const;
+    IOReactor* this_reactor() const;
+    std::vector< io_fiber_t > sync_io_capable_fibers() const;
 
-    uint32_t num_workers() const { return m_num_workers; }
-    bool is_spdk_mode() const { return m_is_spdk; }
-    bool is_uring_capable() const { return m_is_uring_capable; }
+    /******** IO Buffer related ********/
+    uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
+    uint8_t* iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
+    uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
+    size_t iobuf_size(uint8_t* buf) const;
+    size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
+    size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
+
+    /******** Timer related Operations ********/
+    timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
+                                         timer_callback_t&& timer_fn);
+    timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, reactor_regex r,
+                                         timer_callback_t&& timer_fn, bool wait_to_schedule = false);
+    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false);
+    void set_poll_interval(const int interval);
+    int get_poll_interval() const;
+
+    IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
+    void drive_interface_submit_batch();
+
+    IOThreadMetrics& this_thread_metrics();
+
+private:
+    IOManager();
+    ~IOManager();
+
+    void foreach_interface(const interface_cb_t& iface_cb);
+    void create_worker_reactors();
+    void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name,
+                      const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
+
+    void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
+    void reactor_stopped();                                     // Notification that IO thread is reliquished
+
+    void _pick_reactors(reactor_regex r, const auto& cb);
+    void all_reactors(const auto& cb);
+    void specific_reactor(uint32_t reactor_id, const auto& cb);
+    IOReactor* round_robin_reactor() const;
+
+    std::shared_ptr< DriveInterface > get_drive_interface(drive_interface_type type);
+    void add_drive_interface(cshared< DriveInterface >& iface, reactor_regex iface_scope = reactor_regex::all_io);
+
+    /******** IO Thread related infra ********/
+    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
+
+    int send_msg(io_fiber_t fiber, iomgr_msg* msg);
+    int send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg);
+
+    int multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
+                      std::vector< boost::fibers::future< bool > >& out_msgs_list);
+    int multicast_msg_and_wait(reactor_regex rr, fiber_regex fr, iomgr_msg* msg);
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -408,60 +359,6 @@ public:
         }
     }
 
-    /******** IO Thread related infra ********/
-    io_thread_t make_io_thread(IOReactor* reactor);
-    thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
-
-    /******** Message related infra ********/
-    bool send_msg(const io_thread_t& thread, iomgr_msg* msg);
-    bool send_msg_and_wait(const io_thread_t& thread, const std::shared_ptr< sync_msg_base >& smsg);
-    int multicast_msg(thread_regex r, iomgr_msg* msg);
-    int multicast_msg_and_wait(thread_regex r, const std::shared_ptr< sync_msg_base >& smsg);
-
-    msg_module_id_t register_msg_module(const msg_handler_t& handler);
-    msg_handler_t& get_msg_module(msg_module_id_t id);
-
-    /******** IO Buffer related ********/
-    uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
-    void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
-    uint8_t* iobuf_pool_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
-    void iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag tag = sisl::buftag::common);
-    uint8_t* iobuf_realloc(uint8_t* buf, size_t align, size_t new_size);
-    size_t iobuf_size(uint8_t* buf) const;
-    size_t soft_mem_threshold() const { return m_mem_soft_threshold_size; }
-    size_t aggressive_mem_threshold() const { return m_mem_aggressive_threshold_size; }
-
-    /******** Timer related Operations ********/
-    timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie,
-                                         timer_callback_t&& timer_fn);
-    timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, thread_regex r,
-                                         timer_callback_t&& timer_fn, bool wait_to_schedule = false);
-    void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false);
-    void set_poll_interval(const int interval);
-    int get_poll_interval() const;
-
-    IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
-    void drive_interface_submit_batch();
-
-private:
-    IOManager();
-    ~IOManager();
-
-    void foreach_interface(const interface_cb_t& iface_cb);
-    void create_reactors();
-    void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
-                      const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
-
-    void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
-    void reactor_stopped();                                     // Notification that IO thread is reliquished
-
-    void _pick_reactors(thread_regex r, const auto& cb);
-    void all_reactors(const auto& cb);
-    void specific_reactor(int thread_num, const auto& cb);
-    IOReactor* round_robin_reactor() const;
-
-    void add_drive_interface(std::shared_ptr< DriveInterface > iface, thread_regex iface_scope = thread_regex::all_io);
-
 private:
     // size_t m_expected_ifaces = inbuilt_interface_count;        // Total number of interfaces expected
     iomgr_state m_state{iomgr_state::stopped};                   // Current state of IOManager
@@ -490,12 +387,8 @@ private:
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
 
-    std::mutex m_msg_hdlrs_mtx;
-    std::array< msg_handler_t, max_msg_modules > m_msg_handlers;
-    uint32_t m_msg_handlers_count{0};
-    msg_module_id_t m_internal_msg_module_id;
     thread_state_notifier_t m_common_thread_state_notifier{nullptr};
-    sisl::IDReserver m_thread_idx_reserver;
+    sisl::IDReserver m_fiber_ordinal_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};

@@ -14,6 +14,7 @@
  **************************************************************************/
 #pragma once
 
+#include <boost/fiber/all.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/fds/sparse_vector.hpp>
@@ -29,13 +30,11 @@ struct spdk_nvmf_qpair;
 struct spdk_bdev;
 
 namespace iomgr {
-#define REACTOR_LOG(level, mod, thr_addr, __l, ...)                                                                    \
+#define REACTOR_LOG(level, __l, ...)                                                                                   \
     {                                                                                                                  \
-        LOG##level##MOD_FMT(BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                            \
-                            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                   \
+        LOG##level##MOD_FMT(iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {            \
                                 fmt::format_to(fmt::appender(buf), "[{}:{}] ", file_name(__FILE__), __LINE__);         \
-                                fmt::format_to(fmt::appender(buf), "[IOThread {}.{}] ", m_reactor_num,                 \
-                                               (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr)));             \
+                                fmt::format_to(fmt::appender(buf), "[IOThread {}] ", m_reactor_num);                   \
                                 fmt::format_to(fmt::appender(buf), __m, args...);                                      \
                                 return true;                                                                           \
                             }),                                                                                        \
@@ -120,38 +119,39 @@ class IOReactor;
 class IOInterface;
 class DriveInterface;
 
-struct io_thread {
-    backing_thread_t thread_impl; // What type of thread it is backed by
-    io_thread_idx_t thread_idx;   // Index into the io thread list. This is internal and don't decipher this
-    io_thread_addr_t thread_addr; // Index within the reactor list
-    IOReactor* reactor;           // Reactor this thread is currently attached to
-
-    friend class IOManager;
-
-    bool is_spdk_thread_impl() const { return std::holds_alternative< spdk_thread* >(thread_impl); }
-    spdk_thread* spdk_thread_impl() const { return std::get< spdk_thread* >(thread_impl); }
-    io_thread(IOReactor* reactor);
-    io_thread() = default;
-};
-
 /****************** Reactor related ************************/
 struct iomgr_msg;
 struct timer;
+struct IOFiber;
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
+    friend class IOFiber;
     friend class SpdkDriveInterface;
 
 public:
     static thread_local IOReactor* this_reactor;
 
 public:
+    IOReactor();
     virtual ~IOReactor();
-    virtual void run(int worker_num, loop_type_t loop_type, const std::string& name = nullptr,
-                     const iodev_selector_t& iodev_selector = nullptr,
-                     thread_state_notifier_t&& thread_state_notifier = nullptr);
-    bool is_io_reactor() const { return !(m_io_thread_count.testz()); };
-    bool deliver_msg(io_thread_addr_t taddr, iomgr_msg* msg, IOReactor* sender_reactor);
+    void run(int worker_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name = nullptr,
+             const iodev_selector_t& iodev_selector = nullptr,
+             thread_state_notifier_t&& thread_state_notifier = nullptr);
+    void stop();
 
+    int add_iodev(const io_device_ptr& iodev);
+    int remove_iodev(const io_device_ptr& iodev);
+
+    void deliver_msg(io_fiber_t fiber, iomgr_msg* msg);
+
+    io_fiber_t iofiber_self() const;
+    reactor_idx_t reactor_idx() const { return m_reactor_num; }
+    io_fiber_t pick_fiber(fiber_regex r);
+    io_fiber_t main_fiber() const;
+    std::vector< io_fiber_t > sync_io_capable_fibers() const;
+
+    // TODO: Can we find more effective way to find out if reactor is started without using atomics
+    bool is_io_reactor() const { return !(m_io_fiber_count.testz()); };
     virtual bool is_tight_loop_reactor() const = 0;
     virtual bool is_worker() const { return (m_worker_slot_num != -1); }
     virtual bool is_adaptive_loop() const { return m_is_adaptive_loop; }
@@ -160,29 +160,13 @@ public:
         assert(is_worker());
         return m_worker_slot_num;
     }
-    virtual const io_thread_t& iothread_self() const;
-    virtual reactor_idx_t reactor_idx() const { return m_reactor_num; }
-    virtual bool listen_once();
+
     virtual void listen() = 0;
 
-    void start_io_thread(const io_thread_t& thr);
-    void stop_io_thread(const io_thread_t& thr);
-
-    const io_thread_t& addr_to_thread(io_thread_addr_t addr);
-    int add_iodev(const io_device_const_ptr& iodev, const io_thread_t& thr);
-    int remove_iodev(const io_device_const_ptr& iodev, const io_thread_t& thr);
-
-    const std::vector< io_thread_t >& io_threads() const { return m_io_threads; }
-
-    virtual bool put_msg(iomgr_msg* msg) = 0;
-    virtual void init();
-    virtual void stop();
-    virtual bool is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const;
+    virtual bool is_iodev_addable(const io_device_const_ptr& iodev) const;
     virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
-    virtual void handle_msg(iomgr_msg* msg);
     virtual const char* loop_type() const = 0;
-    const io_thread_t& select_thread();
-    io_thread_idx_t default_thread_idx() const;
+
     void set_poll_interval(const int interval) { m_poll_interval = interval; }
     int get_poll_interval() const { return m_poll_interval; }
     poll_cb_idx_t register_poll_interval_cb(std::function< void(void) >&& cb);
@@ -191,18 +175,22 @@ public:
     void add_backoff_cb(can_backoff_cb_t&& cb);
     void attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb);
     void detach_iomgr_sentinel_cb();
+    virtual void handle_msg(iomgr_msg* msg);
 
 protected:
-    virtual bool reactor_specific_init_thread(const io_thread_t& thr) = 0;
-    virtual void reactor_specific_exit_thread(const io_thread_t& thr) = 0;
-    virtual int add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
-    virtual int remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) = 0;
+    virtual void init_impl() = 0;
+    virtual void stop_impl() = 0;
+    virtual void put_msg(iomgr_msg* msg) = 0;
+
+    virtual int add_iodev_impl(const io_device_ptr& iodev) = 0;
+    virtual int remove_iodev_impl(const io_device_ptr& iodev) = 0;
 
     void notify_thread_state(bool is_started);
-    // const io_thread_t& sthread_from_addr(io_thread_addr_t addr);
 
 private:
-    const io_thread_t& msg_thread(iomgr_msg* msg);
+    void init(uint32_t num_fibers);
+    bool listen_once();
+    void fiber_loop(io_fiber_t fiber);
     bool can_add_iface(const std::shared_ptr< IOInterface >& iface) const;
 
 protected:
@@ -210,7 +198,9 @@ protected:
 
 protected:
     std::unique_ptr< IOThreadMetrics > m_metrics;
-    sisl::atomic_counter< int32_t > m_io_thread_count = 0;
+    sisl::atomic_counter< int32_t > m_io_fiber_count{0};
+    boost::fibers::fiber_specific_ptr< IOFiber > m_this_fiber;
+
     int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
     bool m_user_controlled_loop = false;
@@ -226,32 +216,48 @@ protected:
     int m_poll_interval{-1};
     uint64_t m_total_op = 0;
 
-    std::vector< io_thread_t > m_io_threads; // List of io threads within the reactor
+    std::vector< std::unique_ptr< IOFiber > > m_io_fibers; // List of io threads within the reactor
     std::vector< std::function< void(void) > > m_poll_interval_cbs;
     std::vector< can_backoff_cb_t > m_can_backoff_cbs;
     uint64_t m_cur_backoff_delay_us{0};
     uint64_t m_backoff_delay_min_us{0};
     listen_sentinel_cb_t m_iomgr_sentinel_cb;
+    std::uniform_int_distribution< size_t > m_rand_fiber_dist;
+    std::uniform_int_distribution< size_t > m_rand_sync_fiber_dist;
+};
+
+struct IOFiber {
+    IOReactor* reactor; // Reactor this fiber is currently attached to
+    boost::fibers::fiber::id fiber_id;
+    boost::fibers::unbuffered_channel< iomgr_msg* > channel;
+    spdk_thread* spdk_thr{nullptr};
+    uint32_t ordinal;
+
+public:
+    IOFiber(IOReactor* r, uint32_t o) : reactor{r}, ordinal{o} {}
+
+    void start(const auto& channel_loop) {
+        boost::fibers::fiber([this, channel_loop]() {
+            fiber_id = boost::this_fiber::get_id();
+            reactor->m_this_fiber.reset(this);
+            channel_loop(this);
+        }).detach();
+    }
 };
 } // namespace iomgr
 
 namespace fmt {
 template <>
-struct formatter< iomgr::io_thread > {
+struct formatter< iomgr::IOFiber > {
     template < typename ParseContext >
     constexpr auto parse(ParseContext& ctx) {
         return ctx.begin();
     }
 
     template < typename FormatContext >
-    auto format(const iomgr::io_thread& t, FormatContext& ctx) {
-        if (std::holds_alternative< spdk_thread* >(t.thread_impl)) {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
-                             (void*)std::get< spdk_thread* >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
-        } else {
-            return format_to(fmt::appender(ctx.out()), "[addr={} idx={} reactor={}]",
-                             std::get< iomgr::reactor_idx_t >(t.thread_impl), t.thread_idx, t.reactor->reactor_idx());
-        }
+    auto format(const iomgr::IOFiber& f, FormatContext& ctx) {
+        return format_to(fmt::appender(ctx.out()), "[reactor={}]", f.reactor->reactor_idx());
     }
 };
+
 } // namespace fmt

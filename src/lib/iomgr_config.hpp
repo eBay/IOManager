@@ -38,7 +38,7 @@ public:
         bool is_modified = false;
         IM_SETTINGS_FACTORY().modifiable_settings([&is_modified](auto& s) {
             /* Read in path for cpu corelist, if it is not set already - first time */
-            auto& cpuset_path = s.cpuset_path;
+            auto& cpuset_path = s.io_env.cpuset_path;
             if (cpuset_path.empty()) {
                 cpuset_path = default_cpuset_path;
                 is_modified = true;
