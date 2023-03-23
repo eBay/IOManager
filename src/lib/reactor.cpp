@@ -194,12 +194,27 @@ int IOReactor::remove_iodev(const io_device_ptr& iodev) {
 }
 
 void IOReactor::fiber_loop(io_fiber_t fiber) {
-    while (m_keep_running) {
-        iomgr_msg* msg;
-        if (fiber->channel.pop(msg) == boost::fibers::channel_op_status::success) { handle_msg(msg); }
-        boost::this_fiber::yield();
+    iomgr_msg* msg;
+    while (fiber->channel.pop(msg) == boost::fibers::channel_op_status::success) {
+        REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
+        handle_msg(msg);
+
+        if (!m_keep_running) { break; }
+
+        // We handled a msg, so overflow msgs, it can be pushed at the tail of the fiber channel queue
+        if (!fiber->m_overflow_msgs.empty()) {
+            auto status = fiber->channel.try_push(fiber->m_overflow_msgs.front());
+            if (status != boost::fibers::channel_op_status::success) {
+                LOGMSG_ASSERT_EQ((int)status, (int)boost::fibers::channel_op_status::success,
+                                 "Moving msg from overflow to fiber loop channel has failed, unexpected");
+            } else {
+                fiber->m_overflow_msgs.pop();
+            }
+        }
     }
+    fiber->channel.close();
     m_io_fiber_count.decrement(1);
+    boost::this_fiber::yield();
 }
 
 io_fiber_t IOReactor::iofiber_self() const { return &(*m_this_fiber); };
@@ -249,7 +264,8 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
         if (msg->need_reply()) { msg->completed(); }
         iomgr_msg::free(msg);
     } else {
-        msg->m_dest_fiber->channel.push(msg);
+        auto status = msg->m_dest_fiber->channel.try_push(msg);
+        if (status == boost::fibers::channel_op_status::full) { msg->m_dest_fiber->m_overflow_msgs.push(msg); }
     }
 }
 

@@ -38,6 +38,8 @@ namespace iomgr {
 #define UNLOCK_IF_GLOBAL()                                                                                             \
     if (!is_thread_local()) m_list_mutex.unlock();
 
+std::atomic< int64_t > timer::s_pending_scheduled_canceled{0};
+
 timer_epoll::timer_epoll(const thread_specifier& scope) : timer(scope) {
     m_common_timer_io_dev = setup_timer_fd(false, true /* wait_to_setup */);
     if (!m_common_timer_io_dev) {
@@ -124,19 +126,7 @@ void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
                        LOGINFO("Removing recurring {} timer fd {} device ",
                                (is_thread_local() ? "per-thread" : "global"), iodev->fd());
                        if (iodev->fd() != -1) {
-                           auto remove_lambda = [iodev]() {
-                               // We run sync version of remove_io_device, since we need to close fd only after all
-                               // reactors removed the fd.
-                               iomanager.generic_interface()->remove_io_device(iodev, true);
-                               close(iodev->fd());
-                           };
-
-                           if (is_thread_local() || wait_to_cancel) {
-                               remove_lambda();
-                           } else {
-                               iomanager.run_on_forget(reactor_regex::random_worker, fiber_regex::syncio_only,
-                                                       remove_lambda);
-                           }
+                           iomanager.generic_interface()->remove_io_device(iodev, wait_to_cancel);
                        }
                        PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
                    },
@@ -177,7 +167,7 @@ void timer_epoll::on_timer_armed(IODevice* iodev) {
         }
         UNLOCK_IF_GLOBAL();
     } else {
-        iodev->tinfo->cb(iodev->tinfo->context);
+        if (!m_stop_pending) { iodev->tinfo->cb(iodev->tinfo->context); }
     }
 }
 

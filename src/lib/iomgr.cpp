@@ -186,6 +186,9 @@ void IOManager::stop() {
     m_global_user_timer.reset(nullptr);
     m_global_worker_timer.reset(nullptr);
 
+    // Wait for all pending timers cancellation to finish
+    timer::wait_for_pending();
+
     // Send all the threads to reliquish its io thread status
     run_on_wait(reactor_regex::all_io, [this]() { this_reactor()->stop(); });
 

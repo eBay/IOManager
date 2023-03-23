@@ -30,8 +30,8 @@ public:
     explicit IOInterface();
     virtual ~IOInterface();
 
-    virtual void add_io_device(const io_device_ptr& iodev, bool wait_to_add = false);
-    virtual void remove_io_device(const io_device_ptr& iodev, bool wait_to_remove = false);
+    virtual int add_io_device(const io_device_ptr& iodev, bool wait_to_add = false);
+    virtual int remove_io_device(const io_device_ptr& iodev, bool wait_to_remove = false);
     virtual void close_dev(const io_device_ptr& iodev);
     virtual std::string name() const = 0;
 

@@ -393,7 +393,7 @@ void UringDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iov
 }
 
 void UringDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || !t_uring_ch->can_submit()) {
+    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
         return KernelDriveInterface::sync_read(iodev, data, size, offset);
     }
 

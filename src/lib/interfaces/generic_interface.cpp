@@ -27,7 +27,7 @@ void IOInterface::close_dev(const io_device_ptr& iodev) {
     if (iodev->ready) { remove_io_device(iodev); }
 }
 
-void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
+int IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
     auto add_to_reactor = [this, iodev]() {
         auto reactor = iomanager.this_reactor();
         if (reactor) {
@@ -37,55 +37,88 @@ void IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
             LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
                       "an io thread");
         }
+        iodev->decrement_pending();
     };
 
+    auto post_add = [](IODevice* iodev) {
+        LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
+        iodev->ready = true;
+    };
+
+    int added_count{0};
     if (iodev->is_my_thread_scope()) {
         add_to_reactor();
+        ++added_count;
+        post_add(iodev.get());
     } else {
         {
             std::unique_lock lg(m_mtx);
             m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
         }
-        iomanager.run_on(wait_to_add, iodev->global_scope(), add_to_reactor);
+        if (wait_to_add) {
+            added_count = iomanager.run_on_wait(iodev->global_scope(), add_to_reactor);
+            post_add(iodev.get());
+        } else {
+            iodev->post_add_remove_cb = post_add;
+            added_count = iomanager.run_on_forget(iodev->global_scope(), add_to_reactor);
+            iodev->increment_pending(added_count);
+        }
     }
-    LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
-    iodev->ready = true;
+
+    return added_count;
 }
 
-void IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remove) {
+int IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remove) {
     if (!iodev->ready) {
         LOGINFO("Device {} is not added to IOManager. Ignoring this request", iodev->dev_id());
-        return;
+        return 0;
     }
 
     auto state = iomanager.get_state();
     if ((state != iomgr_state::running) && (state != iomgr_state::stopping)) {
         LOGDFATAL("Expected IOManager to be running or stopping state before we receive remove io device");
-        return;
+        return 0;
     }
 
     auto remove_from_reactor = [this, iodev]() {
         auto reactor = iomanager.this_reactor();
         if (reactor) {
-            LOGDEBUGMOD(iomgr, "IODev {} is being removed from thread {}.{}", iodev->dev_id(), reactor->reactor_idx());
+            LOGDEBUGMOD(iomgr, "IODev {} is being removed from reactor {}", iodev->dev_id(), reactor->reactor_idx());
             reactor->remove_iodev(iodev);
         } else {
             LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
                       "message to an io thread");
         }
+        iodev->decrement_pending();
     };
 
+    auto post_remove = [](IODevice* iodev) {
+        LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
+        iodev->close();
+        iodev->ready = false;
+    };
+
+    int removed_count{0};
     if (iodev->is_my_thread_scope()) {
         remove_from_reactor();
+        ++removed_count;
+        post_remove(iodev.get());
     } else {
         {
             std::unique_lock lg(m_mtx);
             m_iodev_map.erase(iodev->dev);
         }
-        iomanager.run_on(wait_to_remove, iodev->global_scope(), remove_from_reactor);
+
+        if (wait_to_remove) {
+            removed_count = iomanager.run_on_wait(iodev->global_scope(), remove_from_reactor);
+            post_remove(iodev.get());
+        } else {
+            iodev->post_add_remove_cb = post_remove;
+            removed_count = iomanager.run_on_forget(iodev->global_scope(), remove_from_reactor);
+            iodev->increment_pending(removed_count);
+        }
     }
-    LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
-    iodev->ready = false;
+    return removed_count;
 }
 
 void IOInterface::on_reactor_start(IOReactor* reactor) {

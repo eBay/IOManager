@@ -38,8 +38,9 @@ public:
     std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
     sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_fiber_ctx;
     bool ready{false};
-    std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
+    sisl::atomic_counter< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     drive_type dtype{drive_type::unknown};
+    std::function< void(IODevice*) > post_add_remove_cb{nullptr};
 
 #ifdef REFCOUNTED_OPEN_DEV
     sisl::atomic_counter< int > opened_count{0};
@@ -68,6 +69,22 @@ public:
     std::string dev_id() const;
     void clear();
     DriveInterface* drive_interface();
+
+    void decrement_pending(int32_t count = 1) {
+        if ((post_add_remove_cb != nullptr) && thread_op_pending_count.decrement_testz(count)) {
+            post_add_remove_cb(this);
+        }
+    }
+
+    void increment_pending(int32_t count = 1) {
+        if ((post_add_remove_cb != nullptr) && thread_op_pending_count.increment_test_eq(count, 0)) {
+            post_add_remove_cb(this);
+        }
+    }
+
+    void close() {
+        if (!is_spdk_dev()) { ::close(fd()); }
+    }
 };
 
 } // namespace iomgr

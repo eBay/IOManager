@@ -227,14 +227,17 @@ protected:
 };
 
 struct IOFiber {
-    IOReactor* reactor; // Reactor this fiber is currently attached to
-    boost::fibers::fiber::id fiber_id;
-    boost::fibers::unbuffered_channel< iomgr_msg* > channel;
-    spdk_thread* spdk_thr{nullptr};
-    uint32_t ordinal;
+    IOReactor* reactor;                                    // Reactor this fiber is currently attached to
+    boost::fibers::fiber::id fiber_id;                     // Boost specific fiber id
+    boost::fibers::buffered_channel< iomgr_msg* > channel; // Channel to exchange between main and this fiber
+    spdk_thread* spdk_thr{nullptr};                        // In case of spdk, each fiber becomes spdk thread
+    uint32_t ordinal;                                      // Global ordinal of this fiber (unique id across iomgr)
+    std::queue< iomgr_msg* > m_overflow_msgs;              // Overflow queue if msgs can't be put in channel
+
+    static constexpr size_t max_channel_cap{1024};
 
 public:
-    IOFiber(IOReactor* r, uint32_t o) : reactor{r}, ordinal{o} {}
+    IOFiber(IOReactor* r, uint32_t o) : reactor{r}, channel{max_channel_cap}, ordinal{o} {}
 
     void start(const auto& channel_loop) {
         boost::fibers::fiber([this, channel_loop]() {
