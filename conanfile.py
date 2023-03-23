@@ -19,15 +19,23 @@ class IOMgrConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        "grpc": ['True', 'False'],
+        "http": ['True', 'False'],
+        "spdk": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "with_http": ['none', 'evhtp'] ,
         }
     default_options = {
         'shared':       False,
         'fPIC':         True,
         'coverage':     False,
         'sanitize':     False,
+        'grpc':         True,
+        'http':         True,
+        'spdk':         True,
         'testing':      'full',
         'sisl:prerelease':   True,
+        'with_http':    'evhtp',
     }
 
     generators = "cmake", "cmake_find_package"
@@ -51,11 +59,14 @@ class IOMgrConan(ConanFile):
         self.requires("boost/1.79.0")
         self.requires("folly/2022.01.31.00")
         self.requires("grpc/1.48.0")
-        self.requires("grpc_internal/1.48.0")
+        if self.options.grpc:
+            self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
         self.requires("libevent/2.1.12")
-        self.requires("spdk/21.07.y")
-        self.requires("evhtp/1.2.18.2")
+        if self.options.spdk:
+            self.requires("spdk/21.07.y")
+        if self.options.http:
+            self.requires("evhtp/1.2.18.2")
         self.requires("zmarok-semver/1.1.0")
 
         self.requires("flatbuffers/1.12.0", override=True)
@@ -67,8 +78,8 @@ class IOMgrConan(ConanFile):
         definitions = {'CMAKE_TEST_TARGET': self.options.testing,
                        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
-        test_target = None
 
+        test_target = None
         run_tests = True
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
@@ -87,8 +98,11 @@ class IOMgrConan(ConanFile):
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
-        copy(self, "*.h", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
-        copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
+        copy(self, "*.h", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
+        if self.options.http:
+            copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
+        else:
+            copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), excludes="http_server.hpp", keep_path=True)
         copy(self, "*iomgr_config_generated.h", join(self.build_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
         copy(self, "*.a", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
         copy(self, "*.so", self.build_folder, join(self.package_folder, "lib"), keep_path=False)

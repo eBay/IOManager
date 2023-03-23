@@ -10,28 +10,29 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISIO
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
 
 find_package(flatbuffers REQUIRED)
-find_package(grpc_internal REQUIRED)
+find_package(grpc_internal)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
-find_package(evhtp REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
-link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
-
-set(COMMON_DEPS
+list(APPEND COMMON_DEPS
       liburing::liburing
       sisl::sisl
-      spdk::spdk
     )
+if (${spdk_FOUND})
+    link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
+    list (APPEND COMMON_DEPS spdk::spdk)
+endif ()
 
 add_subdirectory(interfaces)
-add_subdirectory(spdk)
 add_subdirectory(epoll)
+if (${spdk_FOUND})
+    add_subdirectory(spdk)
+endif ()
 
 set(IOMGR_OBJECTS
     $<TARGET_OBJECTS:iomgr_config> 
     $<TARGET_OBJECTS:iomgr_interfaces> 
-    $<TARGET_OBJECTS:iomgr_spdk> 
     $<TARGET_OBJECTS:iomgr_epoll>
     io_environment.cpp
     iomgr.cpp
@@ -40,15 +41,22 @@ set(IOMGR_OBJECTS
     watchdog.cpp
     fiber_picker.cpp
 )
+if (${spdk_FOUND})
+    list (APPEND IOMGR_OBJECTS $<TARGET_OBJECTS:iomgr_spdk> )
+endif()
 add_library(iomgr_config OBJECT)
 
-add_library (iomgr STATIC ${IOMGR_OBJECTS})
+add_library(iomgr ${IOMGR_OBJECTS})
 
-set(IOMGR_LIB_DEPS
+list(APPEND IOMGR_LIB_DEPS
       ${COMMON_DEPS}
-      grpc_internal::grpc_internal
-      evhtp::evhtp
     )
+if (${grpc_internal_FOUND})
+    list (APPEND IOMGR_LIB_DEPS grpc_internal::grpc_internal)
+endif()
+if (${evhtp_FOUND})
+    list(APPEND IOMGR_LIB_DEPS evhtp::evhtp)
+endif()
 
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 

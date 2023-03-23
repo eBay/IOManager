@@ -33,7 +33,9 @@
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/utility/enum.hpp>
 
+#ifdef WITH_SPDK
 #include <spdk/bdev.h>
+#endif
 
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/iomgr_msg.hpp>

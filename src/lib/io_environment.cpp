@@ -17,7 +17,9 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-function-type"
 #endif
+#ifdef WITH_EVHTP
 #include <iomgr/http_server.hpp>
+#endif
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic pop
 #endif
@@ -32,9 +34,13 @@ IOEnvironment::IOEnvironment() {
 }
 
 IOEnvironment::~IOEnvironment() {
+#ifdef WITH_EVHTP
     if (m_http_server) { m_http_server->stop(); }
+#endif
     if (m_file_watcher) { m_file_watcher->stop(); }
 }
+
+#ifdef WITH_EVHTP
 
 void IOEnvironment::restart_http_server() {
     m_http_server.reset();
@@ -65,6 +71,8 @@ IOEnvironment& IOEnvironment::with_http_server() {
 
     return get_instance();
 }
+
+#endif // #ifdef WITH_EVHTP
 
 IOEnvironment& IOEnvironment::with_file_watcher() {
     if (!m_file_watcher) {

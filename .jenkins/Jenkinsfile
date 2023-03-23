@@ -9,7 +9,6 @@ pipeline {
         STABLE_BRANCH = 'stable/v*'
         LAST_COMMITS = ''
         built_chain = ''
-        failed_pkg = ""
     }
 
     parameters {
@@ -185,6 +184,7 @@ pipeline {
             }
         }
 
+/* FIXME (bszmyd): Disabled till integration.
         stage("Downstream Build") {
             when { allOf {
                expression { (env.BRANCH_NAME == "${TARGET_BRANCH}") }
@@ -239,15 +239,18 @@ pipeline {
                 }
             }
         }
+*/
     }
 
     post {
         failure {
+/*
             script {
                 if ("${failed_pkg}" != "") {
                     slackSend color: '#E43237', channel: '#homestore-build', message: "@here IOManager's downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\n*Last 2 commits:* ```${LAST_COMMITS}```\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
                 }
             }
+*/
             slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
         }
         success {
