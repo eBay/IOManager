@@ -26,6 +26,8 @@ extern "C" {
 }
 
 namespace iomgr {
+bool IOManagerSpdkImpl::g_spdk_env_prepared{false};
+
 static bool is_cpu_pinning_enabled() {
     if (auto quota_file = std::ifstream("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"); quota_file.is_open()) {
         double quota, period, shares;
@@ -56,11 +58,11 @@ static void set_thread_name(const char* thread_name) {
 #endif
 }
 
-static constexpr std::string_view hugetlbfs_path = "/mnt/huge";
+static std::string hugetlbfs_path{"/mnt/huge"};
 
 #if 0
 static void hugetlbfs_umount() {
-    if (umount2(std::string(hugetlbfs_path).data(), MNT_FORCE)) {
+    if (umount2(hugetlbfs_path.data(), MNT_FORCE)) {
         LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs umount failed");
     }
@@ -99,7 +101,7 @@ IOManagerSpdkImpl::IOManagerSpdkImpl(uint64_t total_hugepage_size) :
         m_mempool{std::make_shared< SpdkMemPool >()}, m_total_hugepage_size{total_hugepage_size} {}
 
 void IOManagerSpdkImpl::pre_interface_init() {
-    m_do_init_bdev = !is_spdk_inited();
+    // m_do_init_bdev = !is_spdk_inited();
     m_is_cpu_pinning_enabled = is_cpu_pinning_enabled();
     start_spdk();
 
@@ -119,7 +121,7 @@ void IOManagerSpdkImpl::pre_interface_init() {
 void IOManagerSpdkImpl::post_interface_init() {
     if (m_do_init_bdev) {
         LOGINFO("Initializing all spdk subsystems");
-        iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t taddr) {
+        iomanager.run_on_forget(reactor_regex::least_busy_worker, [this]() {
             spdk_subsystem_init(
                 [](int rc, void* cb_arg) {
                     // Initialize rpc system
@@ -140,36 +142,36 @@ void IOManagerSpdkImpl::post_interface_init() {
                 (void*)this);
         });
         iomanager.wait_for_state(iomgr_state::running);
-        m_spdk_reinit_needed = false;
+        // m_spdk_prepared = true;
     }
 }
 
-bool IOManagerSpdkImpl::is_spdk_inited() const { return (!m_spdk_reinit_needed && !spdk_env_dpdk_external_init()); }
+bool IOManagerSpdkImpl::is_spdk_inited() const { return (m_spdk_prepared && !spdk_env_dpdk_external_init()); }
 
 void IOManagerSpdkImpl::start_spdk() {
     /* Check if /mnt/huge already exists. Create otherwise */
-    if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
+    if (!std::filesystem::exists(hugetlbfs_path)) {
         std::error_code ec;
-        if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
+        if (!std::filesystem::create_directory(hugetlbfs_path, ec)) {
             if (ec.value()) {
                 LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
                 throw std::runtime_error("Failed to create /mnt/huge");
             }
-            LOGINFO("{} already exists.", std::string(hugetlbfs_path));
+            LOGINFO("{} already exists.", hugetlbfs_path);
         } else {
             /* mount -t hugetlbfs nodev /mnt/huge */
-            if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+            if (mount("nodev", hugetlbfs_path.data(), "hugetlbfs", 0, "")) {
                 LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
                 throw std::runtime_error("Hugetlbfs mount failed");
             }
-            LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
+            LOGINFO("Mounted hugepages on {}", hugetlbfs_path);
         }
     } else { /* Remove old/garbage hugepages from /mnt/huge */
         std::uintmax_t n = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(std::string(hugetlbfs_path))) {
+        for (const auto& entry : std::filesystem::directory_iterator(hugetlbfs_path)) {
             n += std::filesystem::remove_all(entry.path());
         }
-        LOGINFO("Deleted {} old hugepages from {}", n, std::string(hugetlbfs_path));
+        LOGINFO("Deleted {} old hugepages from {}", n, hugetlbfs_path);
     }
 
     // Set the spdk log level based on module spdk
@@ -178,68 +180,71 @@ void IOManagerSpdkImpl::start_spdk() {
     spdk_log_set_print_level(to_spdk_log_level(sisl::logging::GetModuleLogLevel("spdk")));
 
     // Initialize if spdk has still not been initialized
-    if (!is_spdk_inited()) {
+    // if (!is_spdk_inited()) {
+
+    int rc;
+    if (!g_spdk_env_prepared) {
         struct spdk_env_opts opts;
-        struct spdk_env_opts* p_opts{nullptr};
         std::string corelist;
         std::string va_mode;
-        if (!m_spdk_reinit_needed) {
-            spdk_env_opts_init(&opts);
-            opts.name = "hs_code";
-            opts.shm_id = -1;
+        spdk_env_opts_init(&opts);
+        opts.name = "hs_code";
+        opts.shm_id = -1;
 
-            // Set VA mode if given
-            va_mode = std::string("pa");
-            try {
-                va_mode = SISL_OPTIONS["iova-mode"].as< std::string >();
-                LOGDEBUG("Using IOVA = {} mode", va_mode);
-            } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
-            opts.iova_mode = va_mode.c_str();
-            //    opts.mem_size = 512;
+        // Set VA mode if given
+        va_mode = SISL_OPTIONS["iova-mode"].as< std::string >();
+        LOGDEBUG("Using IOVA = {} mode", va_mode);
+        opts.iova_mode = va_mode.c_str();
+        opts.hugedir = hugetlbfs_path.c_str();
+        //    opts.mem_size = 512;
 
-            // Set CPU mask (if CPU pinning is active)
-            std::string cpuset_path = IM_DYNAMIC_CONFIG(cpuset_path);
-            if (m_is_cpu_pinning_enabled && std::filesystem::exists(cpuset_path)) {
-                LOGDEBUG("Read cpuset from {}", cpuset_path);
-                std::ifstream ifs(cpuset_path);
-                corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
-                corelist.erase(std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
-                corelist = "[" + corelist + "]";
-                LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
-                opts.core_mask = corelist.c_str();
-            } else {
-                LOGINFO("DPDK will not set CPU mask since CPU pinning is not enabled");
-            }
-            p_opts = &opts;
+        // Set CPU mask (if CPU pinning is active)
+        std::string cpuset_path = IM_DYNAMIC_CONFIG(io_env.cpuset_path);
+        if (m_is_cpu_pinning_enabled && std::filesystem::exists(cpuset_path)) {
+            LOGDEBUG("Read cpuset from {}", cpuset_path);
+            std::ifstream ifs(cpuset_path);
+            corelist.assign((std::istreambuf_iterator< char >(ifs)), (std::istreambuf_iterator< char >()));
+            corelist.erase(std::remove(corelist.begin(), corelist.end(), '\n'), corelist.end());
+            corelist = "[" + corelist + "]";
+            LOGINFO("CPU mask {} will be fed to DPDK EAL", corelist);
+            opts.core_mask = corelist.c_str();
+        } else {
+            LOGINFO("DPDK will not set CPU mask since CPU pinning is not enabled");
         }
-
-        int rc = spdk_env_init(p_opts);
-        if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
-
-        spdk_unaffinitize_thread();
-
-        // Lock the first core for non-reactor threads.
-        const auto lcore = spdk_env_get_first_core();
-        RELEASE_ASSERT(lcore != UINT32_MAX, "SPDK unable to get the first core, possibly no cpu available");
-        assign_core_if_available(lcore);
-
-        rc = spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread,
-                                      IOReactorSPDK::reactor_thread_op_supported, 0);
-        if (rc != 0) {
-            LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
-            throw std::runtime_error("SPDK Thread Lib Init failed");
-        }
+        rc = spdk_env_init(&opts);
+    } else {
+        rc = spdk_env_init(nullptr);
     }
+    g_spdk_env_prepared = true;
+
+    if (rc != 0) { throw std::runtime_error("SPDK Iniitalization failed"); }
+
+    spdk_unaffinitize_thread();
+
+    // Lock the first core for non-reactor threads.
+    const auto lcore = spdk_env_get_first_core();
+    RELEASE_ASSERT(lcore != UINT32_MAX, "SPDK unable to get the first core, possibly no cpu available");
+    assign_core_if_available(lcore);
+
+    rc =
+        spdk_thread_lib_init_ext(IOReactorSPDK::event_about_spdk_thread, IOReactorSPDK::reactor_thread_op_supported, 0);
+    if (rc != 0) {
+        LOGERROR("Thread lib init returned rte_errno = {} {}", rte_errno, rte_strerror(rte_errno));
+        throw std::runtime_error("SPDK Thread Lib Init failed");
+    }
+    //}
 }
 
-sys_thread_id_t IOManagerSpdkImpl::create_reactor(const std::string& name, loop_type_t loop_type, int slot_num,
-                                                  thread_state_notifier_t&& notifier) {
+sys_thread_id_t IOManagerSpdkImpl::create_reactor_impl(const std::string& name, loop_type_t loop_type,
+                                                       uint32_t num_fibers, int slot_num,
+                                                       thread_state_notifier_t&& notifier) {
     if (m_is_cpu_pinning_enabled && (loop_type & TIGHT_LOOP)) {
         struct param_holder {
             std::string name;
             thread_state_notifier_t notifier;
             int slot_num;
             loop_type_t loop_type;
+            uint32_t num_fibers;
         };
 
         // Skip starting the thread loop on current core
@@ -256,13 +261,15 @@ sys_thread_id_t IOManagerSpdkImpl::create_reactor(const std::string& name, loop_
         h->notifier = std::move(notifier);
         h->slot_num = slot_num;
         h->loop_type = loop_type;
+        h->num_fibers = num_fibers;
 
         const auto rc = spdk_env_thread_launch_pinned(
             lcore,
             [](void* arg) -> int {
                 param_holder* h = (param_holder*)arg;
                 set_thread_name(h->name.c_str());
-                iomanager._run_io_loop(h->slot_num, h->loop_type, h->name, nullptr, std::move(h->notifier));
+                iomanager._run_io_loop(h->slot_num, h->loop_type, h->num_fibers, h->name, nullptr,
+                                       std::move(h->notifier));
                 delete h;
                 return 0;
             },
@@ -272,16 +279,18 @@ sys_thread_id_t IOManagerSpdkImpl::create_reactor(const std::string& name, loop_
         LOGTRACEMOD(iomgr, "Created tight loop user worker reactor thread pinned to core {}", lcore);
         return sys_thread_id_t{lcore};
     } else {
-        auto sthread = sisl::named_thread(name, [slot_num, loop_type, name, n = std::move(notifier)]() mutable {
-            iomanager._run_io_loop(slot_num, loop_type, name, nullptr, std::move(n));
-        });
+        auto sthread =
+            sisl::named_thread(name, [slot_num, loop_type, name, num_fibers, n = std::move(notifier)]() mutable {
+                iomanager._run_io_loop(slot_num, loop_type, num_fibers, name, nullptr, std::move(n));
+            });
         sthread.detach();
         return sys_thread_id_t{std::move(sthread)};
     }
 }
 
 void IOManagerSpdkImpl::pre_interface_stop() {
-    iomanager.run_on(thread_regex::least_busy_worker, [this](io_thread_addr_t) {
+    iomanager.run_on_forget(reactor_regex::least_busy_worker, []() {
+        spdk_rpc_finish();
         spdk_subsystem_fini([](void* cb_arg) { iomanager.set_state_and_notify(iomgr_state::stopping); }, nullptr);
     });
     iomanager.wait_for_state(iomgr_state::stopping);
@@ -294,8 +303,8 @@ void IOManagerSpdkImpl::post_interface_stop() {
 
 void IOManagerSpdkImpl::stop_spdk() {
     spdk_thread_lib_fini();
-    spdk_env_fini();
-    m_spdk_reinit_needed = true;
+    // spdk_env_fini();
+    //  m_spdk_prepared = false;
     m_mempool->reset();
 }
 

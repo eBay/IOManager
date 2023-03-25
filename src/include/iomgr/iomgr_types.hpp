@@ -28,9 +28,9 @@ struct spdk_nvmf_qpair;
 namespace iomgr {
 ////// Forward declarations
 class IOReactor;
-struct io_thread;
 struct IODevice;
 struct iomgr_msg;
+struct IOFiber;
 
 template < typename T >
 using shared = std::shared_ptr< T >;
@@ -49,8 +49,7 @@ using ev_callback = std::function< void(IODevice* iodev, void* cookie, int event
 
 /////////////////// Types for all IOReactors ////////////////////////
 using reactor_idx_t = uint32_t;
-using io_thread_idx_t = uint32_t;
-using io_thread_addr_t = uint32_t;
+using io_fiber_t = IOFiber*;
 using loop_type_t = uint64_t;
 
 static constexpr loop_type_t TIGHT_LOOP = 1 << 0;     // Completely tight loop consuming 100% cpu
@@ -60,44 +59,37 @@ static constexpr loop_type_t USER_CONTROLLED_LOOP = 1 << 3; // User controlled l
 
 typedef std::function< void(bool) > thread_state_notifier_t;
 typedef std::variant< reactor_idx_t, spdk_thread* > backing_thread_t;
-typedef std::shared_ptr< io_thread > io_thread_t;
+typedef void (*spdk_msg_signature_t)(void*);
 
-ENUM(thread_regex, uint8_t,
-     all_io,            // Represents all io threads
-     least_busy_io,     // Represents least busy io thread (including worker + user)
-     all_worker,        // Represents all worker io threads (either tloop or iloop)
-     least_busy_worker, // Represents least busy worker io thread
-     random_worker,     // Represents a random worker io thread
-     all_user,          // Represents all user created io threads
-     least_busy_user,   // Represents least busy user io thread
-     all_tloop          // Represents all tight loop threads (could be either worker or user)
+ENUM(reactor_regex, uint8_t,
+     all_io,            // Represents all io reactors
+     least_busy_io,     // Represents least busy io reactors (including worker + user)
+     all_worker,        // Represents all worker io reactors (either tloop or iloop)
+     least_busy_worker, // Represents least busy worker io reactor
+     random_worker,     // Represents a random worker io reactor
+     all_user,          // Represents all user created io reactors
+     least_busy_user,   // Represents least busy user io reactor
+     all_tloop          // Represents all tight loop reactors (could be either worker or user)
 );
+
+ENUM(fiber_regex, uint8_t,
+     main_only,   // Run only on main fiber of the reactor
+     syncio_only, // Run only on the syncio capable fibers
+     random,      // Run on any fiber
+     round_robin  // Run in round robin manner
+);
+
 using eal_core_id_t = uint32_t;
-using thread_specifier = std::variant< thread_regex, io_thread_t >;
+using thread_specifier = std::variant< reactor_regex, io_fiber_t >;
 using sys_thread_id_t = std::variant< std::thread, eal_core_id_t >;
 
 using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 using poll_cb_idx_t = uint32_t;
-using can_backoff_cb_t = std::function< bool(const io_thread_t&) >;
-
-/////////////////// Types for all Msghandlers /////////////////////
-using msg_handler_t = std::function< void(iomgr_msg*) >;
-typedef void (*spdk_msg_signature_t)(void*);
-using run_on_closure_t = std::function< void(void) >;
-using run_method_t = std::function< void(io_thread_addr_t) >;
-using msg_module_id_t = uint32_t;
-
-struct reschedule_data_t {
-    io_device_ptr iodev;
-    int event;
-};
-using msg_data_t = std::variant< sisl::blob, reschedule_data_t, run_method_t >;
-
-ENUM(wait_type_t, uint8_t, no_wait, sleep, spin, callback);
+using can_backoff_cb_t = std::function< bool(IOReactor*) >;
 
 /////////////////// Types for all IOInterfaces ////////////////////////
 class IOInterface;
-using io_interface_comp_cb_t = std::function< void(int64_t res, uint8_t* cookie) >;
+using io_interface_comp_cb_t = std::function< void(int64_t res) >;
 using listen_sentinel_cb_t = std::function< void(void) >;
 using interface_adder_t = std::function< void(void) >;
 using interface_cb_t = std::function< void(const std::shared_ptr< IOInterface >&) >;

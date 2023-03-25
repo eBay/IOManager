@@ -83,10 +83,10 @@ protected:
     bool m_integrated_mode{false};
 
 public:
-    IOExaminer(const uint32_t num_threads, const bool integrated_mode) : m_integrated_mode{integrated_mode} {
+    IOExaminer(uint32_t num_threads, bool integrated_mode, bool is_spdk) : m_integrated_mode{integrated_mode} {
         RELEASE_ASSERT_EQ(integrated_mode, false, "Integrated mode not supported");
         m_vol_info.reserve(100);
-        if (!integrated_mode) { iomanager.start(iomgr_params{.num_threads = num_threads, .is_spdk = false}); }
+        if (!integrated_mode) { iomanager.start(iomgr_params{.num_threads = num_threads, .is_spdk = is_spdk}); }
     }
 
     virtual ~IOExaminer() {
@@ -120,9 +120,9 @@ public:
         m_vol_info.push_back(std::move(info));
     }
 
-    void attach_completion_cb(const iomgr::io_interface_comp_cb_t& cb) {
-        for (auto& info : m_vol_info) {
-            info->m_vol_dev->drive_interface()->attach_completion_cb(cb);
+    void close_devices() {
+        for (auto& vinfo : m_vol_info) {
+            vinfo->m_vol_dev->drive_interface()->close_dev(vinfo->m_vol_dev);
         }
     }
 

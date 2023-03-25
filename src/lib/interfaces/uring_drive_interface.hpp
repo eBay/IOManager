@@ -32,32 +32,21 @@
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
-class UringDriveInterfaceMetrics : public sisl::MetricsGroup {
+class UringDriveInterfaceMetrics : public DriveInterfaceMetrics {
 public:
     explicit UringDriveInterfaceMetrics(const char* inst_name = "UringDriveInterface") :
-            sisl::MetricsGroup("UringDriveInterface", inst_name) {
-        REGISTER_COUNTER(completion_errors, "Uring Completion errors");
-        REGISTER_COUNTER(write_io_submission_errors, "Uring write submission errors", "io_submission_errors",
-                         {"io_direction", "write"});
-        REGISTER_COUNTER(read_io_submission_errors, "Uring read submission errors", "io_submission_errors",
-                         {"io_direction", "read"});
+            DriveInterfaceMetrics("UringDriveInterface", inst_name) {
         REGISTER_COUNTER(retry_io_eagain_error, "Retry IOs count because of kernel eagain");
-
-        REGISTER_COUNTER(total_io_callbacks, "Number of times aio returned io events");
-        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
+        REGISTER_COUNTER(total_io_callbacks, "Number of times poll returned io events");
         REGISTER_COUNTER(retry_on_partial_read, "number of times ios are retried on partial read");
         REGISTER_COUNTER(overflow_errors, "number of CQ overflow occurrences");
         REGISTER_COUNTER(num_of_drops, "number of dropped ios due to CQ overflow");
-
-        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_fsync_cnt, "outstanding fsync cnt", sisl::_publish_as::publish_as_gauge);
-
         register_me_to_farm();
     }
 
-    ~UringDriveInterfaceMetrics() { deregister_me_from_farm(); }
+    ~UringDriveInterfaceMetrics() = default;
 };
+
 // Per thread structure which has all details for uring
 class UringDriveInterface;
 struct uring_drive_channel {
@@ -98,30 +87,32 @@ public:
 
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
-    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                      bool part_of_batch = false) override;
-    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                    bool part_of_batch = false) override;
-    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                     bool part_of_batch = false) override;
-    void fsync(IODevice* iodev, uint8_t* cookie) override;
+    folly::Future< bool > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                       bool part_of_batch = false) override;
+    folly::Future< bool > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                     bool part_of_batch = false) override;
+    folly::Future< bool > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                      bool part_of_batch = false) override;
+    folly::Future< bool > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
+    folly::Future< bool > queue_fsync(IODevice* iodev) override;
+
+    void sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
+    void sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    void sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
+    void sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
     void handle_completions();
-    virtual void submit_batch() override;
-    static void increment_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface);
-    static void decrement_outstanding_counter(const drive_iocb* iocb, UringDriveInterface* iface);
-    UringDriveInterfaceMetrics& get_metrics() { return m_metrics; }
+    void submit_batch() override;
+    DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
 
 private:
-    void init_iface_thread_ctx(const io_thread_t& thr) override;
-    void clear_iface_thread_ctx(const io_thread_t& thr) override;
-    void init_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
-    void clear_iodev_thread_ctx(const io_device_ptr& iodev, const io_thread_t& thr) override {}
+    void init_iface_reactor_context(IOReactor*) override;
+    void clear_iface_reactor_context(IOReactor*) override;
 
     void complete_io(drive_iocb* iocb);
 

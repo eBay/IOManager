@@ -31,22 +31,23 @@ public:
     std::string alias_name;
     backing_dev_t dev;
     int ev{0};
-    io_thread_t creator;
+    io_fiber_t creator;
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
     std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
-    sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_thread_ctx;
+    sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_fiber_ctx;
     bool ready{false};
-    std::atomic< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
+    sisl::atomic_counter< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     drive_type dtype{drive_type::unknown};
+    std::function< void(IODevice*) > post_add_remove_cb{nullptr};
 
 #ifdef REFCOUNTED_OPEN_DEV
     sisl::atomic_counter< int > opened_count{0};
 #endif
 
 private:
-    thread_specifier thread_scope{thread_regex::all_io};
+    thread_specifier thread_scope{reactor_regex::all_io};
     int pri{1};
 
 public:
@@ -60,13 +61,30 @@ public:
 
     bool is_global() const;
     bool is_my_thread_scope() const;
-    const io_thread_t& per_thread_scope() const { return std::get< io_thread_t >(thread_scope); }
-    thread_regex global_scope() const { return std::get< thread_regex >(thread_scope); }
+    io_fiber_t fiber_scope() const;
+    reactor_regex global_scope() const;
+    IOReactor* reactor_scope() const;
 
     inline int priority() const { return pri; }
     std::string dev_id() const;
     void clear();
     DriveInterface* drive_interface();
+
+    void decrement_pending(int32_t count = 1) {
+        if ((post_add_remove_cb != nullptr) && thread_op_pending_count.decrement_testz(count)) {
+            post_add_remove_cb(this);
+        }
+    }
+
+    void increment_pending(int32_t count = 1) {
+        if ((post_add_remove_cb != nullptr) && thread_op_pending_count.increment_test_eq(count, 0)) {
+            post_add_remove_cb(this);
+        }
+    }
+
+    void close() {
+        if (!is_spdk_dev()) { ::close(fd()); }
+    }
 };
 
 } // namespace iomgr

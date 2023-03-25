@@ -28,7 +28,14 @@
 namespace iomgr {
 static std::string s_spdk_thread_name_prefix = "iomgr_reactor_io_thread_";
 
-static void _handle_thread_msg(void* _msg) { iomanager.this_reactor()->handle_msg((iomgr_msg*)_msg); }
+static void _handle_thread_msg(void* _msg) {
+    iomgr_msg* msg = r_cast< iomgr_msg* >(_msg);
+
+    auto orig_thread = spdk_get_thread();
+    spdk_set_thread(msg->m_dest_fiber->spdk_thr);
+    iomanager.this_reactor()->handle_msg((iomgr_msg*)_msg);
+    spdk_set_thread(orig_thread);
+}
 
 int IOReactorSPDK::event_about_spdk_thread(struct spdk_thread* sthread, enum spdk_thread_op op) {
     switch (op) {
@@ -37,8 +44,8 @@ int IOReactorSPDK::event_about_spdk_thread(struct spdk_thread* sthread, enum spd
         if (is_iomgr_created_spdk_thread(sthread)) { return 0; }
 
         auto reactor = static_cast< IOReactorSPDK* >(iomanager.round_robin_reactor());
-        iomanager.run_on(
-            reactor->select_thread(),
+        iomanager.run_on_forget(
+            reactor->pick_fiber(fiber_regex::main_only),
             [](void* arg) {
                 auto sthread = reinterpret_cast< spdk_thread* >(arg);
                 static_cast< IOReactorSPDK* >(iomanager.this_reactor())->add_external_spdk_thread(sthread);
@@ -85,23 +92,20 @@ spdk_thread* IOReactorSPDK::create_spdk_thread() {
     return spdk_thread_create(gen_spdk_thread_name().c_str(), pcpu_mask);
 }
 
-bool IOReactorSPDK::reactor_specific_init_thread(const io_thread_t& thr) {
-    // Create SPDK LW thread for this io thread
-    auto sthread = create_spdk_thread();
-    if (sthread == nullptr) {
-        throw std::runtime_error("SPDK Thread Create failed");
-        return false;
+void IOReactorSPDK::init_impl() {
+    for (auto& fiber : m_io_fibers) {
+        auto sthread = create_spdk_thread();
+        if (sthread == nullptr) { throw std::runtime_error("SPDK Thread Create failed"); }
+        spdk_set_thread(sthread);
+        fiber->spdk_thr = sthread;
     }
-    spdk_set_thread(sthread);
-    thr->thread_impl = sthread;
-
-    m_thread_timer = std::make_unique< timer_spdk >(iothread_self());
-    return true;
+    m_thread_timer = std::make_unique< timer_spdk >(m_io_fibers[0].get());
 }
 
 void IOReactorSPDK::listen() {
-    for (auto& thr : m_io_threads) {
-        spdk_thread_poll(thr->spdk_thread_impl(), 0, 0);
+    for (auto& fiber : m_io_fibers) {
+        if (!m_keep_running) { break; }
+        spdk_thread_poll(fiber->spdk_thr, 0, 0);
     }
 
     for (auto& thr : m_external_spdk_threads) {
@@ -109,36 +113,38 @@ void IOReactorSPDK::listen() {
     }
 }
 
-void IOReactorSPDK::reactor_specific_exit_thread(const io_thread_t& thr) {
-    if (thr->thread_addr) {
-        spdk_thread_exit(thr->spdk_thread_impl());
-        while (!spdk_thread_is_exited(thr->spdk_thread_impl())) {
-            spdk_thread_poll(thr->spdk_thread_impl(), 0, 0);
+void IOReactorSPDK::stop_impl() {
+    for (auto& fiber : m_io_fibers) {
+        spdk_set_thread(fiber->spdk_thr);
+        spdk_thread_exit(fiber->spdk_thr);
+        while (!spdk_thread_is_exited(fiber->spdk_thr)) {
+            spdk_thread_poll(fiber->spdk_thr, 0, 0);
         }
-        spdk_thread_destroy(thr->spdk_thread_impl());
-        thr->thread_impl = nullptr;
+        spdk_thread_destroy(fiber->spdk_thr);
+        fiber->spdk_thr = nullptr;
     }
 }
 
 void IOReactorSPDK::add_external_spdk_thread(struct spdk_thread* sthread) {
     m_external_spdk_threads.push_back(sthread);
-    REACTOR_LOG(INFO, iomgr, 100, "Added External SPDK Thread {} to this reactor", spdk_thread_get_name(sthread));
+    REACTOR_LOG(INFO, "Added External SPDK Thread {} to this reactor", spdk_thread_get_name(sthread));
 }
 
-int IOReactorSPDK::add_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) { return 0; }
-int IOReactorSPDK::remove_iodev_internal(const io_device_const_ptr& iodev, const io_thread_t& thr) { return 0; }
-
-bool IOReactorSPDK::put_msg(iomgr_msg* msg) {
-    spdk_thread_send_msg(addr_to_thread(msg->m_dest_thread)->spdk_thread_impl(), _handle_thread_msg, msg);
-    return true;
+int IOReactorSPDK::add_iodev_impl(const io_device_ptr& iodev) {
+    iodev->io_interface->init_iodev_reactor_context(iodev, this);
+    return 0;
 }
 
-bool IOReactorSPDK::is_iodev_addable(const io_device_const_ptr& iodev, const io_thread_t& thread) const {
-    return (iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev, thread));
+int IOReactorSPDK::remove_iodev_impl(const io_device_ptr& iodev) {
+    iodev->io_interface->clear_iodev_reactor_context(iodev, this);
+    return 0;
 }
 
-void IOReactorSPDK::deliver_msg_direct(spdk_thread* to_thread, iomgr_msg* msg) {
-    msg->set_pending();
-    spdk_thread_send_msg(to_thread, _handle_thread_msg, msg);
+void IOReactorSPDK::put_msg(iomgr_msg* msg) {
+    spdk_thread_send_msg(msg->m_dest_fiber->spdk_thr, _handle_thread_msg, msg);
+}
+
+bool IOReactorSPDK::is_iodev_addable(const io_device_const_ptr& iodev) const {
+    return (iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev));
 }
 } // namespace iomgr

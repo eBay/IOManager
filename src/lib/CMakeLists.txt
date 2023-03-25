@@ -38,6 +38,8 @@ set(IOMGR_OBJECTS
     iomgr.cpp
     iomgr_timer.cpp
     reactor.cpp
+    watchdog.cpp
+    fiber_picker.cpp
 )
 if (${spdk_FOUND})
     list (APPEND IOMGR_OBJECTS $<TARGET_OBJECTS:iomgr_spdk> )
