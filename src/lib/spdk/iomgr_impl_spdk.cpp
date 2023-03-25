@@ -58,11 +58,11 @@ static void set_thread_name(const char* thread_name) {
 #endif
 }
 
-static constexpr std::string_view hugetlbfs_path = "/mnt/huge";
+static std::string hugetlbfs_path{"/mnt/huge"};
 
 #if 0
 static void hugetlbfs_umount() {
-    if (umount2(std::string(hugetlbfs_path).data(), MNT_FORCE)) {
+    if (umount2(hugetlbfs_path.data(), MNT_FORCE)) {
         LOGERROR("Failed to unmount hugetlbfs. Error = {}", errno);
         throw std::runtime_error("Hugetlbfs umount failed");
     }
@@ -150,28 +150,28 @@ bool IOManagerSpdkImpl::is_spdk_inited() const { return (m_spdk_prepared && !spd
 
 void IOManagerSpdkImpl::start_spdk() {
     /* Check if /mnt/huge already exists. Create otherwise */
-    if (!std::filesystem::exists(std::string(hugetlbfs_path))) {
+    if (!std::filesystem::exists(hugetlbfs_path)) {
         std::error_code ec;
-        if (!std::filesystem::create_directory(std::string(hugetlbfs_path), ec)) {
+        if (!std::filesystem::create_directory(hugetlbfs_path, ec)) {
             if (ec.value()) {
                 LOGERROR("Failed to create hugetlbfs. Error = {}", ec.message());
                 throw std::runtime_error("Failed to create /mnt/huge");
             }
-            LOGINFO("{} already exists.", std::string(hugetlbfs_path));
+            LOGINFO("{} already exists.", hugetlbfs_path);
         } else {
             /* mount -t hugetlbfs nodev /mnt/huge */
-            if (mount("nodev", std::string(hugetlbfs_path).data(), "hugetlbfs", 0, "")) {
+            if (mount("nodev", hugetlbfs_path.data(), "hugetlbfs", 0, "")) {
                 LOGERROR("Failed to mount hugetlbfs. Error = {}", errno);
                 throw std::runtime_error("Hugetlbfs mount failed");
             }
-            LOGINFO("Mounted hugepages on {}", std::string(hugetlbfs_path));
+            LOGINFO("Mounted hugepages on {}", hugetlbfs_path);
         }
     } else { /* Remove old/garbage hugepages from /mnt/huge */
         std::uintmax_t n = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(std::string(hugetlbfs_path))) {
+        for (const auto& entry : std::filesystem::directory_iterator(hugetlbfs_path)) {
             n += std::filesystem::remove_all(entry.path());
         }
-        LOGINFO("Deleted {} old hugepages from {}", n, std::string(hugetlbfs_path));
+        LOGINFO("Deleted {} old hugepages from {}", n, hugetlbfs_path);
     }
 
     // Set the spdk log level based on module spdk
@@ -192,12 +192,10 @@ void IOManagerSpdkImpl::start_spdk() {
         opts.shm_id = -1;
 
         // Set VA mode if given
-        va_mode = std::string("pa");
-        try {
-            va_mode = SISL_OPTIONS["iova-mode"].as< std::string >();
-            LOGDEBUG("Using IOVA = {} mode", va_mode);
-        } catch (std::exception& e) { LOGDEBUG("Using default IOVA = {} mode", va_mode); }
+        va_mode = SISL_OPTIONS["iova-mode"].as< std::string >();
+        LOGDEBUG("Using IOVA = {} mode", va_mode);
         opts.iova_mode = va_mode.c_str();
+        opts.hugedir = hugetlbfs_path.c_str();
         //    opts.mem_size = 512;
 
         // Set CPU mask (if CPU pinning is active)

@@ -52,8 +52,7 @@ public:
     virtual std::string job_name() const = 0;
 
     void start_job(wait_till_t wait_till = wait_till_t::completion) {
-        iomanager.run_on_forget(iomgr::reactor_regex::all_worker,
-                                [this](iomgr::io_thread_addr_t a) { start_in_this_thread(); });
+        iomanager.run_on_forget(iomgr::reactor_regex::all_worker, [this]() { start_in_this_thread(); });
         if (wait_till == wait_till_t::execution) {
             wait_for_execution();
         } else if (wait_till == wait_till_t::completion) {

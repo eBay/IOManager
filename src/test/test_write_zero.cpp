@@ -25,7 +25,7 @@ using namespace std::chrono_literals;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_write_zeros,
-                  (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/wz1"), "path"),
+                  (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/test_wz"), "path"),
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
                   //(size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2147483648"), "number"),
                   (size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2097152"), "number"),

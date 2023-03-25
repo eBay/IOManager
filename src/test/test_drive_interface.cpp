@@ -41,7 +41,7 @@ SISL_OPTION_GROUP(test_drive_interface,
                   (dev_path, "", "dev_path", "drive path to test",
                    ::cxxopts::value< std::string >()->default_value("/tmp/iomgr_test_drive"), "path"),
                   (dev_size_mb, "", "dev_size_mb", "size of each device in MB",
-                   ::cxxopts::value< uint64_t >()->default_value("1024"), "number"),
+                   ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"));
 
 #define ENABLED_OPTIONS logging, iomgr, test_drive_interface, config
@@ -239,7 +239,7 @@ public:
             }
 
             auto offset = work->next_io_offset.load();
-            if (offset <= work->offset_end) {
+            if (offset < work->offset_end) {
                 auto* req = new io_req();
                 req->buf_arr->fill(offset);
                 --work->available_qs;
@@ -256,7 +256,7 @@ public:
                 work->next_io_offset += s_io_size;
                 ++work->nios_issued;
             }
-        } while ((work->next_io_offset.load() <= work->offset_end) ||
+        } while ((work->next_io_offset.load() < work->offset_end) ||
                  (work->nios_completed.load() < work->nios_issued.load()));
 
         LOGINFO("We are done with the preload of size={} with num_ios={}", s_io_size * work->nios_completed.load(),

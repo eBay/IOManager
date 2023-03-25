@@ -24,7 +24,7 @@ IOInterface::IOInterface() = default;
 IOInterface::~IOInterface() = default;
 
 void IOInterface::close_dev(const io_device_ptr& iodev) {
-    if (iodev->ready) { remove_io_device(iodev); }
+    if (iodev->ready) { remove_io_device(iodev, true /* wait_to_remove */); }
 }
 
 int IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
