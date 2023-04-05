@@ -131,7 +131,7 @@ void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
                        PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
                    },
                    [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
-                   [&](spdk_timer_ptr stinfo) { assert(0); },
+                   [&](shared< spdk_timer_info > stinfo) { assert(0); },
                },
                thandle.second);
 }
@@ -198,7 +198,7 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
 
     // Multi-thread timer only for global recurring timers, rest are single threaded timers
     auto stinfo = std::make_shared< spdk_timer_info >(nanos_after, cookie, std::move(timer_fn), this,
-                                                      (recurring && !is_thread_local()));
+                                                      (recurring && !is_thread_local()), recurring);
 
     if (recurring && !is_thread_local()) {
         // In case of global timer, create multi-threaded version for recurring and let the timer callback choose to
@@ -224,7 +224,7 @@ timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* 
 }
 
 void timer_spdk::cancel(timer_handle_t thdl, bool wait_to_cancel) {
-    std::visit(overloaded{[&](spdk_timer_ptr stinfo) {
+    std::visit(overloaded{[&](cshared< spdk_timer_info >& stinfo) {
                               if (stinfo->single_thread_timer) {
                                   cancel_thread_timer(stinfo, wait_to_cancel);
                                   PROTECTED_REGION(m_active_thread_timer_infos.erase(stinfo));
@@ -250,14 +250,14 @@ void timer_spdk::stop() {
     }
 }
 
-void timer_spdk::cancel_thread_timer(const spdk_timer_ptr& st_info, bool wait_to_cancel) const {
+void timer_spdk::cancel_thread_timer(cshared< spdk_timer_info >& st_info, bool wait_to_cancel) const {
     iomanager.run_on(wait_to_cancel, st_info->single_thread_timer->owner_fiber, [st_info]() {
         unregister_spdk_thread_timer(st_info->single_thread_timer);
         st_info->single_thread_timer = nullptr;
     });
 }
 
-void timer_spdk::cancel_global_timer(const spdk_timer_ptr& stinfo) const {
+void timer_spdk::cancel_global_timer(cshared< spdk_timer_info >& stinfo) const {
     // Reset to max to prevent a callback while cancel is triggerred. In essence, this ensures that callback is never
     // called upon timer is cancelled, ths there is no reason to wait_to_cancel.
     stinfo->cur_term_num = std::numeric_limits< uint64_t >::max();
@@ -270,12 +270,17 @@ void timer_spdk::cancel_global_timer(const spdk_timer_ptr& stinfo) const {
     });
 }
 
-spdk_thread_timer_ptr timer_spdk::create_register_spdk_thread_timer(const spdk_timer_ptr& stinfo) {
+shared< spdk_thread_timer_info > timer_spdk::create_register_spdk_thread_timer(cshared< spdk_timer_info >& stinfo) {
     auto stt_info = std::make_shared< spdk_thread_timer_info >(stinfo);
     stt_info->poller = spdk_poller_register(
         [](void* context) -> int {
             auto stt_info = (spdk_thread_timer_info*)context;
+            auto st_info = stt_info->st_info;
+            auto is_recurring = stt_info->is_recurring_timer();
             stt_info->call_timer_cb_once();
+
+            // DO NOT ACCESS stt_info or st_info beyond this as cancel_single_thread_timer free stt_info and st_info
+            if (!is_recurring) { st_info->cancel_single_thread_timer(); }
             return 0;
         },
         (void*)stt_info.get(), stinfo->timeout_nanos / 1000);
@@ -283,13 +288,13 @@ spdk_thread_timer_ptr timer_spdk::create_register_spdk_thread_timer(const spdk_t
     return stt_info;
 }
 
-void timer_spdk::unregister_spdk_thread_timer(const spdk_thread_timer_ptr& sttinfo) {
-    LOGDEBUGMOD(iomgr, "Unregistering per thread timer={} thread_timer={} poller={}", (void*)sttinfo->tinfo.get(),
+void timer_spdk::unregister_spdk_thread_timer(cshared< spdk_thread_timer_info >& sttinfo) {
+    LOGDEBUGMOD(iomgr, "Unregistering per thread timer={} thread_timer={} poller={}", (void*)sttinfo->st_info.get(),
                 (void*)sttinfo.get(), (void*)sttinfo->poller);
     spdk_poller_unregister(&sttinfo->poller);
 }
 
-void spdk_timer_info::add_thread_timer_info(const spdk_thread_timer_ptr& stt_info) {
+void spdk_timer_info::add_thread_timer_info(cshared< spdk_thread_timer_info >& stt_info) {
     std::unique_lock l(timer_list_mtx);
     thread_timer_list[iomanager.this_reactor()->reactor_idx()] = stt_info;
 }
@@ -299,29 +304,34 @@ void spdk_timer_info::delete_thread_timer_info() {
     thread_timer_list[iomanager.this_reactor()->reactor_idx()] = nullptr;
 }
 
-spdk_thread_timer_ptr spdk_timer_info::get_thread_timer_info() {
+shared< spdk_thread_timer_info > spdk_timer_info::get_thread_timer_info() {
     std::unique_lock l(timer_list_mtx);
     return thread_timer_list[iomanager.this_reactor()->reactor_idx()];
 }
 
-spdk_thread_timer_info::spdk_thread_timer_info(const spdk_timer_ptr& sti) {
-    tinfo = sti;
-    owner_fiber = iomanager.iofiber_self();
+void spdk_timer_info::cancel_single_thread_timer() {
+    iomanager.cancel_timer(timer_handle_t{parent_timer, shared_from_this()}, false);
+    // DO NOT ACCESS *this* pointer beyond this as it cancel_timer could free up this
 }
+
+spdk_thread_timer_info::spdk_thread_timer_info(cshared< spdk_timer_info >& sti) :
+        st_info{sti}, owner_fiber{iomanager.iofiber_self()} {}
 
 bool spdk_thread_timer_info::call_timer_cb_once() {
     bool ret = false;
     auto cur_term_num = term_num++;
-    if (!tinfo->is_multi_threaded ||
-        tinfo->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
+    if (!st_info->is_multi_threaded ||
+        st_info->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
         ++(iomanager.this_thread_metrics().timer_wakeup_count);
-        tinfo->cb(tinfo->context);
+        st_info->cb(st_info->context);
         ret = true;
     }
     // NOTE: Do not access this pointer or tinfo from this point, as once callback is called, it could
     // cancel the timer and thus delete this pointer.
     return ret;
 }
+
+bool spdk_thread_timer_info::is_recurring_timer() const { return st_info->is_recurring; }
 
 #if 0
 void timer_spdk::check_and_call_expired_timers() {

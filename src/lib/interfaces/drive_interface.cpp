@@ -33,6 +33,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include <iomgr/iomgr.hpp>
+#include <iomgr/iomgr_flip.hpp>
 #include <iomgr/drive_interface.hpp>
 #include "interfaces/kernel_drive_interface.hpp"
 #include "interfaces/spdk_drive_interface.hpp"
@@ -326,6 +327,25 @@ void DriveInterface::decrement_outstanding_counter(drive_iocb* iocb) {
     --(iomanager.this_thread_metrics().outstanding_ops);
 }
 
+#ifdef _PRERELEASE
+bool DriveInterface::inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb) {
+    auto closure = [iocb, cb = std::move(delayed_cb)]() {
+        LOGDEBUGMOD(iomgr, "[device={},op_type={}]: Delayed completion simulation - finish", iocb->iodev->devname,
+                    enum_name(iocb->op_type));
+        cb(iocb);
+    };
+
+    if (iomgr_flip::instance()->delay_flip(
+            "simulate_drive_delay", closure, iocb->iodev->devname, enum_name(iocb->op_type),
+            iocb->initiating_reactor ? (int)iocb->initiating_reactor->reactor_idx() : -1)) {
+        LOGDEBUGMOD(iomgr, "[device={},op_type={}]: Delayed completion simulation - start", iocb->iodev->devname,
+                    enum_name(iocb->op_type));
+        return true;
+    }
+    return false;
+}
+#endif
+
 /////////////////////////// KernelDriveInterface Section /////////////////////////////////////
 size_t KernelDriveInterface::get_dev_size(IODevice* iodev) {
     if (std::filesystem::is_regular_file(std::filesystem::status(iodev->devname))) {
@@ -536,5 +556,4 @@ void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uin
 
     assert(total_sz_written == size);
 }
-
 } // namespace iomgr

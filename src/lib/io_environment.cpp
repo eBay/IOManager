@@ -47,11 +47,11 @@ void IOEnvironment::restart_http_server() {
     with_http_server();
 }
 
-IOEnvironment& IOEnvironment::with_http_server() {
+IOEnvironment& IOEnvironment::with_http_server(uint32_t port_override) {
     if (!m_http_server) {
         iomgr::HttpServerConfig cfg;
         cfg.bind_address = "0.0.0.0";
-        cfg.server_port = IM_DYNAMIC_CONFIG(io_env.http_port);
+        cfg.server_port = (port_override != UINT32_MAX) ? port_override : IM_DYNAMIC_CONFIG(io_env.http_port);
         cfg.read_write_timeout_secs = 10;
         if (IM_DYNAMIC_CONFIG(io_env.encryption)) {
             cfg.is_tls_enabled = true;
