@@ -320,8 +320,9 @@ folly::Future< bool > UringDriveInterface::async_unmap(IODevice* iodev, uint32_t
 }
 
 folly::Future< bool > UringDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
-    RELEASE_ASSERT(0, "async_write_zero is not supported for uring yet");
-    return folly::makeFuture< bool >(false);
+    LOGWARN("Uring async_write_zero is implemented as sync write, need to have more intelligent implementation");
+    sync_write_zero(iodev, size, offset);
+    return folly::makeFuture< bool >(true);
 }
 
 folly::Future< bool > UringDriveInterface::queue_fsync(IODevice* iodev) {
@@ -347,7 +348,7 @@ folly::Future< bool > UringDriveInterface::queue_fsync(IODevice* iodev) {
 }
 
 void UringDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || !t_uring_ch->can_submit()) {
+    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
         return KernelDriveInterface::sync_write(iodev, data, size, offset);
     }
 
@@ -374,7 +375,7 @@ void UringDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t
 }
 
 void UringDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || !t_uring_ch->can_submit()) {
+    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
         return KernelDriveInterface::sync_writev(iodev, iov, iovcnt, size, offset);
     }
 
@@ -420,7 +421,7 @@ void UringDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, 
 }
 
 void UringDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || !t_uring_ch->can_submit()) {
+    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
         return KernelDriveInterface::sync_readv(iodev, iov, iovcnt, size, offset);
     }
     auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
@@ -477,7 +478,7 @@ void UringDriveInterface::handle_completions() {
         if (iocb->result >= 0) {
             if (static_cast< uint64_t >(iocb->result) == iocb->size) {
                 // all read buffer is filled by uring;
-                LOGTRACEMOD(iomgr, "Received completion event, iocb={} Result={}", (void*)iocb, iocb->result);
+                LOGDEBUGMOD(iomgr, "Received completion event, iocb={} Result={}", iocb->to_string(), iocb->result);
                 complete_io(iocb);
             } else {
                 // ***** Paritial Read Handling ******** //
@@ -515,6 +516,11 @@ void UringDriveInterface::handle_completions() {
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
     --(t_uring_ch->m_in_flight_ios);
+
+#ifdef _PRERELEASE
+    if (DriveInterface::inject_delay_if_needed(iocb, [this](drive_iocb* iocb) { complete_io(iocb); })) { return; }
+#endif
+
     if (iocb->result >= 0) {
         std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
                               [&](boost::fibers::promise< bool >& p) { p.set_value(true); },

@@ -95,6 +95,7 @@ struct drive_iocb {
     std::variant< io_interface_comp_cb_t, folly::Promise< bool >, boost::fibers::promise< bool > > completion{nullptr};
     uint32_t resubmit_cnt{0};
     uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
+    IOReactor* initiating_reactor;
 #ifndef NDEBUG
     uint64_t iocb_id;
 #endif
@@ -106,85 +107,17 @@ private:
     std::variant< inline_iov_array, large_iov_array, char* > user_data;
 
 public:
-    drive_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset) :
-            iodev(iodev), iface{iface}, op_type(op_type), size(size), offset(offset) {
-#ifndef NDEBUG
-        iocb_id = _iocb_id_counter.fetch_add(1, std::memory_order_relaxed);
-#endif
-        user_data.emplace< 0 >();
-        op_start_time = Clock::now();
-    }
-
+    drive_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset);
     virtual ~drive_iocb() = default;
 
-    void set_iovs(const iovec* iovs, const int count) {
-        iovcnt = count;
-        if (count > inlined_iov_count) { user_data = std::unique_ptr< iovec[] >(new iovec[count]); }
-        std::memcpy(reinterpret_cast< void* >(get_iovs()), reinterpret_cast< const void* >(iovs),
-                    count * sizeof(iovec));
-    }
+    void set_iovs(const iovec* iovs, const int count);
+    void set_data(char* data);
 
-    void set_data(char* data) { user_data = data; }
-
-    iovec* get_iovs() const {
-        if (std::holds_alternative< inline_iov_array >(user_data)) {
-            return const_cast< iovec* >(&(std::get< inline_iov_array >(user_data)[0]));
-        } else if (std::holds_alternative< large_iov_array >(user_data)) {
-            return std::get< large_iov_array >(user_data).get();
-        } else {
-            assert(0);
-            return nullptr;
-        }
-    }
+    iovec* get_iovs() const;
+    void update_iovs_on_partial_result();
 
     char* get_data() const { return std::get< char* >(user_data); }
     bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
-
-    void update_iovs_on_partial_result() {
-        DEBUG_ASSERT_EQ(op_type, DriveOpType::READ, "Only expecting READ op for be returned with partial results.");
-
-        const auto iovs = get_iovs();
-        uint32_t num_iovs_unset{1};
-        uint64_t remaining_iov_len{0}, size_unset{size - result};
-        uint64_t iov_len_part{0};
-        // count remaining size from last iov
-        for (auto i{iovcnt - 1}; i >= 0; --i, ++num_iovs_unset) {
-            remaining_iov_len += iovs[i].iov_len;
-            if (remaining_iov_len == size_unset) {
-                break;
-            } else if (remaining_iov_len > size_unset) {
-                // we've had some left over within a single iov, calculate the size needs to be read;
-                iov_len_part = (iovs[i].iov_len - (remaining_iov_len - size_unset));
-                break;
-            }
-
-            // keep visiting next iov;
-        }
-
-        DEBUG_ASSERT_GE(remaining_iov_len, size_unset);
-
-        std::vector< iovec > iovs_unset;
-        iovs_unset.reserve(num_iovs_unset);
-
-        // if a single iov entry is partial read, we need remember the size and resume read from there;
-        uint32_t start_idx{0};
-        if (iov_len_part > 0) {
-            iovs_unset[start_idx].iov_len = iov_len_part;
-            iovs_unset[start_idx].iov_base = reinterpret_cast< uint8_t* >(iovs[iovcnt - num_iovs_unset].iov_base) +
-                (iovs[iovcnt - num_iovs_unset].iov_len - iov_len_part);
-            ++start_idx;
-        }
-
-        // copy the unfilled iovs to iovs_unset;
-        for (auto i{start_idx}; i < num_iovs_unset; ++i) {
-            iovs_unset[i].iov_len = iovs[iovcnt - num_iovs_unset + i].iov_len;
-            iovs_unset[i].iov_base = iovs[iovcnt - num_iovs_unset + i].iov_base;
-        }
-
-        set_iovs(iovs_unset.data(), num_iovs_unset);
-        size = size_unset;
-        offset += result;
-    }
 
     io_interface_comp_cb_t& cb_comp_promise() { return std::get< io_interface_comp_cb_t >(completion); }
     folly::Promise< bool >& folly_comp_promise() { return std::get< folly::Promise< bool > >(completion); }
@@ -192,24 +125,7 @@ public:
         return std::get< boost::fibers::promise< bool > >(completion);
     }
 
-    std::string to_string() const {
-        std::string str;
-#ifndef NDEBUG
-        str = fmt::format("id={} ", iocb_id);
-#endif
-        str += fmt::format("addr={}, op_type={}, size={}, offset={}, iovcnt={}, unique_id={},", (void*)this,
-                           enum_name(op_type), size, offset, iovcnt, unique_id);
-
-        if (has_iovs()) {
-            auto ivs = get_iovs();
-            for (auto i = 0; i < iovcnt; ++i) {
-                str += fmt::format("iov[{}]=<base={},len={}>", i, ivs[i].iov_base, ivs[i].iov_len);
-            }
-        } else {
-            str += fmt::format("buf={}", (void*)get_data());
-        }
-        return str;
-    }
+    std::string to_string() const;
 };
 
 class IOWatchDog;
@@ -252,6 +168,10 @@ public:
     static size_t get_size(IODevice* iodev);
     static void increment_outstanding_counter(drive_iocb* iocb);
     static void decrement_outstanding_counter(drive_iocb* iocb);
+
+#ifdef _PRERELEASE
+    static bool inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb);
+#endif
 
 protected:
     virtual size_t get_dev_size(IODevice* iodev) = 0;

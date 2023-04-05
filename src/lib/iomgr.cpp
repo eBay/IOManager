@@ -555,37 +555,37 @@ IOThreadMetrics& IOManager::this_thread_metrics() {
 io_fiber_t IOManager::iofiber_self() const { return this_reactor()->iofiber_self(); };
 
 bool IOManager::am_i_io_reactor() const {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     return r && r->is_io_reactor();
 }
 
 bool IOManager::am_i_tight_loop_reactor() const {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     return r && r->is_tight_loop_reactor();
 }
 
 bool IOManager::am_i_worker_reactor() const {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     return r && r->is_worker();
 }
 
 bool IOManager::am_i_adaptive_reactor() const {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     return r && r->is_adaptive_loop();
 }
 
 bool IOManager::am_i_sync_io_capable() const {
-    auto* r{this_reactor()};
-    return ((r == nullptr) || (r->iofiber_self() != r->main_fiber()));
+    auto* r = this_reactor();
+    return ((r == nullptr) || (r->iofiber_self() != r->main_fiber()) || !r->is_io_reactor());
 }
 
 void IOManager::set_my_reactor_adaptive(bool adaptive) {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     if (r) { r->set_adaptive_loop(adaptive); }
 }
 
 std::vector< io_fiber_t > IOManager::sync_io_capable_fibers() const {
-    auto* r{this_reactor()};
+    auto* r = this_reactor();
     return r ? r->sync_io_capable_fibers() : std::vector< io_fiber_t >{};
 }
 

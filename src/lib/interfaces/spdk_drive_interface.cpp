@@ -410,6 +410,13 @@ static std::string explain_bdev_io_status(spdk_bdev_io* bdev_io) {
 }
 
 static void complete_io(SpdkIocb* iocb, bool is_success) {
+#ifdef _PRERELEASE
+    if (DriveInterface::inject_delay_if_needed(
+            iocb, [is_success](drive_iocb* iocb) { complete_io(r_cast< SpdkIocb* >(iocb), is_success); })) {
+        return;
+    }
+#endif
+
     iomanager.this_thread_metrics().drive_latency_sum_us += get_elapsed_time_us(iocb->op_submit_time);
     iocb->owns_by_spdk = false;
     DriveInterface::decrement_outstanding_counter(iocb);
@@ -654,8 +661,7 @@ folly::Future< bool > SpdkDriveInterface::async_write_zero(IODevice* iodev, uint
 }
 
 void SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
-    // We should never do sync io on a tight loop thread
-    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io on tight loop thread not supported");
+    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_data(const_cast< char* >(data));
@@ -665,7 +671,7 @@ void SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t 
 
 void SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io on tight loop thread not supported");
+    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_iovs(iov, iovcnt);
@@ -675,7 +681,7 @@ void SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovc
 
 void SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io on tight loop thread not supported");
+    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_data(data);
@@ -685,7 +691,7 @@ void SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, u
 
 void SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io on tight loop thread not supported");
+    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_iovs(iov, iovcnt);
@@ -695,7 +701,7 @@ void SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcn
 
 void SpdkDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
-    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io on tight loop thread not supported");
+    DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE_ZERO, size, offset);
     iocb->io_wait_entry.cb_fn = submit_io;

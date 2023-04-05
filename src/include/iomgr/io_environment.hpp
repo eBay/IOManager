@@ -35,7 +35,7 @@ public:
         iomanager.start(std::forward< Args >(args)...);
         return get_instance();
     }
-    IOEnvironment& with_http_server();
+    IOEnvironment& with_http_server(uint32_t port_override = UINT32_MAX);
     IOEnvironment& with_file_watcher();
     IOEnvironment& with_auth_security();
     IOEnvironment& with_auth_manager();
