@@ -233,7 +233,5 @@ int main(int argc, char* argv[]) {
     glob_setup();
     auto ret = RUN_ALL_TESTS();
     glob_teardown();
-    LOGINFO("Messages created={} active={}", sisl::ObjLifeCounter< iomgr_msg >::s_created,
-            sisl::ObjLifeCounter< iomgr_msg >::s_alive);
     return ret;
 }
