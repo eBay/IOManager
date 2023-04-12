@@ -13,7 +13,7 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #pragma once
-#include "reactor.hpp"
+#include "reactor/reactor.hpp"
 #include <folly/concurrency/UnboundedQueue.h>
 
 namespace iomgr {

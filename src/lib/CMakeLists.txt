@@ -8,6 +8,7 @@ endif ()
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter -Wno-sign-compare")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISION}\\\"")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
+#set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_BOOST_FIBER")
 
 find_package(flatbuffers REQUIRED)
 find_package(grpc_internal)
@@ -29,17 +30,17 @@ add_subdirectory(epoll)
 if (${spdk_FOUND})
     add_subdirectory(spdk)
 endif ()
+add_subdirectory(reactor)
 
 set(IOMGR_OBJECTS
     $<TARGET_OBJECTS:iomgr_config> 
     $<TARGET_OBJECTS:iomgr_interfaces> 
     $<TARGET_OBJECTS:iomgr_epoll>
+    $<TARGET_OBJECTS:iomgr_reactor>
     io_environment.cpp
     iomgr.cpp
     iomgr_timer.cpp
-    reactor.cpp
     watchdog.cpp
-    fiber_picker.cpp
 )
 if (${spdk_FOUND})
     list (APPEND IOMGR_OBJECTS $<TARGET_OBJECTS:iomgr_spdk> )

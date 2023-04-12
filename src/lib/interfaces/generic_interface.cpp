@@ -16,7 +16,7 @@
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_msg.hpp>
 #include <iomgr/io_interface.hpp>
-#include "reactor.hpp"
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 

@@ -23,9 +23,9 @@
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <folly/futures/Future.h>
-#include <boost/fiber/all.hpp>
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
+#include <iomgr/fiber_lib.hpp>
 
 namespace iomgr {
 ENUM(drive_interface_type, uint8_t, aio, spdk, uring)
@@ -92,7 +92,8 @@ struct drive_iocb {
     uint64_t unique_id{0}; // used by io watchdog
     int iovcnt = 0;
     int64_t result{-1};
-    std::variant< io_interface_comp_cb_t, folly::Promise< bool >, boost::fibers::promise< bool > > completion{nullptr};
+    std::variant< io_interface_comp_cb_t, folly::Promise< bool >, FiberManagerLib::Promise< bool > > completion{
+        nullptr};
     uint32_t resubmit_cnt{0};
     uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
     IOReactor* initiating_reactor;
@@ -121,8 +122,8 @@ public:
 
     io_interface_comp_cb_t& cb_comp_promise() { return std::get< io_interface_comp_cb_t >(completion); }
     folly::Promise< bool >& folly_comp_promise() { return std::get< folly::Promise< bool > >(completion); }
-    boost::fibers::promise< bool >& fiber_comp_promise() {
-        return std::get< boost::fibers::promise< bool > >(completion);
+    FiberManagerLib::Promise< bool >& fiber_comp_promise() {
+        return std::get< FiberManagerLib::Promise< bool > >(completion);
     }
 
     std::string to_string() const;

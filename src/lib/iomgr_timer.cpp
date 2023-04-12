@@ -16,7 +16,7 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_timer.hpp>
-#include "reactor.hpp"
+#include "reactor/reactor.hpp"
 
 extern "C" {
 #include <sys/timerfd.h>

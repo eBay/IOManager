@@ -424,7 +424,7 @@ static void complete_io(SpdkIocb* iocb, bool is_success) {
     if (is_success) {
         iocb->result = 0;
         std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
-                              [&](boost::fibers::promise< bool >& p) { p.set_value(true); },
+                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
                               [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
                    iocb->completion);
     } else {
@@ -433,8 +433,8 @@ static void complete_io(SpdkIocb* iocb, bool is_success) {
         iocb->result = -1;
         std::visit(
             overloaded{[&](folly::Promise< bool >& p) { p.setException(std::ios_base::failure{"spdk io failed"}); },
-                       [&](boost::fibers::promise< bool >& p) {
-                           p.set_exception(std::make_exception_ptr(std::ios_base::failure{"spdk io failed"}));
+                       [&](FiberManagerLib::Promise< bool >& p) {
+                           p.setException(std::make_exception_ptr(std::ios_base::failure{"spdk io failed"}));
                        },
                        [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
             iocb->completion);
@@ -585,8 +585,8 @@ void SpdkDriveInterface::submit_batch() {
 void SpdkDriveInterface::submit_sync_io(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb submit: mode=sync, {}", iocb->to_string());
 
-    iocb->completion = std::move(boost::fibers::promise< bool >{});
-    auto f = iocb->fiber_comp_promise().get_future();
+    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    auto f = iocb->fiber_comp_promise().getFuture();
     submit_async_io(iocb, false /* part_of_batch */);
     f.get();
 }

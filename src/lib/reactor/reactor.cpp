@@ -22,9 +22,8 @@ extern "C" {
 #include <sisl/logging/logging.h>
 #include <sisl/fds/obj_allocator.hpp>
 #include <iomgr/iomgr.hpp>
-#include "epoll/reactor_epoll.hpp"
+#include "reactor/reactor.hpp"
 #include "iomgr_config.hpp"
-#include "fiber_picker.hpp"
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -32,7 +31,8 @@ extern "C" {
 namespace iomgr {
 thread_local IOReactor* IOReactor::this_reactor{nullptr};
 
-IOReactor::IOReactor() : m_this_fiber{[](IOFiber* f) {}} {}
+IOReactor::IOReactor() { m_fiber_mgr_lib = std::make_unique< FiberManagerLib >(); }
+
 IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
@@ -80,12 +80,12 @@ void IOReactor::init(uint32_t num_fibers) {
 
     // Create all fibers
     for (uint32_t i{0}; i < num_fibers; ++i) {
-        m_io_fibers.emplace_back(std::make_unique< IOFiber >(this, iomanager.m_fiber_ordinal_reserver.reserve()));
+        m_io_fibers.emplace_back(m_fiber_mgr_lib->create_iofiber(this, iomanager.m_fiber_ordinal_reserver.reserve()));
         // First fiber is always main fiber loop and we don't want to start fiber_loop there
         if (i == 0) {
-            m_this_fiber.reset(m_io_fibers[0].get());
+            m_fiber_mgr_lib->set_this_iofiber(m_io_fibers[i].get());
         } else {
-            m_io_fibers.back()->start(bind_this(IOReactor::fiber_loop, 1));
+            m_fiber_mgr_lib->start_iofiber(m_io_fibers.back().get(), bind_this(IOReactor::fiber_loop, 1));
         }
     }
     m_io_fiber_count.increment(num_fibers);
@@ -127,7 +127,7 @@ bool IOReactor::listen_once() {
             }
         }
 
-        boost::this_fiber::yield(); // Yield to make sure other fibers gets to handle messages/completions
+        m_fiber_mgr_lib->yield(); // Yield to make sure other fibers gets to handle messages/completions
 
         if (need_backoff) {
             m_cur_backoff_delay_us = m_cur_backoff_delay_us * IM_DYNAMIC_CONFIG(poll.backoff_delay_increase_factor);
@@ -143,7 +143,7 @@ bool IOReactor::listen_once() {
 
 void IOReactor::stop() {
     m_keep_running = false;
-    boost::this_fiber::yield(); // Yield to make sure other fibers stop their loop
+    m_fiber_mgr_lib->yield(); // Yield to make sure other fibers stop their loop
 
     uint32_t removed_iface{0};
     iomanager.foreach_interface([this, &removed_iface](cshared< IOInterface >& iface) {
@@ -158,13 +158,13 @@ void IOReactor::stop() {
 
     for (size_t i{1}; i < m_io_fibers.size(); ++i) {
         auto msg = iomgr_msg::create([]() {}); // Send empty message for loop to come out and yield
-        m_io_fibers[i]->channel.push(msg);
+        m_io_fibers[i]->push_msg(msg);
     }
 
     // Wait for all fiber loops to exit
     m_io_fiber_count.decrement(1);      // Decrement main fiber
     while (!m_io_fiber_count.testz()) { // Wait for all fiber loop to exit
-        boost::this_fiber::yield();
+        m_fiber_mgr_lib->yield();
     }
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
@@ -193,31 +193,19 @@ int IOReactor::remove_iodev(const io_device_ptr& iodev) {
     return ret;
 }
 
-void IOReactor::fiber_loop(io_fiber_t fiber) {
+void IOReactor::fiber_loop(IOFiber* fiber) {
     iomgr_msg* msg;
-    while (fiber->channel.pop(msg) == boost::fibers::channel_op_status::success) {
+    while (true) {
+        msg = fiber->pop_msg();
         REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
         handle_msg(msg);
 
         if (!m_keep_running) { break; }
-
-        // We handled a msg, so overflow msgs, it can be pushed at the tail of the fiber channel queue
-        if (!fiber->m_overflow_msgs.empty()) {
-            auto status = fiber->channel.try_push(fiber->m_overflow_msgs.front());
-            if (status != boost::fibers::channel_op_status::success) {
-                LOGMSG_ASSERT_EQ((int)status, (int)boost::fibers::channel_op_status::success,
-                                 "Moving msg from overflow to fiber loop channel has failed, unexpected");
-            } else {
-                fiber->m_overflow_msgs.pop();
-            }
-        }
     }
-    fiber->channel.close();
+    fiber->close_channel();
     m_io_fiber_count.decrement(1);
-    boost::this_fiber::yield();
+    m_fiber_mgr_lib->yield();
 }
-
-io_fiber_t IOReactor::iofiber_self() const { return &(*m_this_fiber); };
 
 io_fiber_t IOReactor::pick_fiber(fiber_regex r) {
     static thread_local std::random_device s_rd{};
@@ -264,10 +252,11 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
         if (msg->need_reply()) { msg->completed(); }
         iomgr_msg::free(msg);
     } else {
-        auto status = msg->m_dest_fiber->channel.try_push(msg);
-        if (status == boost::fibers::channel_op_status::full) { msg->m_dest_fiber->m_overflow_msgs.push(msg); }
+        msg->m_dest_fiber->push_msg(msg);
     }
 }
+
+io_fiber_t IOReactor::iofiber_self() const { return m_fiber_mgr_lib->iofiber_self(); }
 
 //////////////////////////////// Device/Interface Section /////////////////////////////
 bool IOReactor::can_add_iface(cshared< IOInterface >& iface) const {
@@ -300,4 +289,5 @@ void IOReactor::add_backoff_cb(can_backoff_cb_t&& cb) { m_can_backoff_cbs.push_b
 
 void IOReactor::attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb) { m_iomgr_sentinel_cb = cb; }
 void IOReactor::detach_iomgr_sentinel_cb() { m_iomgr_sentinel_cb = nullptr; }
+
 } // namespace iomgr

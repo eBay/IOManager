@@ -56,7 +56,7 @@
 #include <iomgr/iomgr.hpp>
 #include "interfaces/aio_drive_interface.hpp"
 #include "iomgr_config.hpp"
-#include "reactor.hpp"
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 #ifdef __APPLE__
@@ -271,15 +271,15 @@ bool AioDriveInterface::handle_io_failure(drive_aio_iocb* diocb, int error) {
 void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
     if (diocb->result == 0) {
         std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
-                              [&](boost::fibers::promise< bool >& p) { p.set_value(true); },
+                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
                               [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
                    diocb->completion);
     } else {
         std::visit(overloaded{[&](folly::Promise< bool >& p) {
                                   p.setException(folly::makeSystemErrorExplicit(diocb->result, "Error in aio"));
                               },
-                              [&](boost::fibers::promise< bool >& p) {
-                                  p.set_exception(std::make_exception_ptr(
+                              [&](FiberManagerLib::Promise< bool >& p) {
+                                  p.setException(std::make_exception_ptr(
                                       folly::makeSystemErrorExplicit(diocb->result, "Error in aio")));
                               },
                               [&](io_interface_comp_cb_t& cb) { cb(diocb->result > 0 ? 0 : diocb->result); }},

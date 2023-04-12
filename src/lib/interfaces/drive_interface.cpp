@@ -38,7 +38,7 @@
 #include "interfaces/kernel_drive_interface.hpp"
 #include "interfaces/spdk_drive_interface.hpp"
 #include "iomgr_config.hpp"
-#include "reactor.hpp"
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 std::unordered_map< std::string, drive_type > DriveInterface::s_dev_type;

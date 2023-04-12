@@ -42,6 +42,7 @@
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/io_device.hpp>
+#include <iomgr/fiber_lib.hpp>
 
 namespace iomgr {
 
@@ -218,7 +219,7 @@ public:
     }
 
     int run_on_forget(reactor_regex rr, fiber_regex fr, const auto& fn) {
-        static thread_local std::vector< boost::fibers::future< bool > > s_future_list;
+        static thread_local std::vector< FiberManagerLib::Future< bool > > s_future_list;
         return multicast_msg(rr, fr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
                              s_future_list);
     }
@@ -321,7 +322,7 @@ private:
     int send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg);
 
     int multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
-                      std::vector< boost::fibers::future< bool > >& out_msgs_list);
+                      std::vector< FiberManagerLib::Future< bool > >& out_msgs_list);
     int multicast_msg_and_wait(reactor_regex rr, fiber_regex fr, iomgr_msg* msg);
 
     /********* State Machine Related Operations ********/

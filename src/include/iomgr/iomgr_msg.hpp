@@ -24,6 +24,7 @@
 #include <sisl/utility/atomic_counter.hpp>
 #include <sisl/utility/obj_life_counter.hpp>
 #include <iomgr/iomgr_types.hpp>
+#include <iomgr/fiber_lib.hpp>
 
 namespace iomgr {
 using run_func_t = std::function< void(void) >;
@@ -54,7 +55,7 @@ protected:
 };
 
 struct iomgr_waitable_msg : public iomgr_msg {
-    boost::fibers::promise< bool > m_promise;
+    FiberManagerLib::Promise< bool > m_promise;
 
     template < class... Args >
     static iomgr_waitable_msg* create(Args&&... args) {
@@ -63,7 +64,7 @@ struct iomgr_waitable_msg : public iomgr_msg {
 
     iomgr_msg* clone() const override { return new iomgr_waitable_msg{m_method}; }
     bool need_reply() const override { return true; }
-    void completed() { m_promise.set_value(true); }
+    void completed() { m_promise.setValue(true); }
 
 protected:
     iomgr_waitable_msg(const auto& fn) : iomgr_msg(fn) {}

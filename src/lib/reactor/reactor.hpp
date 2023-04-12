@@ -14,7 +14,6 @@
  **************************************************************************/
 #pragma once
 
-#include <boost/fiber/all.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/fds/sparse_vector.hpp>
@@ -23,6 +22,7 @@
 #include <chrono>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/iomgr_timer.hpp>
+#include <iomgr/fiber_lib.hpp>
 
 struct spdk_thread;
 struct spdk_bdev_desc;
@@ -123,6 +123,8 @@ class DriveInterface;
 struct iomgr_msg;
 struct timer;
 struct IOFiber;
+class FiberManagerLib;
+
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
     friend class IOFiber;
@@ -190,7 +192,7 @@ protected:
 private:
     void init(uint32_t num_fibers);
     bool listen_once();
-    void fiber_loop(io_fiber_t fiber);
+    void fiber_loop(IOFiber* fiber);
     bool can_add_iface(const std::shared_ptr< IOInterface >& iface) const;
 
 protected:
@@ -199,7 +201,6 @@ protected:
 protected:
     std::unique_ptr< IOThreadMetrics > m_metrics;
     sisl::atomic_counter< int32_t > m_io_fiber_count{0};
-    boost::fibers::fiber_specific_ptr< IOFiber > m_this_fiber;
 
     int m_worker_slot_num = -1; // Is this thread created by iomanager itself
     bool m_keep_running = true;
@@ -224,28 +225,7 @@ protected:
     listen_sentinel_cb_t m_iomgr_sentinel_cb;
     std::uniform_int_distribution< size_t > m_rand_fiber_dist;
     std::uniform_int_distribution< size_t > m_rand_sync_fiber_dist;
-};
-
-struct IOFiber {
-    IOReactor* reactor;                                    // Reactor this fiber is currently attached to
-    boost::fibers::fiber::id fiber_id;                     // Boost specific fiber id
-    boost::fibers::buffered_channel< iomgr_msg* > channel; // Channel to exchange between main and this fiber
-    spdk_thread* spdk_thr{nullptr};                        // In case of spdk, each fiber becomes spdk thread
-    uint32_t ordinal;                                      // Global ordinal of this fiber (unique id across iomgr)
-    std::queue< iomgr_msg* > m_overflow_msgs;              // Overflow queue if msgs can't be put in channel
-
-    static constexpr size_t max_channel_cap{1024};
-
-public:
-    IOFiber(IOReactor* r, uint32_t o) : reactor{r}, channel{max_channel_cap}, ordinal{o} {}
-
-    void start(const auto& channel_loop) {
-        boost::fibers::fiber([this, channel_loop]() {
-            fiber_id = boost::this_fiber::get_id();
-            reactor->m_this_fiber.reset(this);
-            channel_loop(this);
-        }).detach();
-    }
+    std::unique_ptr< FiberManagerLib > m_fiber_mgr_lib;
 };
 } // namespace iomgr
 

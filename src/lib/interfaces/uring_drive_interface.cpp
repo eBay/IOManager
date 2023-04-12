@@ -361,8 +361,8 @@ void UringDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t
 #else
     auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_data((char*)data);
-    iocb->completion = std::move(boost::fibers::promise< bool >{});
-    auto f = iocb->fiber_comp_promise().get_future();
+    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    auto f = iocb->fiber_comp_promise().getFuture();
 
     DriveInterface::increment_outstanding_counter(iocb);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
@@ -381,8 +381,8 @@ void UringDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iov
 
     auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(boost::fibers::promise< bool >{});
-    auto f = iocb->fiber_comp_promise().get_future();
+    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    auto f = iocb->fiber_comp_promise().getFuture();
 
     DriveInterface::increment_outstanding_counter(iocb);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
@@ -407,8 +407,8 @@ void UringDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, 
 #else
     auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_data(data);
-    iocb->completion = std::move(boost::fibers::promise< bool >{});
-    auto f = iocb->fiber_comp_promise().get_future();
+    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    auto f = iocb->fiber_comp_promise().getFuture();
 
     DriveInterface::increment_outstanding_counter(iocb);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
@@ -426,8 +426,8 @@ void UringDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovc
     }
     auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(boost::fibers::promise< bool >{});
-    auto f = iocb->fiber_comp_promise().get_future();
+    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    auto f = iocb->fiber_comp_promise().getFuture();
 
     DriveInterface::increment_outstanding_counter(iocb);
     auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
@@ -523,15 +523,15 @@ void UringDriveInterface::complete_io(drive_iocb* iocb) {
 
     if (iocb->result >= 0) {
         std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
-                              [&](boost::fibers::promise< bool >& p) { p.set_value(true); },
+                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
                               [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
                    iocb->completion);
     } else {
         std::visit(overloaded{[&](folly::Promise< bool >& p) {
                                   p.setException(folly::makeSystemErrorExplicit(iocb->result, "Error in uring io"));
                               },
-                              [&](boost::fibers::promise< bool >& p) {
-                                  p.set_exception(std::make_exception_ptr(
+                              [&](FiberManagerLib::Promise< bool >& p) {
+                                  p.setException(std::make_exception_ptr(
                                       folly::makeSystemErrorExplicit(iocb->result, "Error in uring io")));
                               },
                               [&](io_interface_comp_cb_t& cb) { cb(iocb->result > 0 ? 0 : iocb->result); }},

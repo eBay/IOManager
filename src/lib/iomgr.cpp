@@ -392,7 +392,7 @@ int IOManager::send_msg(io_fiber_t fiber, iomgr_msg* msg) {
 
 int IOManager::send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg) {
     int ret{0};
-    auto f = msg->m_promise.get_future();
+    auto f = msg->m_promise.getFuture();
     if (send_msg(fiber, msg)) {
         f.get();
         ret = 1;
@@ -400,12 +400,12 @@ int IOManager::send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg) {
     return ret;
 }
 
-static void append_future_if_needed(iomgr_msg* msg, std::vector< boost::fibers::future< bool > >& out_future_list) {
-    if (msg->need_reply()) { out_future_list.push_back((r_cast< iomgr_waitable_msg* >(msg))->m_promise.get_future()); }
+static void append_future_if_needed(iomgr_msg* msg, std::vector< FiberManagerLib::Future< bool > >& out_future_list) {
+    if (msg->need_reply()) { out_future_list.push_back((r_cast< iomgr_waitable_msg* >(msg))->m_promise.getFuture()); }
 }
 
 int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
-                             std::vector< boost::fibers::future< bool > >& out_future_list) {
+                             std::vector< FiberManagerLib::Future< bool > >& out_future_list) {
     int sent_to = 0;
     out_future_list.clear();
 
@@ -424,11 +424,12 @@ int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
             fiber_regex fr;
             iomgr_msg* msg;
             iomgr_msg* cloned_msg{nullptr};
-            std::vector< boost::fibers::future< bool > >& future_list;
+            std::vector< FiberManagerLib::Future< bool > >& future_list;
             IOReactor* min_reactor = nullptr;
             int64_t min_cnt{std::numeric_limits< int64_t >::max()};
 
-            param_ctx(reactor_regex r, fiber_regex f, iomgr_msg* m, std::vector< boost::fibers::future< bool > >& fl) :
+            param_ctx(reactor_regex r, fiber_regex f, iomgr_msg* m,
+                      std::vector< FiberManagerLib::Future< bool > >& fl) :
                     rr{r}, fr{f}, msg{m}, future_list{fl} {}
         };
 
@@ -469,7 +470,7 @@ int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
 }
 
 int IOManager::multicast_msg_and_wait(reactor_regex r, fiber_regex fr, iomgr_msg* in_msg) {
-    std::vector< boost::fibers::future< bool > > s_future_list;
+    std::vector< FiberManagerLib::Future< bool > > s_future_list;
     auto const count = multicast_msg(r, fr, in_msg, s_future_list);
     if (count) {
         for (auto& f : s_future_list) {
