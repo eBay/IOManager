@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.6.15"
+    version = "8.7.1"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -55,13 +55,19 @@ class IOMgrConan(ConanFile):
         self.requires("liburing/2.1")
         self.requires("nlohmann_json/3.11.2")
         self.requires("libevent/2.1.12")
+<<<<<<< HEAD
         self.requires("spdk/21.07.y")
         self.requires("evhtp/1.2.18.2")
+=======
+        self.requires("spdk/21.07.x")
+        self.requires("pistache/0.0.5")
+>>>>>>> Migrate to Pistache for http server
         self.requires("zmarok-semver/1.1.0")
 
         self.requires("flatbuffers/1.12.0", override=True)
         self.requires("openssl/1.1.1q", override=True)
         self.requires("zlib/1.2.12", override=True)
+        self.requires("libcurl/7.80.0", override=True)
 
     def build(self):
         cmake = CMake(self)

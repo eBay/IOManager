@@ -13,14 +13,7 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #include "io_environment.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-function-type"
-#endif
 #include "http_server.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
 
 namespace iomgr {
 
@@ -42,23 +35,7 @@ void IOEnvironment::restart_http_server() {
 
 IOEnvironment& IOEnvironment::with_http_server() {
     if (!m_http_server) {
-        iomgr::HttpServerConfig cfg;
-        cfg.bind_address = "0.0.0.0";
-        cfg.server_port = IM_DYNAMIC_CONFIG(io_env.http_port);
-        cfg.read_write_timeout_secs = 10;
-        if (IM_DYNAMIC_CONFIG(io_env.encryption)) {
-            cfg.is_tls_enabled = true;
-            cfg.tls_cert_path = SECURITY_DYNAMIC_CONFIG(ssl_cert_file);
-            cfg.tls_key_path = SECURITY_DYNAMIC_CONFIG(ssl_key_file);
-            cfg.is_auth_enabled = true;
-        } else {
-            cfg.is_tls_enabled = false;
-            cfg.is_auth_enabled = false;
-        }
-
-        // get auth_manager if auth is enabled
-        with_auth_manager();
-        m_http_server = std::make_shared< iomgr::HttpServer >(cfg, get_auth_manager());
+        m_http_server = std::make_shared< iomgr::HttpServer >();
         m_http_server->start();
     }
 
