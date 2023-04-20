@@ -14,6 +14,11 @@ SISL_OPTIONS_ENABLE(logging)
 using namespace Pistache;
 using namespace Pistache::Rest;
 
+static void set_http_port() {
+    IM_SETTINGS_FACTORY().modifiable_settings([](auto& s) { s.io_env->http_port = 24680; });
+    IM_SETTINGS_FACTORY().save();
+}
+
 class HTTPServerTest : public ::testing::Test {
 public:
     HTTPServerTest() = default;
@@ -24,6 +29,7 @@ public:
     virtual ~HTTPServerTest() override = default;
 
     virtual void SetUp() override {
+        set_http_port();
         m_server = std::make_unique< iomgr::HttpServer >();
         // s_is_shutdown = false;
         m_server->setup_route(Http::Method::Get, "/api/v1/sayHello", Routes::bind(&HTTPServerTest::say_hello, this));
@@ -70,27 +76,27 @@ protected:
 
 TEST_F(HTTPServerTest, BasicTest) {
 
-    const cpr::Url url{"http://127.0.0.1:5000/api/v1/sayHello"};
+    const cpr::Url url{"http://127.0.0.1:24680/api/v1/sayHello"};
     auto resp{cpr::Get(url)};
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Hello client from async_http server\n");
 
-    static const cpr::Url url1{"http://127.0.0.1:5000/api/v1/getResource"};
+    static const cpr::Url url1{"http://127.0.0.1:24680/api/v1/getResource"};
     resp = cpr::Get(url1);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "get");
 
-    const cpr::Url url2{"http://127.0.0.1:5000/api/v1/postResource"};
+    const cpr::Url url2{"http://127.0.0.1:24680/api/v1/postResource"};
     resp = cpr::Post(url2);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "post");
 
-    const cpr::Url url3{"http://127.0.0.1:5000/api/v1/putResource"};
+    const cpr::Url url3{"http://127.0.0.1:24680/api/v1/putResource"};
     resp = cpr::Put(url3);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "put");
 
-    const cpr::Url url4{"http://127.0.0.1:5000/api/v1/deleteResource"};
+    const cpr::Url url4{"http://127.0.0.1:24680/api/v1/deleteResource"};
     resp = cpr::Delete(url4);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "delete");
@@ -100,7 +106,7 @@ TEST_F(HTTPServerTest, ParallelTestWithWait) {
     m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease", Routes::bind(&HTTPServerTest::say_name, this));
 
     const auto thread_func{[](const size_t iterations) {
-        const cpr::Url url{"http://127.0.0.1:5000/api/v1/yourNamePlease"};
+        const cpr::Url url{"http://127.0.0.1:24680/api/v1/yourNamePlease"};
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
             const auto resp{cpr::Get(url)};
             ASSERT_EQ(resp.status_code, cpr::status::HTTP_OK);
@@ -147,6 +153,7 @@ TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
 class HTTPServerParamsTest : public HTTPServerTest {
 protected:
     void SetUp() override {
+        set_http_port();
         m_server = std::make_unique< iomgr::HttpServer >();
         m_server->setup_route(Http::Method::Post, "/api/v1/level1",
                               Routes::bind(&HTTPServerParamsTest::create_level1, this));
@@ -180,30 +187,68 @@ protected:
 };
 
 TEST_F(HTTPServerParamsTest, BasicTest) {
-    cpr::Url url{"http://127.0.0.1:5000/api/v1/level1"};
+    cpr::Url url{"http://127.0.0.1:24680/api/v1/level1"};
     cpr::Response resp = cpr::Post(url);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level1");
 
-    cpr::Url url1{"http://127.0.0.1:5000/api/v1/level1/Level1/level2"};
+    cpr::Url url1{"http://127.0.0.1:24680/api/v1/level1/Level1/level2"};
     resp = cpr::Post(url1);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2");
 
-    cpr::Url url2 = {"http://127.0.0.1:5000/api/v1/level1/"};
+    cpr::Url url2 = {"http://127.0.0.1:24680/api/v1/level1/"};
     resp = cpr::Get(url2);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level1");
 
-    cpr::Url url3 = {"http://127.0.0.1:5000/api/v1/level1/Level1"};
+    cpr::Url url3 = {"http://127.0.0.1:24680/api/v1/level1/Level1"};
     resp = cpr::Get(url3);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2");
 
-    cpr::Url url4 = {"http://127.0.0.1:5000/api/v1/level1/Level1?query=dummy"};
+    cpr::Url url4 = {"http://127.0.0.1:24680/api/v1/level1/Level1?query=dummy"};
     resp = cpr::Get(url4);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2dummy");
+}
+
+class HTTPServerAuthTest : public HTTPServerTest {
+protected:
+    void SetUp() override {
+        set_http_port();
+        m_server = std::make_unique< iomgr::HttpServer >();
+        m_server->setup_route(Http::Method::Post, "/api/v1/localapi",
+                              Routes::bind(&HTTPServerAuthTest::local_api, this), iomgr::url_t::localhost);
+        m_server->setup_route(Http::Method::Get, "/api/v1/safeapi", Routes::bind(&HTTPServerAuthTest::safe_api, this),
+                              iomgr::url_t::safe);
+        m_server->setup_route(Http::Method::Get, "/api/v1/level1/regularapi",
+                              Routes::bind(&HTTPServerAuthTest::local_api, this));
+
+        EXPECT_TRUE(m_server->is_localaddr_url("/api/v1/localapi"));
+        EXPECT_TRUE(m_server->is_safe_url("/api/v1/safeapi"));
+        EXPECT_FALSE(m_server->is_safe_url("/api/v1/level1/regularapi"));
+        EXPECT_FALSE(m_server->is_localaddr_url("/api/v1/level1/regularapi"));
+        m_server->start();
+    }
+
+    void local_api(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok);
+    }
+
+    void safe_api(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok);
+    }
+};
+
+TEST_F(HTTPServerAuthTest, BasicTest) {
+    cpr::Url url{"http://127.0.0.1:24680/api/v1/localapi"};
+    cpr::Response resp = cpr::Post(url);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+
+    cpr::Url url2 = {"http://127.0.0.1:24680/api/v1/safeapi"};
+    resp = cpr::Get(url2);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
 }
 
 int main(int argc, char* argv[]) {
