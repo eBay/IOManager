@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.6.14"
+    version = "8.6.15"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -43,7 +43,7 @@ class IOMgrConan(ConanFile):
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
 
     def build_requirements(self):
-        self.build_requires("gtest/1.11.0")
+        self.build_requires("gtest/1.12.1")
 
     def requirements(self):
         self.requires("sisl/8.2.8")
@@ -53,9 +53,9 @@ class IOMgrConan(ConanFile):
         self.requires("grpc/1.48.0")
         self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
-        self.requires("nlohmann_json/3.10.5")
+        self.requires("nlohmann_json/3.11.2")
         self.requires("libevent/2.1.12")
-        self.requires("spdk/21.07.x")
+        self.requires("spdk/21.07.y")
         self.requires("evhtp/1.2.18.2")
         self.requires("zmarok-semver/1.1.0")
 
