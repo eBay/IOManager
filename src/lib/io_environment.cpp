@@ -34,10 +34,7 @@ void IOEnvironment::restart_http_server() {
 }
 
 IOEnvironment& IOEnvironment::with_http_server() {
-    if (!m_http_server) {
-        m_http_server = std::make_shared< iomgr::HttpServer >();
-        m_http_server->start();
-    }
+    if (!m_http_server) { m_http_server = std::make_shared< iomgr::HttpServer >(); }
 
     return get_instance();
 }

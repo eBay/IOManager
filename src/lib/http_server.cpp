@@ -27,10 +27,17 @@ void HttpServer::start() {
     // setup all routes and start the server
     m_http_endpoint->setHandler(m_router.handler());
     m_http_endpoint->serveThreaded();
+    m_server_running = true;
 }
 
 void HttpServer::setup_route(Pistache::Http::Method method, std::string resource,
                              Pistache::Rest::Route::Handler handler, url_type const& type) {
+    DEBUG_ASSERT(!m_server_running, "Initiated route setup after server started");
+    if (m_server_running) {
+        LOGWARN("Could not setup route {}, server is in running state.", resource)
+        return;
+    }
+
     m_router.addRoute(std::move(method), resource, std::move(handler));
 
     if (type == url_type::localhost) {
@@ -48,7 +55,10 @@ bool HttpServer::do_auth(Pistache::Http::Request& request, Pistache::Http::Respo
     return true;
 }
 
-void HttpServer::stop() { m_http_endpoint->shutdown(); }
+void HttpServer::stop() {
+    m_http_endpoint->shutdown();
+    m_server_running = false;
+}
 
 void HttpServer::setup_ssl() {
     if (IM_DYNAMIC_CONFIG(io_env.encryption)) {

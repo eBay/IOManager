@@ -55,13 +55,8 @@ class IOMgrConan(ConanFile):
         self.requires("liburing/2.1")
         self.requires("nlohmann_json/3.11.2")
         self.requires("libevent/2.1.12")
-<<<<<<< HEAD
         self.requires("spdk/21.07.y")
-        self.requires("evhtp/1.2.18.2")
-=======
-        self.requires("spdk/21.07.x")
         self.requires("pistache/0.0.5")
->>>>>>> Migrate to Pistache for http server
         self.requires("zmarok-semver/1.1.0")
 
         self.requires("flatbuffers/1.12.0", override=True)

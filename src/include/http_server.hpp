@@ -10,14 +10,12 @@
 
 namespace iomgr {
 
-class HttpServer {
-public:
-    enum class url_type {
-        localhost, // url can only be called from localhost
-        safe,      // Can be called from any host
-        regular
-    };
+ENUM(url_type, uint8_t,
+     localhost, // url can only be called from localhost
+     safe,      // Can be called from any host
+     regular);
 
+class HttpServer {
 public:
     HttpServer();
 
@@ -44,11 +42,12 @@ private:
 private:
     std::unique_ptr< Pistache::Http::Endpoint > m_http_endpoint;
     Pistache::Rest::Router m_router;
+    std::atomic< bool > m_server_running{false};
     std::unordered_set< std::string > m_safelist;
     std::unordered_set< std::string > m_localhost_list;
     std::unordered_set< std::string > m_local_ips;
 };
 
-using url_t = HttpServer::url_type;
+using url_t = iomgr::url_type;
 
 } // namespace iomgr

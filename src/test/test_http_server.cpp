@@ -33,6 +33,8 @@ public:
         m_server = std::make_unique< iomgr::HttpServer >();
         // s_is_shutdown = false;
         m_server->setup_route(Http::Method::Get, "/api/v1/sayHello", Routes::bind(&HTTPServerTest::say_hello, this));
+        m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease",
+                              Routes::bind(&HTTPServerTest::say_name, this));
         m_server->setup_route(Http::Method::Post, "/api/v1/postResource/",
                               Routes::bind(&HTTPServerTest::post_resource, this));
         m_server->setup_route(Http::Method::Get, "/api/v1/getResource",
@@ -75,7 +77,6 @@ protected:
 };
 
 TEST_F(HTTPServerTest, BasicTest) {
-
     const cpr::Url url{"http://127.0.0.1:24680/api/v1/sayHello"};
     auto resp{cpr::Get(url)};
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
@@ -103,8 +104,6 @@ TEST_F(HTTPServerTest, BasicTest) {
 }
 
 TEST_F(HTTPServerTest, ParallelTestWithWait) {
-    m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease", Routes::bind(&HTTPServerTest::say_name, this));
-
     const auto thread_func{[](const size_t iterations) {
         const cpr::Url url{"http://127.0.0.1:24680/api/v1/yourNamePlease"};
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
@@ -127,8 +126,6 @@ TEST_F(HTTPServerTest, ParallelTestWithWait) {
 }
 
 TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
-    m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease", Routes::bind(&HTTPServerTest::say_name, this));
-
     const auto thread_func{[](const size_t iterations) {
         const cpr::Url url{"http://127.0.0.1:5051/api/v1/yourNamePlease"};
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
