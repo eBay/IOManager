@@ -51,7 +51,7 @@ class IOMgrConan(ConanFile):
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
 
     def build_requirements(self):
-        self.build_requires("gtest/1.11.0")
+        self.build_requires("gtest/1.12.1")
 
     def requirements(self):
         self.requires("sisl/[~=9, include_prerelease=True]@oss/master")
