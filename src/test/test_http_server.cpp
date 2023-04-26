@@ -1,88 +1,22 @@
 //
 // Created by Kadayam, Hari on 12/14/18.
 //
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstdint>
-#include <fstream>
-#include <iostream>
-#include <memory>
-#include <mutex>
-#include <sstream>
-#include <string>
-#include <thread>
 
 #include <cpr/cpr.h>
 #include <gtest/gtest.h>
 
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-function-type"
-#endif
+#include "io_environment.hpp"
 #include "http_server.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
 
-SISL_LOGGING_INIT(httpserver_lmod)
+SISL_LOGGING_INIT()
 SISL_OPTIONS_ENABLE(logging)
 
-namespace {
-iomgr::HttpServerConfig s_cfg;
-std::unique_ptr< iomgr::HttpServer > s_server;
-std::mutex s_m;
-std::condition_variable s_cv;
-bool s_is_shutdown{false};
-std::unique_ptr< std::thread > s_timer_thread;
-} // namespace
+using namespace Pistache;
+using namespace Pistache::Rest;
 
-static void sleep_and_return(iomgr::HttpCallData cd, int64_t secs) {
-    std::this_thread::sleep_for(std::chrono::seconds{secs});
-    std::ostringstream ss{};
-    ss << "Took a good nap for " << secs << " seconds. Thank you!\n";
-    s_server->respond_OK(cd, EVHTP_RES_OK, ss.str());
-}
-
-static void delayed_return(iomgr::HttpCallData cd) {
-    const auto req{cd->request()};
-    const auto t{::evhtp_kvs_find_kv(req->uri->query, "seconds")};
-    if (!t) {
-        s_server->respond_NOTOK(cd, EVHTP_RES_BADREQ, "Invalid seconds param!");
-        return;
-    }
-
-    std::string sstr{t->val};
-    if (sstr.empty() || !std::all_of(sstr.begin(), sstr.end(), ::isdigit)) {
-        s_server->respond_NOTOK(cd, EVHTP_RES_BADREQ,
-                                "Invalid seconds param! Either empty or contains non-digit characters\n");
-        return;
-    }
-
-    const int64_t secs{std::stoll(sstr, nullptr, 10)};
-    s_timer_thread = std::make_unique< std::thread >(sleep_and_return, cd, secs);
-    return;
-}
-
-static void say_hello(iomgr::HttpCallData cd) {
-    std::cout << "Client is saying hello\n";
-    s_server->respond_OK(cd, EVHTP_RES_OK, "Hello client from async_http server\n");
-}
-
-static void say_name(iomgr::HttpCallData cd) {
-    s_server->respond_OK(cd, EVHTP_RES_OK, "I am the iomgr (sizzling) http server \n");
-}
-
-static void shutdown(iomgr::HttpCallData cd) {
-    std::cout << "Client is asking us to shutdown server\n";
-    s_server->respond_OK(cd, EVHTP_RES_OK, "Ok will do\n");
-
-    {
-        std::lock_guard< std::mutex > lk{s_m};
-        s_is_shutdown = true;
-    }
-    s_cv.notify_one();
+static void set_http_port() {
+    IM_SETTINGS_FACTORY().modifiable_settings([](auto& s) { s.io_env->http_port = 24680; });
+    IM_SETTINGS_FACTORY().save();
 }
 
 class HTTPServerTest : public ::testing::Test {
@@ -95,57 +29,87 @@ public:
     virtual ~HTTPServerTest() override = default;
 
     virtual void SetUp() override {
-        s_server = std::make_unique< iomgr::HttpServer >(
-            s_cfg,
-            std::vector< iomgr::_handler_info >{handler_info("/api/v1/sayHello", say_hello, nullptr),
-                                                handler_info("/api/v1/shutdown", shutdown, nullptr),
-                                                handler_info("/api/v1/sleepFor", delayed_return, nullptr)});
-        s_is_shutdown = false;
-        s_server->start();
+        set_http_port();
+        m_server = std::make_unique< iomgr::HttpServer >();
+        // s_is_shutdown = false;
+        m_server->setup_route(Http::Method::Get, "/api/v1/sayHello", Routes::bind(&HTTPServerTest::say_hello, this));
+        m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease",
+                              Routes::bind(&HTTPServerTest::say_name, this));
+        m_server->setup_route(Http::Method::Post, "/api/v1/postResource/",
+                              Routes::bind(&HTTPServerTest::post_resource, this));
+        m_server->setup_route(Http::Method::Get, "/api/v1/getResource",
+                              Routes::bind(&HTTPServerTest::get_resource, this));
+        m_server->setup_route(Http::Method::Put, "/api/v1/putResource",
+                              Routes::bind(&HTTPServerTest::put_resource, this));
+        m_server->setup_route(Http::Method::Delete, "/api/v1/deleteResource",
+                              Routes::bind(&HTTPServerTest::delete_resource, this));
+        m_server->start();
     }
 
-    virtual void TearDown() override {
-        s_server->stop();
+    virtual void TearDown() override { m_server->stop(); }
 
-        if (s_timer_thread && s_timer_thread->joinable()) { s_timer_thread->join(); }
-        s_timer_thread.reset();
-        s_server.reset();
+    void say_hello(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "Hello client from async_http server\n");
+    }
+
+    void say_name(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "I am the iomgr (sizzling) http server \n");
+    }
+
+    void post_resource(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "post");
+    }
+
+    void get_resource(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "get");
+    }
+
+    void put_resource(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "put");
+    }
+
+    void delete_resource(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "delete");
     }
 
 protected:
-    void wait_for_shutdown() {
-        std::unique_lock< std::mutex > lk{s_m};
-        s_cv.wait(lk, [] { return (s_is_shutdown); });
-    }
+    std::unique_ptr< iomgr::HttpServer > m_server;
 };
 
 TEST_F(HTTPServerTest, BasicTest) {
-    s_server->register_handler_info(handler_info("/api/v1/yourNamePlease", say_name, nullptr));
+    const cpr::Url url{"http://127.0.0.1:24680/api/v1/sayHello"};
+    auto resp{cpr::Get(url)};
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Hello client from async_http server\n");
 
-    const cpr::Url url{"http://127.0.0.1:5051/api/v1/shutdown"};
-    const auto resp{cpr::Post(url)};
+    static const cpr::Url url1{"http://127.0.0.1:24680/api/v1/getResource"};
+    resp = cpr::Get(url1);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "get");
 
-    ASSERT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    const cpr::Url url2{"http://127.0.0.1:24680/api/v1/postResource"};
+    resp = cpr::Post(url2);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "post");
 
-    wait_for_shutdown();
+    const cpr::Url url3{"http://127.0.0.1:24680/api/v1/putResource"};
+    resp = cpr::Put(url3);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "put");
 
-#ifdef _PRERELEASE
-    std::cout << "ObjectLife Counter:\n";
-    sisl::ObjCounterRegistry::foreach ([](const std::string& name, int64_t created, int64_t alive) {
-        std::cout << name << ": " << alive << "/" << created << "\n";
-    });
-#endif
+    const cpr::Url url4{"http://127.0.0.1:24680/api/v1/deleteResource"};
+    resp = cpr::Delete(url4);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "delete");
 }
 
 TEST_F(HTTPServerTest, ParallelTestWithWait) {
-    s_server->register_handler_info(handler_info("/api/v1/yourNamePlease", say_name, nullptr));
-
-    std::atomic< bool > failed{false};
-    const auto thread_func{[&failed](const size_t iterations) {
-        const cpr::Url url{"http://127.0.0.1:5051/api/v1/yourNamePlease"};
-        for (size_t iteration{0}; (iteration < iterations) && !failed; ++iteration) {
-            const auto resp{cpr::Post(url)};
-            if (resp.status_code != cpr::status::HTTP_OK) failed = true;
+    const auto thread_func{[](const size_t iterations) {
+        const cpr::Url url{"http://127.0.0.1:24680/api/v1/yourNamePlease"};
+        for (size_t iteration{0}; iteration < iterations; ++iteration) {
+            const auto resp{cpr::Get(url)};
+            ASSERT_EQ(resp.status_code, cpr::status::HTTP_OK);
+            ASSERT_EQ(resp.text, "I am the iomgr (sizzling) http server \n");
         }
     }};
 
@@ -159,13 +123,9 @@ TEST_F(HTTPServerTest, ParallelTestWithWait) {
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();
     }
-
-    ASSERT_FALSE(failed);
 }
 
 TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
-    s_server->register_handler_info(handler_info("/api/v1/yourNamePlease", say_name, nullptr));
-
     const auto thread_func{[](const size_t iterations) {
         const cpr::Url url{"http://127.0.0.1:5051/api/v1/yourNamePlease"};
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
@@ -187,14 +147,113 @@ TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
     // exit while server processing
 }
 
+class HTTPServerParamsTest : public HTTPServerTest {
+protected:
+    void SetUp() override {
+        set_http_port();
+        m_server = std::make_unique< iomgr::HttpServer >();
+        m_server->setup_route(Http::Method::Post, "/api/v1/level1",
+                              Routes::bind(&HTTPServerParamsTest::create_level1, this));
+        m_server->setup_route(Http::Method::Post, "/api/v1/level1/:level/level2",
+                              Routes::bind(&HTTPServerParamsTest::create_level2, this));
+        m_server->setup_route(Http::Method::Get, "/api/v1/level1",
+                              Routes::bind(&HTTPServerParamsTest::get_level1, this));
+        m_server->setup_route(Http::Method::Get, "/api/v1/level1/:level",
+                              Routes::bind(&HTTPServerParamsTest::get_level1, this));
+        m_server->start();
+    }
+
+    void create_level1(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok, "Level1");
+    }
+
+    void create_level2(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        auto level{request.param(":level").as< std::string >()};
+        EXPECT_EQ(level, "Level1");
+        response.send(Pistache::Http::Code::Ok, "Level2");
+    }
+
+    void get_level1(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        auto level{request.hasParam(":level") ? request.param(":level").as< std::string >() : ""};
+        std::string resp = (level.empty()) ? "Level1" : "Level2";
+        if (!level.empty()) { EXPECT_EQ(level, "Level1"); }
+        auto q{request.query().get("query")};
+        if (q) { resp += q.value(); }
+        response.send(Pistache::Http::Code::Ok, resp);
+    }
+};
+
+TEST_F(HTTPServerParamsTest, BasicTest) {
+    cpr::Url url{"http://127.0.0.1:24680/api/v1/level1"};
+    cpr::Response resp = cpr::Post(url);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Level1");
+
+    cpr::Url url1{"http://127.0.0.1:24680/api/v1/level1/Level1/level2"};
+    resp = cpr::Post(url1);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Level2");
+
+    cpr::Url url2 = {"http://127.0.0.1:24680/api/v1/level1/"};
+    resp = cpr::Get(url2);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Level1");
+
+    cpr::Url url3 = {"http://127.0.0.1:24680/api/v1/level1/Level1"};
+    resp = cpr::Get(url3);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Level2");
+
+    cpr::Url url4 = {"http://127.0.0.1:24680/api/v1/level1/Level1?query=dummy"};
+    resp = cpr::Get(url4);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Level2dummy");
+}
+
+class HTTPServerAuthTest : public HTTPServerTest {
+protected:
+    void SetUp() override {
+        set_http_port();
+        m_server = std::make_unique< iomgr::HttpServer >();
+        m_server->setup_route(Http::Method::Post, "/api/v1/localapi",
+                              Routes::bind(&HTTPServerAuthTest::local_api, this), iomgr::url_t::localhost);
+        m_server->setup_route(Http::Method::Get, "/api/v1/safeapi", Routes::bind(&HTTPServerAuthTest::safe_api, this),
+                              iomgr::url_t::safe);
+        m_server->setup_route(Http::Method::Get, "/api/v1/level1/regularapi",
+                              Routes::bind(&HTTPServerAuthTest::local_api, this));
+
+        EXPECT_TRUE(m_server->is_localaddr_url("/api/v1/localapi"));
+        EXPECT_TRUE(m_server->is_safe_url("/api/v1/safeapi"));
+        EXPECT_FALSE(m_server->is_safe_url("/api/v1/level1/regularapi"));
+        EXPECT_FALSE(m_server->is_localaddr_url("/api/v1/level1/regularapi"));
+        m_server->start();
+    }
+
+    void local_api(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok);
+    }
+
+    void safe_api(const Pistache::Rest::Request& request, Pistache::Http::ResponseWriter response) {
+        response.send(Pistache::Http::Code::Ok);
+    }
+};
+
+TEST_F(HTTPServerAuthTest, BasicTest) {
+    cpr::Url url{"http://127.0.0.1:24680/api/v1/localapi"};
+    cpr::Response resp = cpr::Post(url);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+
+    cpr::Url url2 = {"http://127.0.0.1:24680/api/v1/safeapi"};
+    resp = cpr::Get(url2);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+}
+
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     SISL_OPTIONS_LOAD(argc, argv, logging)
 
-    s_cfg.is_tls_enabled = false;
-    s_cfg.bind_address = "127.0.0.1";
-    s_cfg.server_port = 5051;
-    s_cfg.read_write_timeout_secs = 10;
+    sisl::logging::SetLogger("test_http_server");
+    spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     return RUN_ALL_TESTS();
 }
