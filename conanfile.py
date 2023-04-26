@@ -23,6 +23,7 @@ class IOMgrConan(ConanFile):
         "http": ['True', 'False'],
         "spdk": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "fiber_impl" : ['boost', 'folly'],
         "with_http": ['none', 'evhtp'] ,
         }
     default_options = {
@@ -36,6 +37,7 @@ class IOMgrConan(ConanFile):
         'testing':      'full',
         'sisl:prerelease':   True,
         'with_http':    'evhtp',
+        'fiber_impl':   'boost',
     }
 
     generators = "cmake", "cmake_find_package"
@@ -80,21 +82,21 @@ class IOMgrConan(ConanFile):
                        'MEMORY_SANITIZER_ON': 'OFF'}
 
         test_target = None
-        run_tests = True
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
             elif self.options.coverage:
                 definitions['BUILD_COVERAGE'] = 'ON'
                 test_target = 'coverage'
-            else:
-                run_tests = False
+
+        if self.options.fiber_impl == "boost":
+            definitions['FIBER_IMPL'] = 'boost'
+        else:
+            definitions['FIBER_IMPL'] = 'folly'
 
         cmake.configure(defs=definitions)
         cmake.build()
-        # Only test in Sanitizer mode, Coverage mode or Release mode
-        if run_tests:
-            cmake.test(target=test_target, output_on_failure=True)
+        cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)

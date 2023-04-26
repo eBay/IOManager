@@ -15,6 +15,10 @@ if (${spdk_FOUND})
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWITH_SPDK")
 endif()
 
+if ("${FIBER_IMPL}" STREQUAL "folly") 
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_FOLLY_FIBER")
+endif()
+
 include_directories (BEFORE lib/)
 include_directories (BEFORE include/)
 include_directories (BEFORE ${CMAKE_CURRENT_BINARY_DIR}/lib)

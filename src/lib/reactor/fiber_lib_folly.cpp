@@ -1,4 +1,4 @@
-#ifndef USE_BOOST_FIBER
+#ifdef USE_FOLLY_FIBER
 #include "reactor/reactor.hpp"
 #include <iomgr/fiber_lib.hpp>
 #include <folly/io/async/AsyncTimeout.h>
@@ -26,7 +26,9 @@ void FiberManagerLib::set_this_iofiber(IOFiber* f) {
 
 IOFiber* FiberManagerLib::iofiber_self() const { return folly::fibers::local< IOFiberFollyImpl* >(); };
 
-void FiberManagerLib::yield() { m_fiber_mgr.loopUntilNoReadyImpl(); }
+void FiberManagerLib::yield() { m_fiber_mgr.yield(); }
+
+void FiberManagerLib::yield_main() { m_fiber_mgr.loopUntilNoReadyImpl(); }
 
 /////////////////////////////////////// ReactorLoopController Section ///////////////////////////////////////
 ReactorLoopController::ReactorLoopController() :
@@ -106,11 +108,13 @@ bool IOFiberFollyImpl::push_msg(iomgr_msg* msg) {
 }
 
 iomgr_msg* IOFiberFollyImpl::pop_msg() {
-    iomgr_msg* msg;
+    iomgr_msg* msg{nullptr};
     channel_baton.wait();
-    LOGMSG_ASSERT_NE(channel.empty(), true, "Fiber channel baton wokenup but no msg in queue");
-    msg = channel.front();
-    channel.pop();
+    // LOGMSG_ASSERT_NE(channel.empty(), true, "Fiber channel baton wokenup but no msg in queue");
+    if (!channel.empty()) {
+        msg = channel.front();
+        channel.pop();
+    }
     return msg;
 }
 

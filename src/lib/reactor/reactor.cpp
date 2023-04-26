@@ -127,7 +127,7 @@ bool IOReactor::listen_once() {
             }
         }
 
-        m_fiber_mgr_lib->yield(); // Yield to make sure other fibers gets to handle messages/completions
+        m_fiber_mgr_lib->yield_main(); // Yield to make sure other fibers gets to handle messages/completions
 
         if (need_backoff) {
             m_cur_backoff_delay_us = m_cur_backoff_delay_us * IM_DYNAMIC_CONFIG(poll.backoff_delay_increase_factor);
@@ -143,7 +143,7 @@ bool IOReactor::listen_once() {
 
 void IOReactor::stop() {
     m_keep_running = false;
-    m_fiber_mgr_lib->yield(); // Yield to make sure other fibers stop their loop
+    m_fiber_mgr_lib->yield_main(); // Yield to make sure other fibers stop their loop
 
     uint32_t removed_iface{0};
     iomanager.foreach_interface([this, &removed_iface](cshared< IOInterface >& iface) {
@@ -164,7 +164,7 @@ void IOReactor::stop() {
     // Wait for all fiber loops to exit
     m_io_fiber_count.decrement(1);      // Decrement main fiber
     while (!m_io_fiber_count.testz()) { // Wait for all fiber loop to exit
-        m_fiber_mgr_lib->yield();
+        m_fiber_mgr_lib->yield_main();
     }
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
@@ -196,15 +196,16 @@ int IOReactor::remove_iodev(const io_device_ptr& iodev) {
 void IOReactor::fiber_loop(IOFiber* fiber) {
     iomgr_msg* msg;
     while (true) {
-        msg = fiber->pop_msg();
-        REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
-        handle_msg(msg);
+        if ((msg = fiber->pop_msg()) != nullptr) {
+            REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
+            handle_msg(msg);
+        }
 
         if (!m_keep_running) { break; }
+        m_fiber_mgr_lib->yield();
     }
     fiber->close_channel();
     m_io_fiber_count.decrement(1);
-    m_fiber_mgr_lib->yield();
 }
 
 io_fiber_t IOReactor::pick_fiber(fiber_regex r) {

@@ -1,11 +1,14 @@
 #pragma once
 
-#ifdef USE_BOOST_FIBER
-#include <boost/fiber/all.hpp>
-#else
+#ifdef USE_FOLLY_FIBER
 #include <folly/fibers/FiberManager.h>
 #include <folly/futures/Future.h>
 #include <folly/fibers/Promise.h>
+#else
+#include <boost/fiber/all.hpp>
+#include <boost/fiber/context.hpp>
+#include <boost/fiber/detail/spinlock.hpp>
+#include <boost/fiber/waker.hpp>
 #endif
 
 struct spdk_thread;
@@ -29,10 +32,8 @@ public:
     virtual void close_channel() = 0;
 };
 
-#ifdef USE_BOOST_FIBER
+#ifndef USE_FOLLY_FIBER
 class FiberManagerLib {
-    class LoopController {};
-
 private:
     boost::fibers::fiber_specific_ptr< IOFiber > m_this_fiber;
 
@@ -62,6 +63,23 @@ public:
         }
     };
 
+    using mutex = boost::fibers::mutex;
+    class shared_mutex {
+    public:
+        void lock_shared();
+        void lock();
+        void unlock_shared();
+        void unlock();
+
+    private:
+        static constexpr bool s_writer_priority{true};
+        boost::fibers::detail::spinlock m_wait_q_splk{};
+        boost::fibers::wait_queue m_wait_q;
+        boost::fibers::context* m_write_owner{nullptr};
+        uint32_t m_readers{0};
+        uint32_t m_write_waiters{0};
+    };
+
     FiberManagerLib();
     std::unique_ptr< IOFiber > create_iofiber(IOReactor* reactor, uint32_t fiber_ordinal);
     void start_iofiber(IOFiber* f, const std::function< void(IOFiber*) >& channel_loop);
@@ -69,6 +87,7 @@ public:
     void set_this_iofiber(IOFiber* f);
     void start_io_fiber();
     void yield();
+    void yield_main();
 };
 
 struct IOFiberBoostImpl : public IOFiber {
@@ -91,9 +110,6 @@ private:
     folly::fibers::FiberManager m_fiber_mgr;
 
 public:
-    /*template < typename T >
-    using Future = folly::Future< T >; */
-
     template < typename T, typename BatonT = folly::fibers::Baton >
     struct SharedState {
         folly::Try< T > val;
@@ -122,10 +138,6 @@ public:
             return *m_shared_state->val;
         }
     };
-
-    /*template < typename T, typename BatonT = folly::fibers::Baton >
-    using Promise = folly::fibers::Promise< T, BatonT >;
-    */
 
     // Simpler implementation of Promise to ensure what we need for iomanager use case
     template < typename T, typename BatonT = folly::fibers::Baton >
@@ -194,6 +206,10 @@ public:
     void set_this_iofiber(IOFiber* f);
     void start_io_fiber();
     void yield();
+    void yield_main(); // Yield main fiber
+
+    using mutex = folly::fibers::TimedMutex;
+    using shared_mutex = folly::fibers::TimedRWMutex;
 };
 
 class ReactorLoopController : public folly::fibers::LoopController {

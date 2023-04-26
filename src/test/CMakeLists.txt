@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter -fconcepts")
-#set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_BOOST_FIBER")
 
 find_package (GTest REQUIRED)
 
@@ -40,6 +39,10 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
     set(TEST_DRIVE_FILES test_drive_interface.cpp)
     add_executable(test_drive ${TEST_DRIVE_FILES})
     target_link_libraries(test_drive ${TEST_DEPS} )
+
+    set(TEST_SHARED_MUTEX_FILES test_fiber_shared_mutex.cpp)
+    add_executable(test_shared_mutex ${TEST_SHARED_MUTEX_FILES})
+    target_link_libraries(test_shared_mutex ${TEST_DEPS} )
 
     #set(TEST_HTTP_SERVER_SOURCES test_http_server.cpp)
     #add_executable(test_http_server ${TEST_HTTP_SERVER_SOURCES})
