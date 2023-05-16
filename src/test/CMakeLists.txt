@@ -36,10 +36,10 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
     add_executable(test_timer ${TEST_TIMER_FILES})
     target_link_libraries(test_timer ${TEST_DEPS} )
 
-    #set(TEST_HTTP_SERVER_SOURCES test_http_server.cpp)
-    #add_executable(test_http_server ${TEST_HTTP_SERVER_SOURCES})
-    #target_link_libraries(test_http_server ${TEST_DEPS})
-    #add_test(NAME TestHttpServer COMMAND test_http_server)
+    set(TEST_HTTP_SERVER_SOURCES test_http_server.cpp)
+    add_executable(test_http_server ${TEST_HTTP_SERVER_SOURCES})
+    target_link_libraries(test_http_server ${TEST_DEPS})
+    add_test(NAME TestHttpServer COMMAND test_http_server)
 
     if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))
         add_test(NAME TestIOMgr-Epoll COMMAND test_iomgr)

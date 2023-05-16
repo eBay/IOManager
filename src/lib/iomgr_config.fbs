@@ -69,6 +69,10 @@ table Poll {
 
 table IoEnv {
     http_port: uint32 = 5000;
+
+    http_max_request_size: uint64 = 4000000;
+
+    http_num_threads: uint32 = 1;
     
     // Turn on security features
     encryption: bool = false;

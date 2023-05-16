@@ -13,7 +13,7 @@ find_package(flatbuffers REQUIRED)
 find_package(grpc_internal REQUIRED)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
-find_package(evhtp REQUIRED)
+find_package(Pistache REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
@@ -32,13 +32,14 @@ set (IOMGR_SRC
       interfaces/spdk_nvmf_interface.cpp
       interfaces/grpc_interface.cpp
       io_environment.cpp
+      http_server.cpp
       )
 add_library (iomgr ${IOMGR_SRC})
 
 list(APPEND IOMGR_LIB_DEPS
       liburing::liburing
       grpc_internal::grpc_internal
-      evhtp::evhtp
+      Pistache::Pistache
       sisl::sisl
       spdk::spdk
     )
