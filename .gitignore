@@ -13,7 +13,6 @@ debug/**
 release/**
 cmake-*/**
 nosanitize/**
-build*
 test_package/build*
 
 # vscode
