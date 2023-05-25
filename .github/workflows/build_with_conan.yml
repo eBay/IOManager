@@ -29,6 +29,7 @@ jobs:
       uses: actions/setup-python@v3
       with:
         python-version: ${{ matrix.python-version }}
+
     - name: Install Conan
       run: |
         python -m pip install --upgrade pip
@@ -39,12 +40,14 @@ jobs:
       run: |
         conan user
 
-    - name: Export Dependencies
+    - name: Retrieve Dependencies
       uses: actions/checkout@v3
       with:
         repository: ebay/sisl
         path: deps
         ref: master
+
+    - name: Export Dependencies
       run: |
         conan export deps/sisl oss/master
 
