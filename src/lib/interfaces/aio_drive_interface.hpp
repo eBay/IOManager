@@ -84,11 +84,6 @@ public:
     aio_thread_context();
     ~aio_thread_context();
 
-    drive_aio_iocb* prep_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, char* data, uint64_t size,
-                              uint64_t offset);
-    drive_aio_iocb* prep_iocb_v(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, const iovec* iov,
-                                int iovcnt, uint32_t size, uint64_t offset);
-
     bool add_to_batch(drive_aio_iocb* diocb);
     bool can_submit_io() const;
     void inc_submitted_aio(int count);
@@ -164,6 +159,8 @@ private:
      */
     bool handle_io_failure(drive_aio_iocb* diocb, int error);
     void complete_io(drive_aio_iocb* diocb);
+
+    static void submit_in_this_thread(AioDriveInterface* iface, drive_aio_iocb* diocb, bool part_of_batch);
 
 private:
     static thread_local std::unique_ptr< aio_thread_context > t_aio_ctx;
