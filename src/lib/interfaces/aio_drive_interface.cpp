@@ -77,6 +77,43 @@ using namespace std;
 thread_local std::unique_ptr< aio_thread_context > AioDriveInterface::t_aio_ctx;
 std::vector< int > AioDriveInterface::s_poll_interval_table;
 
+static drive_aio_iocb* prep_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, char* data, uint64_t size,
+                                 uint64_t offset) {
+    auto diocb = new drive_aio_iocb(iface, iodev, op_type, size, offset);
+    diocb->set_data(data);
+    auto* kernel_iocb = &diocb->kernel_iocb;
+
+#ifdef __linux__
+    if (op_type == DriveOpType::READ) {
+        io_prep_pread(kernel_iocb, iodev->fd(), (void*)data, size, offset);
+    } else if (op_type == DriveOpType::WRITE) {
+        io_prep_pwrite(kernel_iocb, iodev->fd(), (void*)data, size, offset);
+    }
+    kernel_iocb->data = diocb;
+#elif defined(__APPLE__)
+    kernel_iocb->aio_fildes = iodev->fd();
+    kernel_iocb->aio_offset = offset;
+    kernel_iocb->aio_buf = (void*)data;
+    kernel_iocb->aio_nbytes = size;
+#endif
+    return diocb;
+}
+
+static drive_aio_iocb* prep_iocb_v(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, const iovec* iov,
+                                   int iovcnt, uint32_t size, uint64_t offset) {
+    auto diocb = new drive_aio_iocb(iface, iodev, op_type, size, offset);
+    diocb->set_iovs(iov, iovcnt);
+    auto* kernel_iocb = &diocb->kernel_iocb;
+
+    if (op_type == DriveOpType::READ) {
+        io_prep_preadv(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
+    } else if (op_type == DriveOpType::WRITE) {
+        io_prep_pwritev(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
+    }
+    kernel_iocb->data = diocb;
+    return diocb;
+}
+
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : KernelDriveInterface(cb) {
     init_poll_interval_table();
 }
@@ -285,61 +322,78 @@ void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
                               [&](io_interface_comp_cb_t& cb) { cb(diocb->result > 0 ? 0 : diocb->result); }},
                    diocb->completion);
     }
-    sisl::ObjectAllocator< drive_aio_iocb >::deallocate(diocb);
+    delete diocb;
+}
+
+void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_aio_iocb* diocb, bool part_of_batch) {
+#ifdef __linux
+    auto kiocb = &diocb->kernel_iocb;
+    io_set_eventfd(kiocb, t_aio_ctx->m_ev_fd);
+#endif
+    if (part_of_batch) {
+        if (t_aio_ctx->add_to_batch(diocb)) { iface->submit_batch(); }
+    } else {
+        iface->submit_io(diocb);
+    }
 }
 
 folly::Future< bool > AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
                                                      bool part_of_batch) {
-    auto diocb = t_aio_ctx->prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
+    auto diocb = prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
     diocb->completion = std::move(folly::Promise< bool >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
-    if (part_of_batch) {
-        if (t_aio_ctx->add_to_batch(diocb)) { submit_batch(); }
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
     } else {
-        submit_io(diocb);
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
+
     return ret;
 }
 
 folly::Future< bool > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
                                                     bool part_of_batch) {
-    auto diocb = t_aio_ctx->prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
+    auto diocb = prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
     diocb->completion = std::move(folly::Promise< bool >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
-    if (part_of_batch) {
-        if (t_aio_ctx->add_to_batch(diocb)) { submit_batch(); }
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
     } else {
-        submit_io(diocb);
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
     return ret;
 }
 
 folly::Future< bool > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                                       uint64_t offset, bool part_of_batch) {
-    auto diocb = t_aio_ctx->prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
+    auto diocb = prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
     diocb->completion = std::move(folly::Promise< bool >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
-    if (part_of_batch) {
-        if (t_aio_ctx->add_to_batch(diocb)) { submit_batch(); }
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
     } else {
-        submit_io(diocb);
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
     return ret;
 }
 
 folly::Future< bool > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                                      uint64_t offset, bool part_of_batch) {
-    auto diocb = t_aio_ctx->prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
+    auto diocb = prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
     diocb->completion = std::move(folly::Promise< bool >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
-    if (part_of_batch) {
-        if (t_aio_ctx->add_to_batch(diocb)) { submit_batch(); }
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
     } else {
-        submit_io(diocb);
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
     return ret;
 }
@@ -390,45 +444,6 @@ aio_thread_context::~aio_thread_context() {
 }
 
 bool aio_thread_context::can_submit_io() const { return (m_submitted_ios < MAX_OUTSTANDING_IO); }
-
-drive_aio_iocb* aio_thread_context::prep_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, char* data,
-                                              uint64_t size, uint64_t offset) {
-    auto diocb = sisl::ObjectAllocator< drive_aio_iocb >::make_object(iface, iodev, op_type, size, offset);
-    diocb->set_data(data);
-    auto* kernel_iocb = &diocb->kernel_iocb;
-
-#ifdef __linux__
-    if (op_type == DriveOpType::READ) {
-        io_prep_pread(kernel_iocb, iodev->fd(), (void*)data, size, offset);
-    } else if (op_type == DriveOpType::WRITE) {
-        io_prep_pwrite(kernel_iocb, iodev->fd(), (void*)data, size, offset);
-    }
-    io_set_eventfd(kernel_iocb, m_ev_fd);
-    kernel_iocb->data = diocb;
-#elif defined(__APPLE__)
-    kernel_iocb->aio_fildes = iodev->fd();
-    kernel_iocb->aio_offset = offset;
-    kernel_iocb->aio_buf = (void*)data;
-    kernel_iocb->aio_nbytes = size;
-#endif
-    return diocb;
-}
-
-drive_aio_iocb* aio_thread_context::prep_iocb_v(DriveInterface* iface, IODevice* iodev, DriveOpType op_type,
-                                                const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
-    auto diocb = sisl::ObjectAllocator< drive_aio_iocb >::make_object(iface, iodev, op_type, size, offset);
-    diocb->set_iovs(iov, iovcnt);
-    auto* kernel_iocb = &diocb->kernel_iocb;
-
-    if (op_type == DriveOpType::READ) {
-        io_prep_preadv(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
-    } else if (op_type == DriveOpType::WRITE) {
-        io_prep_pwritev(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
-    }
-    io_set_eventfd(kernel_iocb, m_ev_fd);
-    kernel_iocb->data = diocb;
-    return diocb;
-}
 
 bool aio_thread_context::add_to_batch(drive_aio_iocb* diocb) {
     m_iocb_batch[m_cur_batch_size++] = &diocb->kernel_iocb;

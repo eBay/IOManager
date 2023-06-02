@@ -313,6 +313,145 @@ public:
         LOGINFO("IOs completed (total_excluding_preload={}) for this thread", work->nios_completed.load());
     }
 
+    void io_on_worker_threads() {
+        std::mutex mtx;
+        std::vector< Workload > work_list;
+        uint32_t next_pick{0};
+
+        m_next_available_range.store(0);
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            Workload work;
+            work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
+            work.offset_end = work.offset_start + m_each_thread_size;
+            work.next_io_offset = work.offset_start;
+            work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
+            work_list.emplace_back(std::move(work));
+        }
+
+        iomanager.run_on_wait(reactor_regex::all_worker, [this, &mtx, &next_pick, &work_list]() {
+            Workload* my_work;
+            {
+                std::unique_lock lg(mtx);
+                my_work = &work_list[next_pick++];
+            }
+
+            issue_preload(my_work);
+
+            my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
+                my_work->reuse_ready();
+                issue_rw_io(my_work);
+            });
+        });
+
+        // Wait for all thread rw completion
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            work_list[i].rw_completion.getFuture().wait();
+        }
+
+        // We will do sync read to do the verification
+        next_pick = 0;
+        iomanager.run_on_wait(reactor_regex::all_worker, fiber_regex::syncio_only,
+                              [this, &mtx, &next_pick, &work_list]() {
+                                  Workload* my_work;
+                                  {
+                                      std::unique_lock lg(mtx);
+                                      my_work = &work_list[next_pick++];
+                                  }
+                                  do_verify(my_work);
+                              });
+    }
+
+    void io_on_user_threads() {
+        std::mutex mtx;
+        std::vector< Workload > work_list;
+        uint32_t next_pick{0};
+
+        m_next_available_range.store(0);
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            Workload work;
+            work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
+            work.offset_end = work.offset_start + m_each_thread_size;
+            work.next_io_offset = work.offset_start;
+            work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
+            work_list.emplace_back(std::move(work));
+        }
+
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            iomanager.create_reactor("user" + std::to_string(i + 1),
+                                     SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP,
+                                     SISL_OPTIONS["num_fibers"].as< uint32_t >(), [&](bool is_started) {
+                                         if (is_started) {
+                                             Workload* my_work;
+                                             {
+                                                 std::unique_lock lg(mtx);
+                                                 my_work = &work_list[next_pick++];
+                                             }
+
+                                             issue_preload(my_work);
+
+                                             my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
+                                                 my_work->reuse_ready();
+                                                 issue_rw_io(my_work);
+                                             });
+                                         }
+                                     });
+        }
+
+        // Wait for all thread rw completion
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            work_list[i].rw_completion.getFuture().wait();
+        }
+
+        // We will do sync read to do the verification
+        next_pick = 0;
+        iomanager.run_on_wait(reactor_regex::all_user, fiber_regex::syncio_only,
+                              [this, &mtx, &next_pick, &work_list]() {
+                                  Workload* my_work;
+                                  {
+                                      std::unique_lock lg(mtx);
+                                      my_work = &work_list[next_pick++];
+                                  }
+                                  do_verify(my_work);
+                              });
+    }
+
+    void io_on_regular_threads() {
+        std::mutex mtx;
+        std::vector< Workload > work_list;
+        uint32_t next_pick{0};
+
+        m_next_available_range.store(0);
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            Workload work;
+            work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
+            work.offset_end = work.offset_start + m_each_thread_size;
+            work.next_io_offset = work.offset_start;
+            work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
+            work_list.emplace_back(std::move(work));
+        }
+
+        std::vector< std::thread > threads;
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            threads.emplace_back(std::thread([&]() {
+                Workload* my_work;
+                {
+                    std::unique_lock lg(mtx);
+                    my_work = &work_list[next_pick++];
+                }
+
+                issue_preload_regular_thread(my_work);
+                my_work->reuse_ready();
+                issue_rwload_regular_thread(my_work);
+                do_verify(my_work);
+            }));
+        }
+
+        // Wait for all thread rw completion
+        for (uint32_t i{0}; i < m_nthreads; ++i) {
+            threads[i].join();
+        }
+    }
+
 protected:
     io_device_ptr m_iodev{nullptr};
     std::atomic< size_t > m_next_available_range{0};
@@ -324,138 +463,10 @@ protected:
 
 iomgr::drive_attributes DriveTest::s_driveattr;
 
-TEST_F(DriveTest, io_on_worker_threads) {
-    std::mutex mtx;
-    std::vector< Workload > work_list;
-    uint32_t next_pick{0};
-
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        Workload work;
-        work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
-        work.offset_end = work.offset_start + m_each_thread_size;
-        work.next_io_offset = work.offset_start;
-        work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
-        work_list.emplace_back(std::move(work));
-    }
-
-    iomanager.run_on_wait(reactor_regex::all_worker, [this, &mtx, &next_pick, &work_list]() {
-        Workload* my_work;
-        {
-            std::unique_lock lg(mtx);
-            my_work = &work_list[next_pick++];
-        }
-
-        issue_preload(my_work);
-
-        my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
-            my_work->reuse_ready();
-            issue_rw_io(my_work);
-        });
-    });
-
-    // Wait for all thread rw completion
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        work_list[i].rw_completion.getFuture().wait();
-    }
-
-    // We will do sync read to do the verification
-    next_pick = 0;
-    iomanager.run_on_wait(reactor_regex::all_worker, fiber_regex::syncio_only, [this, &mtx, &next_pick, &work_list]() {
-        Workload* my_work;
-        {
-            std::unique_lock lg(mtx);
-            my_work = &work_list[next_pick++];
-        }
-        do_verify(my_work);
-    });
-}
-
-TEST_F(DriveTest, io_on_user_threads) {
-    std::mutex mtx;
-    std::vector< Workload > work_list;
-    uint32_t next_pick{0};
-
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        Workload work;
-        work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
-        work.offset_end = work.offset_start + m_each_thread_size;
-        work.next_io_offset = work.offset_start;
-        work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
-        work_list.emplace_back(std::move(work));
-    }
-
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        iomanager.create_reactor("user" + std::to_string(i + 1),
-                                 SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP,
-                                 SISL_OPTIONS["num_fibers"].as< uint32_t >(), [&](bool is_started) {
-                                     if (is_started) {
-                                         Workload* my_work;
-                                         {
-                                             std::unique_lock lg(mtx);
-                                             my_work = &work_list[next_pick++];
-                                         }
-
-                                         issue_preload(my_work);
-
-                                         my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
-                                             my_work->reuse_ready();
-                                             issue_rw_io(my_work);
-                                         });
-                                     }
-                                 });
-    }
-
-    // Wait for all thread rw completion
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        work_list[i].rw_completion.getFuture().wait();
-    }
-
-    // We will do sync read to do the verification
-    next_pick = 0;
-    iomanager.run_on_wait(reactor_regex::all_user, fiber_regex::syncio_only, [this, &mtx, &next_pick, &work_list]() {
-        Workload* my_work;
-        {
-            std::unique_lock lg(mtx);
-            my_work = &work_list[next_pick++];
-        }
-        do_verify(my_work);
-    });
-}
-
-TEST_F(DriveTest, io_on_regular_threads) {
-    std::mutex mtx;
-    std::vector< Workload > work_list;
-    uint32_t next_pick{0};
-
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        Workload work;
-        work.offset_start = m_next_available_range.fetch_add(m_each_thread_size);
-        work.offset_end = work.offset_start + m_each_thread_size;
-        work.next_io_offset = work.offset_start;
-        work.max_ios = SISL_OPTIONS["num_ios"].as< uint64_t >() / m_nthreads;
-        work_list.emplace_back(std::move(work));
-    }
-
-    std::vector< std::thread > threads;
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        threads.emplace_back(std::thread([&]() {
-            Workload* my_work;
-            {
-                std::unique_lock lg(mtx);
-                my_work = &work_list[next_pick++];
-            }
-
-            issue_preload_regular_thread(my_work);
-            my_work->reuse_ready();
-            issue_rwload_regular_thread(my_work);
-            do_verify(my_work);
-        }));
-    }
-
-    // Wait for all thread rw completion
-    for (uint32_t i{0}; i < m_nthreads; ++i) {
-        threads[i].join();
-    }
+TEST_F(DriveTest, io_on_different_threads) {
+    io_on_worker_threads();
+    io_on_user_threads();
+    io_on_regular_threads();
 }
 
 int main(int argc, char* argv[]) {
