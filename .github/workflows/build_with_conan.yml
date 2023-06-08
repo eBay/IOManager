@@ -31,8 +31,9 @@ jobs:
 
     - name: Install Conan
       run: |
-        sudo apt-get install -y python3-pyelftools
+        sudo apt-get install -y python3-pyelftools python-pyelftools
         python -m pip install --upgrade pip
+        python -m pip install pyelftools
         python -m pip install conan~=1.0
 
     - name: Configure Conan
@@ -47,18 +48,15 @@ jobs:
         path: deps/sisl
         ref: import_deps
 
-    - name: Cache 3rdParty
-      id: cache-3rd-party
-      uses: actions/cache@v3
+    - name: Restore Sisl 3rdParty
+      id: restore-sisl-3rd-party
+      uses: actions/cache/restore@v3
       with:
         path: |
-          ~/.conan/data/dpdk
-          ~/.conan/data/fio
           ~/.conan/data/folly
           ~/.conan/data/gperftools
           ~/.conan/data/jemalloc
           ~/.conan/data/prerelease_dummy
-          ~/.conan/data/spdk
         key: ${{ matrix.build-type }}
 
     - name: Export Dependencies
@@ -68,8 +66,33 @@ jobs:
         conan export deps/sisl/3rd_party/prerelease_dummy
         conan create -o sisl:malloc_impl=libc -o sisl:prerelease=False -s build_type=${{ matrix.build-type }} --build missing deps/sisl oss/master
 
+    - name: Cleanup dep builds
+      run: |
+        rm -rf ~/.conan/data/*/*/*/*/build
+
+    - name: Save Sisl 3rdParty
+      id: save-sisl-3rd-party
+      uses: actions/cache/save@v3
+      with:
+        path: |
+          ~/.conan/data/folly
+          ~/.conan/data/gperftools
+          ~/.conan/data/jemalloc
+          ~/.conan/data/prerelease_dummy
+        key: ${{ matrix.build-type }}
+
     - name: Checkout Code
       uses: actions/checkout@v3
+
+    - name: Cache 3rdParty
+      id: cache-3rd-party
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/spdk
+        key: ${{ matrix.build-type }}
 
     - name: Install dependencies
       # Build your program with the given configuration
