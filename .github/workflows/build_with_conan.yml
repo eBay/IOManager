@@ -31,6 +31,7 @@ jobs:
 
     - name: Install Conan
       run: |
+        sudo apt-get install -y python3-pyelftools
         python -m pip install --upgrade pip
         python -m pip install conan~=1.0
 
@@ -47,7 +48,7 @@ jobs:
         ref: import_deps
 
     - name: Cache 3rdParty
-      id: cache-primes
+      id: cache-3rd-party
       uses: actions/cache@v3
       with:
         path: |
@@ -56,6 +57,7 @@ jobs:
           ~/.conan/data/folly
           ~/.conan/data/gperftools
           ~/.conan/data/jemalloc
+          ~/.conan/data/prerelease_dummy
           ~/.conan/data/spdk
         key: ${{ matrix.build-type }}
 
@@ -76,6 +78,10 @@ jobs:
         conan export 3rd_party/fio
         conan export 3rd_party/spdk
         conan install -o iomgr:grpc_support=False -o sisl:malloc_impl=libc -o sisl:prerelease=False -s build_type=${{ matrix.build-type }} --build missing .
+
+    - name: Cleanup dep builds
+      run: |
+        rm -rf ~/.conan/data/*/*/*/*/build
 
     - name: Build
       # Build your program with the given configuration
