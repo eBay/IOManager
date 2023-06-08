@@ -1,5 +1,5 @@
 pipeline {
-    agent { label 'sds-builder-2204 && 5.4_kernel' }
+    agent { label 'sds-builder-2204 && hugepages' }
 
     environment {
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
@@ -67,7 +67,7 @@ pipeline {
         stage('Build') {
             failFast true
             matrix {
-                agent { label 'sds-builder-2204 && 5.4_kernel' }
+                agent { label 'sds-builder-2204 && hugepages' }
                 axes {
                     axis {
                         name 'BUILD_TYPE'
@@ -207,7 +207,7 @@ pipeline {
                 stage('HomeReplication') {
                     steps {
                         script {
-                            def hrepl_res = build job: "HomeReplication/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def hrepl_res = build job: "HomeReplication/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "$hrepl_res.buildVariables.pkg_version"
                         }
                     }
