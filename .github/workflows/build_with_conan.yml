@@ -21,10 +21,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Currently folly in conan-center has a bug when used with gcc 11.3 and sanitizer
+        # sanitize: ["True", "False"]
         build-type: ["Debug", "Release"]
+        malloc-impl: ["libc", "tcmalloc", "jemalloc"]
+        prerelease: ["True", "False"]
+        exclude:
+          - build-type: Debug
+            prerelease: "True"
+          - build-type: Debug
+            malloc-impl: tcmalloc
+          - build-type: Debug
+            malloc-impl: jemalloc
+          - build-type: Release
+            malloc-impl: libc
+          # - build-type: Release
+          # sanitize: "True"
+          - prerelease: "True"
+            malloc-impl: jemalloc
 
     steps:
-    - name: Set up Python ${{ matrix.python-version }}
+    - name: Set up Python
       uses: actions/setup-python@v3
       with:
         python-version: "3.8"
@@ -40,6 +57,8 @@ jobs:
       # Configure conan profiles for build runner
       run: |
         conan user
+        conan profile new --detect default
+        sed -i 's,compiler.libcxx=libstdc++$,compiler.libcxx=libstdc++11,g' ~/.conan/profiles/default
 
     - name: Retrieve Dependencies
       uses: actions/checkout@v3
@@ -58,14 +77,18 @@ jobs:
           ~/.conan/data/jemalloc
           ~/.conan/data/prerelease_dummy
           ~/.conan/data/spdlog
-        key: ${{ matrix.build-type }}
+        key: ${{ matrix.build-type }}-${{ matrix.malloc-impl }}
 
     - name: Export Dependencies
       run: |
         conan export deps/sisl/3rd_party/gperftools
         conan export deps/sisl/3rd_party/jemalloc
         conan export deps/sisl/3rd_party/prerelease_dummy
-        conan create -o sisl:malloc_impl=libc -o sisl:prerelease=False -s build_type=${{ matrix.build-type }} --build missing deps/sisl oss/master
+        conan create \
+            -o sisl:prerelease=${{ matrix.prerelease }} \
+            -o sisl:malloc_impl=${{ matrix.malloc-impl }} \
+            -s build_type=${{ matrix.build-type }} \
+            --build missing deps/sisl oss/master
 
     - name: Cleanup dep builds
       run: |
@@ -81,7 +104,7 @@ jobs:
           ~/.conan/data/jemalloc
           ~/.conan/data/prerelease_dummy
           ~/.conan/data/spdlog
-        key: ${{ matrix.build-type }}
+        key: ${{ matrix.build-type }}-${{ matrix.malloc-impl }}
 
     - name: Checkout Code
       uses: actions/checkout@v3
@@ -95,7 +118,7 @@ jobs:
           ~/.conan/data/fio
           ~/.conan/data/grpc_internal
           ~/.conan/data/spdk
-        key: ${{ matrix.build-type }}
+        key: ${{ matrix.build-type }}-${{ matrix.malloc-impl }}
 
     - name: Install dependencies
       # Build your program with the given configuration
@@ -104,7 +127,13 @@ jobs:
         conan export 3rd_party/fio
         conan export 3rd_party/grpc_internal
         conan export 3rd_party/spdk
-        conan install -s build_type=${{ matrix.build-type }} --build missing .
+        conan install \
+            -o sisl:prerelease=${{ matrix.prerelease }} \
+            -o sisl:malloc_impl=${{ matrix.malloc-impl }} \
+            -o testing=epoll_mode \
+            -s build_type=${{ matrix.build-type }} \
+            --build missing .
+            #-o sanitize=${{ matrix.sanitize }} \
 
     - name: Cleanup dep builds
       run: |
@@ -119,7 +148,7 @@ jobs:
           ~/.conan/data/fio
           ~/.conan/data/grpc_internal
           ~/.conan/data/spdk
-        key: ${{ matrix.build-type }}
+        key: ${{ matrix.build-type }}-${{ matrix.malloc-impl }}
 
     - name: Build
       # Build your program with the given configuration
