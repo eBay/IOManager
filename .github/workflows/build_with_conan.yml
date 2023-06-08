@@ -43,13 +43,19 @@ jobs:
     - name: Retrieve Dependencies
       uses: actions/checkout@v3
       with:
-        repository: ebay/sisl
+        repository: szmyd/sisl
         path: deps/sisl
-        ref: master
+        ref: import_deps
 
     - name: Export Dependencies
       run: |
+        conan export deps/sisl/3rd_party/gperftools
+        conan export deps/sisl/3rd_party/jemalloc
+        conan export deps/sisl/3rd_party/prerelease_dummy
         conan export deps/sisl oss/master
+        conan export 3rd_party/dpdk
+        conan export 3rd_party/fio
+        conan export 3rd_party/spdk
 
     - name: Checkout Code
       uses: actions/checkout@v3
