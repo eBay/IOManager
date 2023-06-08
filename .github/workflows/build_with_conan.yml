@@ -46,6 +46,19 @@ jobs:
         path: deps/sisl
         ref: import_deps
 
+    - name: Cache 3rdParty
+      id: cache-primes
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/folly
+          ~/.conan/data/gperftools
+          ~/.conan/data/jemalloc
+          ~/.conan/data/spdk
+        key: ${{ matrix.build-type }}
+
     - name: Export Dependencies
       run: |
         conan export deps/sisl/3rd_party/gperftools
