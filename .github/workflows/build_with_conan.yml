@@ -86,12 +86,13 @@ jobs:
       uses: actions/checkout@v3
 
     - name: Cache 3rdParty
-      id: cache-3rd-party
-      uses: actions/cache@v3
+      id: restore-3rd-party
+      uses: actions/cache/restore@v3
       with:
         path: |
           ~/.conan/data/dpdk
           ~/.conan/data/fio
+          ~/.conan/data/grpc_internal
           ~/.conan/data/spdk
         key: ${{ matrix.build-type }}
 
@@ -100,12 +101,24 @@ jobs:
       run: |
         conan export 3rd_party/dpdk
         conan export 3rd_party/fio
+        conan export 3rd_party/gprc_internal
         conan export 3rd_party/spdk
-        conan install -o iomgr:grpc_support=False -o sisl:malloc_impl=libc -o sisl:prerelease=False -s build_type=${{ matrix.build-type }} --build missing .
+        conan install -s build_type=${{ matrix.build-type }} --build missing .
 
     - name: Cleanup dep builds
       run: |
         rm -rf ~/.conan/data/*/*/*/*/build
+
+    - name: Save 3rdParty
+      id: save-3rd-party
+      uses: actions/cache/save@v3
+      with:
+        path: |
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/grpc_internal
+          ~/.conan/data/spdk
+        key: ${{ matrix.build-type }}
 
     - name: Build
       # Build your program with the given configuration
