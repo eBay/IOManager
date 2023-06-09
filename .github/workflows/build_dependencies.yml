@@ -14,7 +14,7 @@ on:
         type: string
 
 jobs:
-  build_sisl:
+  sisl_deps:
     uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
@@ -22,7 +22,7 @@ jobs:
       malloc-impl: ${{ inputs.malloc-impl }}
 
   build:
-    needs: build_sisl
+    needs: sisl_deps
     runs-on: ubuntu-22.04
     steps:
     - name: Setup Python
@@ -38,6 +38,13 @@ jobs:
         conan profile new --detect default
         # Set std::string to non-CoW C++11 version
         sed -i 's,compiler.libcxx=libstdc++$,compiler.libcxx=libstdc++11,g' ~/.conan/profiles/default
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/sisl
+        path: deps/sisl
+        ref: master
 
     - name: Retrieve Dependencies
       uses: actions/checkout@v3
@@ -67,11 +74,13 @@ jobs:
           ~/.conan/data/fio
           ~/.conan/data/grpc_internal
           ~/.conan/data/liburing
+          ~/.conan/data/sisl
           ~/.conan/data/spdk
         key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
 
     - name: Install Dependencies
       run: |
+        conan export deps/sisl
         conan export deps/iomgr/3rd_party/dpdk
         conan export deps/iomgr/3rd_party/fio
         conan export deps/iomgr/3rd_party/grpc_internal
@@ -92,9 +101,10 @@ jobs:
       uses: actions/cache/save@v3
       with:
         path: |
-          ~/.conan/data/folly
-          ~/.conan/data/gperftools
-          ~/.conan/data/jemalloc
-          ~/.conan/data/prerelease_dummy
-          ~/.conan/data/spdlog
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/grpc_internal
+          ~/.conan/data/liburing
+          ~/.conan/data/sisl
+          ~/.conan/data/spdk
         key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
