@@ -1,0 +1,115 @@
+name: Conan Build
+
+on:
+  workflow_call:
+    inputs:
+      branch:
+        required: true
+        type: string
+      build-type:
+        required: true
+        type: string
+      malloc-impl:
+        required: true
+        type: string
+      prerelease:
+        required: true
+        type: string
+
+jobs:
+  SislDeps:
+    uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
+    with:
+      branch: master
+      build-type: ${{ inputs.build-type }}
+      malloc-impl: ${{ inputs.malloc-impl }}
+
+  BuildIOMgrDeps:
+    needs: SislDeps
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Setup Python
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.8"
+
+    - name: Setup Conan
+      run: |
+        sudo apt-get install -y python3-pyelftools libaio-dev
+        python -m pip install --upgrade pip
+        python -m pip install pyelftools
+        python -m pip install conan~=1.0
+        conan user
+        conan profile new --detect default
+        # Set std::string to non-CoW C++11 version
+        sed -i 's,compiler.libcxx=libstdc++$,compiler.libcxx=libstdc++11,g' ~/.conan/profiles/default
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/sisl
+        path: deps/sisl
+        ref: master
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/IOManager
+        path: deps/iomgr
+        ref: ${{ inputs.branch }}
+
+    - name: Restore Sisl 3rdParty Cache
+      id: restore-cache-sisl
+      uses: actions/cache/restore@v3
+      with:
+        path: |
+          ~/.conan/data/folly
+          ~/.conan/data/gperftools
+          ~/.conan/data/jemalloc
+          ~/.conan/data/prerelease_dummy
+          ~/.conan/data/spdlog
+        key: SislDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+
+    - name: Restore IOMgr 3rdParty Cache
+      id: restore-cache-iomgr
+      uses: actions/cache/restore@v3
+      with:
+        path: |
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/grpc_internal
+          ~/.conan/data/liburing
+          ~/.conan/data/sisl
+          ~/.conan/data/spdk
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+
+    - name: Install Dependencies
+      run: |
+        conan export deps/sisl oss/master
+        conan export deps/iomgr/3rd_party/dpdk
+        conan export deps/iomgr/3rd_party/fio
+        conan export deps/iomgr/3rd_party/grpc_internal
+        conan export deps/iomgr/3rd_party/spdk
+        conan install \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
+            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+            -o testing=off \
+            -s build_type=${{ inputs.build-type }} \
+            --build missing deps/iomgr
+
+    - name: Cleanup dep builds
+      run: |
+        rm -rf ~/.conan/data/*/*/*/*/build
+
+    - name: Save IOMgr 3rdParty Cache
+      id: save-cache-iomgr
+      uses: actions/cache/save@v3
+      with:
+        path: |
+          ~/.conan/data/dpdk
+          ~/.conan/data/fio
+          ~/.conan/data/grpc_internal
+          ~/.conan/data/liburing
+          ~/.conan/data/sisl
+          ~/.conan/data/spdk
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
