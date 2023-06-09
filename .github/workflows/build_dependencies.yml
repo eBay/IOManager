@@ -15,7 +15,7 @@ on:
 
 jobs:
   build_sisl:
-    uses: eBay/sisl/.github/workflows/build_dependencies.yml@${{ inputs.branch }}
+    uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
 
   build:
     needs: build_sisl
