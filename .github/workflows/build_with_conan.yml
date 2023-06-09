@@ -9,7 +9,7 @@ on:
       - master
 
 jobs:
-  build_deps:
+  BuildDependencies:
     strategy:
       fail-fast: false
       matrix:
@@ -28,7 +28,7 @@ jobs:
       build-type: ${{ matrix.build-type }}
       malloc-impl: ${{ matrix.malloc-impl }}
 
-  build:
+  BuildPR:
     needs: build_deps
     runs-on: ubuntu-22.04
     strategy:
@@ -93,17 +93,18 @@ jobs:
           ~/.conan/data/liburing
           ~/.conan/data/sisl
           ~/.conan/data/spdk
-        key: IOMgrDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Checkout Code
       uses: actions/checkout@v3
 
     - name: Build
       run: |
-        conan install \
+        conan create \
             -o sisl:prerelease=${{ matrix.prerelease }} \
             -o sisl:malloc_impl=${{ matrix.malloc-impl }} \
             -o testing=off \
             -s build_type=${{ matrix.build-type }} \
-            .
-        conan build .
+            --build missing \
+            . \
+            oss/master

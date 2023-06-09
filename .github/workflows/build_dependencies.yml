@@ -12,6 +12,9 @@ on:
       malloc-impl:
         required: true
         type: string
+      prerelease:
+        required: true
+        type: string
 
 jobs:
   sisl_deps:
@@ -78,7 +81,7 @@ jobs:
           ~/.conan/data/liburing
           ~/.conan/data/sisl
           ~/.conan/data/spdk
-        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Install Dependencies
       run: |
@@ -88,7 +91,7 @@ jobs:
         conan export deps/iomgr/3rd_party/grpc_internal
         conan export deps/iomgr/3rd_party/spdk
         conan install \
-            -o sisl:prerelease=False \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o testing=off \
             -s build_type=${{ inputs.build-type }} \
@@ -109,4 +112,4 @@ jobs:
           ~/.conan/data/liburing
           ~/.conan/data/sisl
           ~/.conan/data/spdk
-        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
