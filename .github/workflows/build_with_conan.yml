@@ -99,7 +99,7 @@ jobs:
           ~/.conan/data/liburing
           ~/.conan/data/sisl
           ~/.conan/data/spdk
-        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key: IOMgrDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}-${{ matrix.prerelease }}
 
     - name: Checkout Code
       uses: actions/checkout@v3
