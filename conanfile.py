@@ -18,6 +18,7 @@ class IOMgrConan(ConanFile):
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
+        "grpc_support": ['True', 'False'],
         "sanitize": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         }
@@ -25,6 +26,7 @@ class IOMgrConan(ConanFile):
         'shared':       False,
         'fPIC':         True,
         'coverage':     False,
+        'grpc_support': True,
         'sanitize':     False,
         'testing':      'full',
         'sisl:prerelease':   True,
@@ -50,8 +52,9 @@ class IOMgrConan(ConanFile):
 
         self.requires("boost/1.79.0")
         self.requires("folly/2022.01.31.00")
-        self.requires("grpc/1.48.0")
-        self.requires("grpc_internal/1.48.0")
+        if self.options.grpc_support:
+            self.requires("grpc/1.48.0")
+            self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
         self.requires("libevent/2.1.12")
         self.requires("spdk/21.07.y")

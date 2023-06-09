@@ -10,7 +10,7 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISIO
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
 
 find_package(flatbuffers REQUIRED)
-find_package(grpc_internal REQUIRED)
+find_package(grpc_internal QUIET)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
 find_package(Pistache REQUIRED)
@@ -18,7 +18,7 @@ find_package(zmarok-semver REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 
-set (IOMGR_SRC
+list(APPEND IOMGR_SRC
       iomgr.cpp
       reactor.cpp
       reactor_epoll.cpp
@@ -30,15 +30,21 @@ set (IOMGR_SRC
       interfaces/uring_drive_interface.cpp
       interfaces/generic_interface.cpp
       interfaces/spdk_nvmf_interface.cpp
-      interfaces/grpc_interface.cpp
       io_environment.cpp
       http_server.cpp
       )
+if (${grpc_internal_FOUND})
+list(APPEND IOMGR_SRC
+      interfaces/grpc_interface.cpp
+      )
+list(APPEND IOMGR_LIB_DEPS
+      grpc_internal::grpc_internal
+    )
+endif ()
 add_library (iomgr ${IOMGR_SRC})
 
 list(APPEND IOMGR_LIB_DEPS
       liburing::liburing
-      grpc_internal::grpc_internal
       Pistache::Pistache
       sisl::sisl
       spdk::spdk
