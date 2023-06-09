@@ -22,7 +22,7 @@ jobs:
             malloc-impl: jemalloc
           - build-type: Release
             malloc-impl: libc
-    uses: .github/workflows/build_dependencies.yml
+    uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: master
       build-type: ${{ matrix.build-type }}
