@@ -91,13 +91,19 @@ jobs:
           ~/.conan/data/fio
           ~/.conan/data/grpc_internal
           ~/.conan/data/liburing
+          ~/.conan/data/sisl
           ~/.conan/data/spdk
-        key: ${{ matrix.build-type }}-${{ matrix.malloc-impl }}
-
+        key: IOMgrDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}
 
     - name: Checkout Code
       uses: actions/checkout@v3
 
     - name: Build
       run: |
+        conan install \
+            -o sisl:prerelease=${{ matrix.prerelease }} \
+            -o sisl:malloc_impl=${{ matrix.malloc-impl }} \
+            -o testing=off \
+            -s build_type=${{ matrix.build-type }} \
+            .
         conan build .
