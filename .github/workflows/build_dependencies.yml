@@ -30,9 +30,11 @@ jobs:
       with:
         python-version: "3.8"
 
-    - name: Install Conan
+    - name: Setup Conan
       run: |
+        sudo apt-get install -y python3-pyelftools libaio-dev
         python -m pip install --upgrade pip
+        python -m pip install pyelftools
         python -m pip install conan~=1.0
         conan user
         conan profile new --detect default
