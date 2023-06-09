@@ -17,15 +17,15 @@ on:
         type: string
 
 jobs:
-  sisl_deps:
+  SislDeps:
     uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
 
-  build:
-    needs: sisl_deps
+  BuildSisl:
+    needs: SislDeps
     runs-on: ubuntu-22.04
     steps:
     - name: Setup Python
