@@ -80,7 +80,7 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        conan export deps/sisl
+        conan export deps/sisl oss/master
         conan export deps/iomgr/3rd_party/dpdk
         conan export deps/iomgr/3rd_party/fio
         conan export deps/iomgr/3rd_party/grpc_internal
