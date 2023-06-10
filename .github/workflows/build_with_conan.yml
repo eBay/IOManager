@@ -9,7 +9,26 @@ on:
       - master
 
 jobs:
-  BuildDependencies:
+  BuildSISL:
+    strategy:
+      fail-fast: false
+      matrix:
+        build-type: ["Debug", "Release"]
+        malloc-impl: ["libc", "tcmalloc", "jemalloc"]
+        exclude:
+          - build-type: Debug
+            malloc-impl: tcmalloc
+          - build-type: Debug
+            malloc-impl: jemalloc
+          - build-type: Release
+            malloc-impl: libc
+    uses: ./.github/workflows/build_sisl.yml
+    with:
+      build-type: ${{ matrix.build-type }}
+      malloc-impl: ${{ matrix.malloc-impl }}
+
+  CacheDependencies:
+    needs: BuildSISL
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +54,7 @@ jobs:
       prerelease: ${{ matrix.prerelease }}
 
   BuildPR:
-    needs: BuildDependencies
+    needs: CacheDependencies
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
