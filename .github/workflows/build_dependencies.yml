@@ -85,6 +85,7 @@ jobs:
         conan install \
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+            -o sisl:testing=False \
             -o testing=off \
             -s build_type=${{ inputs.build-type }} \
             --build missing deps/iomgr
