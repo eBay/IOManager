@@ -9,6 +9,9 @@ on:
       malloc-impl:
         required: true
         type: string
+      prerelease:
+        required: true
+        type: string
 
 jobs:
   SislDeps:
@@ -17,3 +20,4 @@ jobs:
       branch: master
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
+      malloc-impl: ${{ inputs.prerelease }}

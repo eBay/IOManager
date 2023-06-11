@@ -1,9 +1,6 @@
-name: Conan Build
+name: IOManager Main Build
 
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
@@ -11,21 +8,27 @@ on:
 jobs:
   BuildSISL:
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         build-type: ["Debug", "Release"]
         malloc-impl: ["libc", "tcmalloc", "jemalloc"]
+        prerelease: ["True", "False"]
         exclude:
+          - build-type: Debug
+            prerelease: "True"
           - build-type: Debug
             malloc-impl: tcmalloc
           - build-type: Debug
             malloc-impl: jemalloc
           - build-type: Release
             malloc-impl: libc
+          - prerelease: "True"
+            malloc-impl: jemalloc
     uses: ./.github/workflows/build_sisl.yml
     with:
       build-type: ${{ matrix.build-type }}
       malloc-impl: ${{ matrix.malloc-impl }}
+      prerelease: ${{ matrix.prerelease }}
 
   CacheDependencies:
     needs: BuildSISL
@@ -105,7 +108,7 @@ jobs:
           ~/.conan/data/jemalloc
           ~/.conan/data/prerelease_dummy
           ~/.conan/data/spdlog
-        key: SislDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}
+        key: SislDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}-${{ matrix.prerelease }}
 
     - name: Restore IOMgr 3rdParty Cache
       id: restore-3rd-party

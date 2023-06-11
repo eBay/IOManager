@@ -1,5 +1,5 @@
 # IOManager
-[![Conan Build](https://github.com/eBay/IOManager/actions/workflows/build_with_conan.yml/badge.svg?branch=master)](https://github.com/eBay/IOManager/actions/workflows/build_with_conan.yml)
+[![Conan Build](https://github.com/eBay/IOManager/actions/workflows/main_conan_build.yml/badge.svg?branch=master)](https://github.com/eBay/IOManager/actions/workflows/main_conan_build.yml)
 
 IOManager tries to bridge the gap in existing async framework to build full async networked database/storage/keyvalue storage. Motivation 
 and design are explained below.
