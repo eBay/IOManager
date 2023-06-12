@@ -90,7 +90,7 @@ jobs:
             -o testing=off \
             -s build_type=${{ inputs.build-type }} \
             --build missing deps/iomgr
-      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' && inputs.native == 'false' }}
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Build
       run: |
