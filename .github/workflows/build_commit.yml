@@ -30,6 +30,8 @@ jobs:
       malloc-impl: ${{ inputs.malloc-impl }}
       prerelease: ${{ inputs.prerelease }}
   BuildCommit:
+    needs: IOMgrDeps
+    runs-on: ubuntu-22.04
     steps:
     - name: Setup Python
       uses: actions/setup-python@v3
@@ -53,7 +55,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: SislDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}-${{ matrix.prerelease }}
+        key: SislDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Restore IOMgr 3rdParty Cache
       id: restore-3rd-party
@@ -61,7 +63,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: IOMgrDeps-${{ matrix.build-type }}-${{ matrix.malloc-impl }}-${{ matrix.prerelease }}
+        key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Checkout Code
       uses: actions/checkout@v3
@@ -69,10 +71,10 @@ jobs:
     - name: Build
       run: |
         conan create \
-            -o sisl:prerelease=${{ matrix.prerelease }} \
-            -o sisl:malloc_impl=${{ matrix.malloc-impl }} \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
+            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o iomgr:testing=off \
-            -s build_type=${{ matrix.build-type }} \
+            -s build_type=${{ inputs.build-type }} \
             --build missing \
             . \
             oss/master
