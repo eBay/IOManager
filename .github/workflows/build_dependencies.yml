@@ -40,26 +40,6 @@ jobs:
         # Set std::string to non-CoW C++11 version
         sed -i 's,compiler.libcxx=libstdc++$,compiler.libcxx=libstdc++11,g' ~/.conan/profiles/default
 
-    - name: Retrieve Code
-      uses: actions/checkout@v3
-      if: ${{ inputs.native == 'true' }}
-
-    - name: Retrieve Dependencies
-      uses: actions/checkout@v3
-      with:
-        repository: eBay/sisl
-        path: deps/sisl
-        ref: master
-      if: ${{ inputs.native == 'false' }}
-
-    - name: Retrieve Dependencies
-      uses: actions/checkout@v3
-      with:
-        repository: eBay/IOManager
-        path: deps/iomgr
-        ref: ${{ inputs.branch }}
-      if: ${{ inputs.native == 'false' }}
-
     - name: Restore Sisl 3rdParty Cache
       id: restore-cache-sisl
       uses: actions/cache/restore@v3
@@ -75,6 +55,26 @@ jobs:
         path: |
           ~/.conan/data
         key: IOMgrDeps-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+
+    - name: Retrieve Code
+      uses: actions/checkout@v3
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/sisl
+        path: deps/sisl
+        ref: master
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/IOManager
+        path: deps/iomgr
+        ref: ${{ inputs.branch }}
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Install Dependencies
       run: |
