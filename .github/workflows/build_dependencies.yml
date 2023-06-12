@@ -84,7 +84,7 @@ jobs:
 
     - name: Cleanup dep builds
       run: |
-        ls -1d ~/.conan/data/* | grep -Ev '(dpdk|fio|grpc_internal|spdk)' | xargs rm -rf
+        ls -1d ~/.conan/data/* | grep -Ev '(dpdk|fio|grpc_internal|liburing|sisl|spdk)' | xargs rm -rf
         rm -rf ~/.conan/data/*/*/*/*/build
       if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
