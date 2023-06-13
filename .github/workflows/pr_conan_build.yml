@@ -20,6 +20,8 @@ jobs:
             malloc-impl: jemalloc
           - build-type: Release
             malloc-impl: libc
+          - prerelease: "True"
+            malloc-impl: jemalloc
     uses: ./.github/workflows/build_commit.yml
     with:
       build-type: ${{ matrix.build-type }}
