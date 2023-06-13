@@ -8,11 +8,11 @@ on:
 jobs:
   BuildCommit:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         build-type: ["Debug", "Release"]
         malloc-impl: ["libc", "tcmalloc", "jemalloc"]
-        prerelease: ["True"]
+        prerelease: ["False"]
         exclude:
           - build-type: Debug
             malloc-impl: tcmalloc
