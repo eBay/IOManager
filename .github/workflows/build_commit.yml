@@ -25,8 +25,8 @@ jobs:
     needs: SislDeps
     uses: ./.github/workflows/build_dependencies.yml
     with:
-      branch: master
+      branch: ${{ github.ref }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
       prerelease: ${{ inputs.prerelease }}
-      native: 'true'
+      testing: 'True'

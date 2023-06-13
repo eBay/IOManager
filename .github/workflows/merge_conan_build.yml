@@ -1,4 +1,4 @@
-name: IOManager Main Build
+name: IOManager Merge Build
 
 on:
   push:
@@ -6,9 +6,9 @@ on:
       - master
 
 jobs:
-  BuildCommit:
+  Build:
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         build-type: ["Debug", "Release"]
         malloc-impl: ["libc", "tcmalloc", "jemalloc"]
