@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - stable/v8.x
+      - 1_3_ci
 
 jobs:
   Build:
