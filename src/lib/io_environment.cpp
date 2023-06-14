@@ -14,6 +14,7 @@
  **************************************************************************/
 #include "io_environment.hpp"
 #include "http_server.hpp"
+#include <sisl/sobject/sobject.hpp>
 
 namespace iomgr {
 
@@ -62,6 +63,12 @@ IOEnvironment& IOEnvironment::with_trf_client() {
     if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
         if (!m_trf_client) { m_trf_client = std::make_shared< sisl::TrfClient >(); }
     }
+
+    return get_instance();
+}
+
+IOEnvironment& IOEnvironment::with_object_manager() {
+    if (!m_object_mgr) { m_object_mgr = std::make_shared< sisl::sobject_manager >(); }
 
     return get_instance();
 }
