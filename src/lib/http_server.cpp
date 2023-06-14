@@ -60,8 +60,19 @@ void HttpServer::stop() {
     m_server_running = false;
 }
 
+static void wait_for_file(std::string const& filepath) {
+    namespace fs = std::filesystem;
+    while (true) {
+        if (fs::exists(filepath) && fs::file_size(fs::path{filepath}) > 0) { return; }
+        LOGINFO("File {} not available, will try in 5 seconds", filepath);
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+}
+
 void HttpServer::setup_ssl() {
     if (IM_DYNAMIC_CONFIG(io_env.encryption)) {
+        wait_for_file(SECURITY_DYNAMIC_CONFIG(ssl_cert_file));
+        wait_for_file(SECURITY_DYNAMIC_CONFIG(ssl_key_file));
         m_http_endpoint->useSSL(SECURITY_DYNAMIC_CONFIG(ssl_cert_file), SECURITY_DYNAMIC_CONFIG(ssl_key_file));
     }
 }

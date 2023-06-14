@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - stable/v8.x
 
 jobs:
   Build:
