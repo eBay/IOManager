@@ -3,7 +3,6 @@
 .cache
 .clangd
 
-build
 test_package/build
 nosanitize/**
 
@@ -13,6 +12,7 @@ debug/**
 release/**
 cmake-*/**
 nosanitize/**
+build/*
 test_package/build*
 
 # vscode
