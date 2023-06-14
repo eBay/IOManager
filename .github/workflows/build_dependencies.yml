@@ -95,6 +95,7 @@ jobs:
     - name: Retrieve Recipe
       uses: actions/checkout@v3
       with:
+        repository: eBay/IOManager
         path: deps/iomgr
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'False' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
