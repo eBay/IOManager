@@ -115,7 +115,7 @@ jobs:
         conan profile new --detect default
         # Set std::string to non-CoW C++11 version
         sed -i 's,compiler.libcxx=libstdc++$,compiler.libcxx=libstdc++11,g' ~/.conan/profiles/default
-        conan export deps/sisl oss/master
+        conan export deps/sisl
         conan export deps/iomgr/3rd_party/dpdk
         conan export deps/iomgr/3rd_party/fio
         conan export deps/iomgr/3rd_party/grpc_internal
