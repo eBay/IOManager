@@ -1,0 +1,39 @@
+diff --git a/config/meson.build b/config/meson.build
+index 017bb2e..3fc457a 100644
+--- a/config/meson.build
++++ b/config/meson.build
+@@ -147,9 +147,11 @@ if meson.is_cross_build() and not meson.get_cross_property('numa', true)
+     # don't look for libnuma if explicitly disabled in cross build
+     find_libnuma = false
+ endif
++
+ if find_libnuma
+     numa_dep = cc.find_library('numa', required: false)
+-    if numa_dep.found() and cc.has_header('numaif.h')
++    use_numa = get_option('use_numa')
++    if use_numa and numa_dep.found() and cc.has_header('numaif.h')
+         dpdk_conf.set10('RTE_HAS_LIBNUMA', true)
+         has_libnuma = 1
+         add_project_link_arguments('-lnuma', language: 'c')
+diff --git a/drivers/compress/isal/meson.build b/drivers/compress/isal/meson.build
+index 94342a4..ccc0509 100644
+--- a/drivers/compress/isal/meson.build
++++ b/drivers/compress/isal/meson.build
+@@ -3,7 +3,7 @@
+ 
+ dep = dependency('libisal', required: false, method: 'pkg-config')
+ if not dep.found()
+-	build = true
++	build = false
+ 	reason = 'missing dependency, "libisal"'
+ 	isal_dep = cc.find_library('libisal', required: false)
+ 	if isal_dep.found()
+diff --git a/meson_options.txt b/meson_options.txt
+index 56bdfd0..3698a38 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -44,3 +44,4 @@ option('tests', type: 'boolean', value: true, description:
+        'build unit tests')
+ option('use_hpet', type: 'boolean', value: false, description:
+        'use HPET timer in EAL')
++option('use_numa', type: 'boolean', value: false, description: 'use NUMA library')

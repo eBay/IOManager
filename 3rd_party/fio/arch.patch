@@ -1,0 +1,10 @@
+diff -Naur t_old/arch.c t/arch.c
+--- t_old/arch.c	2020-08-27 12:10:31.780692668 -0500
++++ t/arch.c	2020-08-27 10:26:44.563345646 -0500
+@@ -1,5 +1,5 @@
+ #include "../arch/arch.h"
+ 
+ unsigned long arch_flags = 0;
+-bool tsc_reliable;
++// bool tsc_reliable;
+ int arch_random;
