@@ -67,6 +67,7 @@ class IOMgrConan(ConanFile):
     def build(self):
         cmake = CMake(self)
         definitions = {'CMAKE_TEST_TARGET': self.options.testing,
+                       'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
                        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
         test_target = None
