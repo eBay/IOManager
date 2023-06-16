@@ -100,7 +100,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('deps/iomgr/**/conanfile.py') }}
 
     - name: Restore Testing Cache
       id: restore-cache-testing-iomgr
@@ -192,7 +192,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('deps/iomgr/**/conanfile.py') }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Restore Sisl Cache
