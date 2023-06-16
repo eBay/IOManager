@@ -158,6 +158,10 @@ jobs:
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             deps/iomgr
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
+
+    - name: Clean Package Cache
+      run: |
         dep_pkgs=$(ls -1d deps/iomgr/3rd_party/* 2>/dev/null | cut -d'/' -f4 | paste -sd'|' - -)
         if [ -z "${dep_pkgs}" ]; then
            dep_pkgs="no_3rd_party"
@@ -171,8 +175,7 @@ jobs:
         ls -1d ~/.conan/data/* | grep -Ev "(${dirty_pkgs_d}|${dep_pkgs})" | xargs rm -rf
         rm -rf ~/.conan/data/*/*/*/*/build
         rm -rf ~/.conan/data/*/*/*/*/source
-        echo "dirty_pkgs=${dirty_pkgs_d}" >> "$GITHUB_OUTPUT"
-      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
+      if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Save IOMgr Cache
       id: save-cache-iomgr
