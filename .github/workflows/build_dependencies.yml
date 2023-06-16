@@ -187,7 +187,6 @@ jobs:
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Restore Sisl Cache
-      id: restore-cache-sisl
       uses: actions/cache/restore@v3
       with:
         path: |
