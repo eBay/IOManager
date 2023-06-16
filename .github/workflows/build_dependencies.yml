@@ -100,7 +100,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
 
     - name: Restore Sisl Cache
       id: restore-cache-sisl
@@ -108,9 +108,9 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
         fail-on-cache-miss: true
-        restore-keys: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-
+        restore-keys: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-
       if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Setup Python
@@ -187,5 +187,5 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' && steps.cleanup.outputs.dirty_pkgs != 'nothing' }}
