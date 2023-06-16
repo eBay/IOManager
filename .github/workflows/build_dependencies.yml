@@ -158,7 +158,7 @@ jobs:
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             deps/iomgr
-        dep_pkgs=$(ls -1d deps/sisl/3rd_party/* 2>/dev/null | cut -d'/' -f4 | paste -sd'|' - -)
+        dep_pkgs=$(ls -1d deps/iomgr/3rd_party/* 2>/dev/null | cut -d'/' -f4 | paste -sd'|' - -)
         if [ -z "${dep_pkgs}" ]; then
            dep_pkgs="no_3rd_party"
         fi
@@ -172,7 +172,7 @@ jobs:
         rm -rf ~/.conan/data/*/*/*/*/build
         rm -rf ~/.conan/data/*/*/*/*/source
         echo "dirty_pkgs=${dirty_pkgs_d}" >> "$GITHUB_OUTPUT"
-      if: ${{ steps.restore-cache-sisl.outputs.cache-hit != 'true' }}
+      if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Save IOMgr Cache
       id: save-cache-iomgr
