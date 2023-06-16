@@ -108,7 +108,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('deps/sisl/**/conanfile.py') }}
         fail-on-cache-miss: true
         restore-keys: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-
       if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
@@ -191,7 +191,7 @@ jobs:
       with:
         path: |
           ~/.conan/data
-        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
+        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('deps/sisl/**/conanfile.py') }}
         fail-on-cache-miss: true
         restore-keys: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
