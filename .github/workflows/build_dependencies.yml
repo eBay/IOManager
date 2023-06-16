@@ -184,7 +184,7 @@ jobs:
         path: |
           ~/.conan/data
         key: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('**/conanfile.py') }}
-      if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' && steps.cleanup.outputs.dirty_pkgs != 'nothing' }}
+      if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Create and test Package
       run: |
@@ -195,5 +195,4 @@ jobs:
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             deps/iomgr
-        conan remove -f iomgr
       if: ${{ inputs.testing == 'True' }}
