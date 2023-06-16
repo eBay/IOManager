@@ -144,6 +144,12 @@ jobs:
 
     - name: Build Cache
       run: |
+        conan create \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
+            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+            -s build_type=${{ inputs.build-type }} \
+            --build missing \
+            deps/sisl
         conan install \
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
