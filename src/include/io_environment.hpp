@@ -22,9 +22,14 @@
 #include <sisl/auth_manager/trf_client.hpp>
 #include <sisl/auth_manager/security_config.hpp>
 
+namespace sisl {
+class sobject_manager;
+}
+
 namespace iomgr {
 
 class HttpServer;
+
 class IOEnvironment {
 public:
     static IOEnvironment& get_instance() {
@@ -42,11 +47,13 @@ public:
     IOEnvironment& with_auth_security();
     IOEnvironment& with_auth_manager();
     IOEnvironment& with_trf_client();
+    IOEnvironment& with_object_manager();
 
     std::shared_ptr< iomgr::HttpServer > get_http_server() { return m_http_server; }
     std::shared_ptr< sisl::AuthManager > get_auth_manager() { return m_auth_manager; }
     std::shared_ptr< sisl::TrfClient > get_trf_client() { return m_trf_client; }
     std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
+    std::shared_ptr< sisl::sobject_manager > get_object_mgr() { return m_object_mgr; }
     std::string get_ssl_cert() const {
         return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
     }
@@ -63,6 +70,7 @@ private:
     std::shared_ptr< sisl::AuthManager > m_auth_manager;
     std::shared_ptr< sisl::TrfClient > m_trf_client;
     std::shared_ptr< sisl::FileWatcher > m_file_watcher;
+    std::shared_ptr< sisl::sobject_manager > m_object_mgr;
 };
 #define ioenvironment iomgr::IOEnvironment::get_instance()
 
