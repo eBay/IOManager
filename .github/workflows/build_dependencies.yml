@@ -87,9 +87,9 @@ jobs:
     - name: Retrieve Dependencies
       uses: actions/checkout@v3
       with:
-        repository: eBay/sisl
+        repository: szmyd/sisl
         path: 3rd_party/sisl
-        ref: stable/v8.x
+        ref: test_custom_action
 
     - name: Restore IOMgr Cache
       id: restore-cache-iomgr
