@@ -20,7 +20,7 @@ jobs:
   SislDeps:
     uses: szmyd/sisl/.github/workflows/build_dependencies.yml@test_custom_action
     with:
-      branch: stable/v8.x
+      branch: test_custom_action
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
