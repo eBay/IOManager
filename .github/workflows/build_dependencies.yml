@@ -95,7 +95,7 @@ jobs:
       uses: actions/checkout@v3
       with:
         repository: eBay/sisl
-        path: 3rd_party/sisl
+        path: import/sisl
         ref: stable/v8.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
@@ -104,7 +104,7 @@ jobs:
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: 'False'
-        path: 3rd_party/sisl
+        path: import/sisl
         key_prefix: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
@@ -119,7 +119,7 @@ jobs:
       run: |
         sudo apt-get install -y python3-pyelftools libaio-dev
         python -m pip install pyelftools
-        conan export 3rd_party/sisl
+        conan export import/sisl
         conan export 3rd_party/dpdk
         conan export 3rd_party/fio
         conan export 3rd_party/grpc_internal
@@ -136,7 +136,7 @@ jobs:
             -o malloc_impl=${{ inputs.malloc-impl }} \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
-            3rd_party/sisl
+            import/sisl
         conan install \
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
@@ -156,7 +156,7 @@ jobs:
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: 'False'
-        path: 3rd_party/sisl
+        path: import/sisl
         key_prefix: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
