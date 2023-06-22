@@ -18,9 +18,9 @@ on:
 
 jobs:
   SislDeps:
-    uses: szmyd/sisl/.github/workflows/build_dependencies.yml@test_custom_action
+    uses: eBay/sisl/.github/workflows/build_dependencies.yml@stable/v8.x
     with:
-      branch: test_custom_action
+      branch: stable/v8.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}

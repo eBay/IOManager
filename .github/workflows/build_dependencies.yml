@@ -87,20 +87,20 @@ jobs:
     - name: Retrieve Dependencies
       uses: actions/checkout@v3
       with:
-        repository: szmyd/sisl
+        repository: eBay/sisl
         path: 3rd_party/sisl
-        ref: test_custom_action
+        ref: stable/v8.x
 
     - name: Load IOMgr Cache
       id: restore-cache
-      uses: szmyd/sisl/.github/actions/load_conan@test_custom_action
+      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: ${{ inputs.testing }}
         key_prefix: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
 
     - name: Load Sisl Cache
       id: restore-sisl-cache
-      uses: szmyd/sisl/.github/actions/load_conan@test_custom_action
+      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: 'False'
         path: 3rd_party/sisl
@@ -109,7 +109,7 @@ jobs:
       if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Setup Conan
-      uses: szmyd/sisl/.github/actions/setup_conan@test_custom_action
+      uses: eBay/sisl/.github/actions/setup_conan@stable/v8.x
       with:
         platform: ${{ inputs.platform }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache-sisl.outputs.cache-hit != 'true' }}
@@ -152,7 +152,7 @@ jobs:
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Reload Sisl Cache
-      uses: szmyd/sisl/.github/actions/load_conan@test_custom_action
+      uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: 'False'
         path: 3rd_party/sisl
