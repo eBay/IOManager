@@ -151,14 +151,13 @@ jobs:
         key_prefix: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
-    - name: Restore Sisl Cache
-      uses: actions/cache/restore@v3
+    - name: Reload Sisl Cache
+      uses: szmyd/sisl/.github/actions/load_conan@test_custom_action
       with:
-        path: |
-          ~/.conan/data
-        key: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-${{ hashFiles('3rd_party/sisl/**/conanfile.py') }}
-        fail-on-cache-miss: true
-        restore-keys: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}-
+        testing: 'False'
+        path: 3rd_party/sisl
+        key_prefix: SislDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Create and test Package
