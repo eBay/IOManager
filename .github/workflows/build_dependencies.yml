@@ -84,19 +84,20 @@ jobs:
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'False' }}
 
-    - name: Retrieve Dependencies
-      uses: actions/checkout@v3
-      with:
-        repository: eBay/sisl
-        path: 3rd_party/sisl
-        ref: stable/v8.x
-
     - name: Load IOMgr Cache
       id: restore-cache
       uses: eBay/sisl/.github/actions/load_conan@stable/v8.x
       with:
         testing: ${{ inputs.testing }}
         key_prefix: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v3
+      with:
+        repository: eBay/sisl
+        path: 3rd_party/sisl
+        ref: stable/v8.x
+      if: ${{ inputs.testing == 'True' || steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Load Sisl Cache
       id: restore-sisl-cache
