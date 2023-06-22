@@ -146,7 +146,7 @@ jobs:
       if: ${{ steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: ./.github/actions/store_conan
+      uses: eBay/sisl/.github/actions/store_conan@stable/v8.x
       with:
         key_prefix: IOMgrDeps8-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache-iomgr.outputs.cache-hit != 'true' }}
