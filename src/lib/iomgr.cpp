@@ -74,10 +74,7 @@ SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
                    ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
-                   ::cxxopts::value< uint32_t >(), "count"),
-                  (encryption, "", "encryption", "Turn on encryption", cxxopts::value< bool >(), "true or false"),
-                  (authorization, "", "authorization", "Turn on authorization", cxxopts::value< bool >(),
-                   "true or false"))
+                   ::cxxopts::value< uint32_t >(), "count"))
 
 namespace iomgr {
 

@@ -73,10 +73,6 @@ table IoEnv {
     http_max_request_size: uint64 = 4000000;
 
     http_num_threads: uint32 = 1;
-    
-    // Turn on security features
-    encryption: bool = false;
-    authorization: bool = false;
 }
 
 table IomgrSettings {

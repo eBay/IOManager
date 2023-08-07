@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -Wno-deprecated-copy -Wno-unused-parameter -fconcepts")
 
 find_package (GTest REQUIRED)
+find_package (cpr REQUIRED)
 
 link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 include_directories (BEFORE .. ../include)
@@ -38,7 +39,7 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
 
     set(TEST_HTTP_SERVER_SOURCES test_http_server.cpp)
     add_executable(test_http_server ${TEST_HTTP_SERVER_SOURCES})
-    target_link_libraries(test_http_server ${TEST_DEPS})
+    target_link_libraries(test_http_server ${TEST_DEPS} cpr::cpr)
     add_test(NAME TestHttpServer COMMAND test_http_server)
 
     if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))

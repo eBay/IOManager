@@ -7,6 +7,7 @@
 
 #include "io_environment.hpp"
 #include "http_server.hpp"
+#include "iomgr_config.hpp"
 
 SISL_LOGGING_INIT()
 SISL_OPTIONS_ENABLE(logging)

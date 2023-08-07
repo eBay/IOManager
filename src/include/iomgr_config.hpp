@@ -40,16 +40,6 @@ public:
                 cpuset_path = default_cpuset_path;
                 is_modified = true;
             }
-            auto& encryption = s.io_env->encryption;
-            if (SISL_OPTIONS.count("encryption")) {
-                encryption = SISL_OPTIONS["encryption"].as< bool >();
-                is_modified = true;
-            }
-            auto& authorization = s.io_env->authorization;
-            if (SISL_OPTIONS.count("authorization")) {
-                authorization = SISL_OPTIONS["authorization"].as< bool >();
-                is_modified = true;
-            }
             // Any more default overrides or set non-scalar entries come here
         });
 

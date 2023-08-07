@@ -18,6 +18,7 @@ ENUM(url_type, uint8_t,
 class HttpServer {
 public:
     HttpServer();
+    HttpServer(std::string const& ssl_cert, std::string const& ssl_key);
 
     // All the routes should be setup before calling start()
     void start();
@@ -27,7 +28,7 @@ public:
 
     void stop();
 
-    void setup_ssl();
+    void setup_ssl(std::string const& ssl_cert, std::string const& ssl_key);
 
     // auth related apis
     bool do_auth(Pistache::Http::Request& request, Pistache::Http::ResponseWriter& response);
@@ -42,6 +43,7 @@ private:
 private:
     std::unique_ptr< Pistache::Http::Endpoint > m_http_endpoint;
     Pistache::Rest::Router m_router;
+    bool m_secure_zone;
     std::atomic< bool > m_server_running{false};
     std::unordered_set< std::string > m_safelist;
     std::unordered_set< std::string > m_localhost_list;
