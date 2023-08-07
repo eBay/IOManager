@@ -98,7 +98,7 @@ jobs:
       with:
         repository: eBay/sisl
         path: import/sisl
-        ref: master
+        ref: stable/v9.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load Sisl Cache
