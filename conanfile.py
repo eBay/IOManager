@@ -48,7 +48,7 @@ class IOMgrConan(ConanFile):
         self.build_requires("gtest/1.13.0")
 
     def requirements(self):
-        self.requires("sisl/[~=9, include_prerelease=True]@oss/master")
+        self.requires("sisl/~=9.4")
 
         self.requires("boost/1.79.0")
         self.requires("folly/2022.01.31.00")
