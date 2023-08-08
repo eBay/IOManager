@@ -59,8 +59,7 @@ public:
 
     std::string get_ssl_cert() const;
     std::string get_ssl_key() const;
-    void set_ssl_cert(std::string const& ssl_cert);
-    void set_ssl_key(std::string const& ssl_key);
+    void set_ssl_certs(std::string const& ssl_cert, std::string const& ssl_key);
 
 private:
     IOEnvironment();
@@ -71,8 +70,6 @@ private:
     std::shared_ptr< sisl::TokenClient > m_token_client;
     std::shared_ptr< sisl::FileWatcher > m_file_watcher;
     std::shared_ptr< sisl::sobject_manager > m_object_mgr;
-
-    bool m_secure_zone;
     std::string m_ssl_cert;
     std::string m_ssl_key;
 

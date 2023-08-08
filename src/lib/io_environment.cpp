@@ -59,14 +59,12 @@ IOEnvironment& IOEnvironment::with_file_watcher() {
 
 IOEnvironment& IOEnvironment::with_token_verifier(std::shared_ptr< sisl::TokenVerifier >&& token_verifier) {
     if (!m_token_verifier) { m_token_verifier = token_verifier; }
-    m_secure_zone = true;
 
     return get_instance();
 }
 
 IOEnvironment& IOEnvironment::with_token_client(std::shared_ptr< sisl::TokenClient >&& token_client) {
     if (!m_token_client) { m_token_client = token_client; }
-    m_secure_zone = true;
 
     return get_instance();
 }
@@ -79,7 +77,9 @@ IOEnvironment& IOEnvironment::with_object_manager() {
 
 std::string IOEnvironment::get_ssl_cert() const { return m_ssl_cert; }
 std::string IOEnvironment::get_ssl_key() const { return m_ssl_key; }
-void IOEnvironment::set_ssl_cert(std::string const& ssl_cert) { m_ssl_cert = ssl_cert; }
-void IOEnvironment::set_ssl_key(std::string const& ssl_key) { m_ssl_key = ssl_key; }
+void IOEnvironment::set_ssl_certs(std::string const& ssl_cert, std::string const& ssl_key) {
+    m_ssl_cert = ssl_cert;
+    m_ssl_key = ssl_key;
+}
 
 } // namespace iomgr

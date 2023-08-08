@@ -6,9 +6,11 @@
 
 namespace iomgr {
 
-HttpServer::HttpServer(std::string const& ssl_cert, std::string const& ssl_key) : m_secure_zone(!ssl_cert.empty()) {
-    if (m_secure_zone && ssl_key.empty()) {
-        LOGERROR("ssl key is empty! ssl_cert: {}", ssl_cert);
+HttpServer::HttpServer(std::string const& ssl_cert, std::string const& ssl_key) :
+        m_secure_zone(!ssl_cert.empty() && !ssl_key.empty()) {
+
+    if (!m_secure_zone && (!ssl_cert.empty() || !ssl_key.empty())) {
+        LOGERROR("one of ssl cert {}, ssl_ky: {} is empty!", ssl_cert, ssl_key);
         return;
     }
     Pistache::Address addr(Pistache::Ipv4::any(), Pistache::Port(IM_DYNAMIC_CONFIG(io_env.http_port)));
