@@ -290,7 +290,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
 
     // wait for outstanding IO's to complete
     LOGINFOMOD(iomgr, "Device {} bdev_name={} close device issued with {} outstanding ios", iodev->devname,
-               iodev->alias_name, m_outstanding_async_ios);
+               iodev->alias_name, m_outstanding_async_ios.load());
     constexpr std::chrono::milliseconds max_wait_ms{5000};
     constexpr std::chrono::milliseconds wait_interval_ms{50};
     const auto start_time = std::chrono::steady_clock::now();
@@ -303,7 +303,7 @@ void SpdkDriveInterface::close_dev(const io_device_ptr& iodev) {
             LOGERRORMOD(
                 iomgr,
                 "Device {} bdev_name={} close device timeout waiting for async io's to complete. IO's outstanding: {}",
-                iodev->devname, iodev->alias_name, m_outstanding_async_ios);
+                iodev->devname, iodev->alias_name, m_outstanding_async_ios.load());
             break;
         }
     }

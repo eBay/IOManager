@@ -43,7 +43,6 @@ public:
     }
     IOEnvironment& with_http_server();
     IOEnvironment& with_http_server(std::string const& ssl_cert, std::string const& ssl_key);
-    IOEnvironment& with_http_server(uint32_t port_override = UINT32_MAX);
     IOEnvironment& with_file_watcher();
     IOEnvironment& with_token_verifier(std::shared_ptr< sisl::TokenVerifier >&& token_verifier);
     IOEnvironment& with_token_client(std::shared_ptr< sisl::TokenClient >&& token_client);
@@ -58,6 +57,11 @@ public:
     void restart_http_server();
     void restart_http_server(std::string const& ssl_cert, std::string const& ssl_key);
 
+    std::string get_ssl_cert() const;
+    std::string get_ssl_key() const;
+    void set_ssl_cert(std::string const& ssl_cert);
+    void set_ssl_key(std::string const& ssl_key);
+
 private:
     IOEnvironment();
     ~IOEnvironment();
@@ -69,6 +73,8 @@ private:
     std::shared_ptr< sisl::sobject_manager > m_object_mgr;
 
     bool m_secure_zone;
+    std::string m_ssl_cert;
+    std::string m_ssl_key;
 
     uint32_t app_mem_size_mb{0}; // Overriding parameters if any
     uint32_t hugepage_size_mb{0};

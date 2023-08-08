@@ -24,24 +24,26 @@
 #include <iomgr/iomgr_timer.hpp>
 #include <iomgr/fiber_lib.hpp>
 
-#define IOMGR_LOG_MODS iomgr, spdk, io_wd
-SISL_LOGGING_DECL(IOMGR_LOG_MODS);
-
 struct spdk_thread;
 struct spdk_bdev_desc;
 struct spdk_nvmf_qpair;
 struct spdk_bdev;
 
 namespace iomgr {
-#define REACTOR_LOG(level, __l, ...)                                                                                   \
+#define REACTOR_LOG(level, mod, thr_addr, __l, ...)                                                                    \
     {                                                                                                                  \
-        LOG##level##MOD_FMT(iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {            \
-                                fmt::format_to(fmt::appender(buf), "[{}:{}] ", file_name(__FILE__), __LINE__);         \
-                                fmt::format_to(fmt::appender(buf), "[IOThread {}] ", m_reactor_num);                   \
-                                fmt::format_to(fmt::appender(buf), __m, args...);                                      \
-                                return true;                                                                           \
-                            }),                                                                                        \
-                            __l, ##__VA_ARGS__);                                                                       \
+        LOG##level##MOD_FMT(                                                                                           \
+            BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                                            \
+            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                                   \
+                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[{}:{}] "},                                      \
+                                fmt::make_format_args(file_name(__FILE__), __LINE__));                                 \
+                fmt::vformat_to(                                                                                       \
+                    fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                                         \
+                    fmt::make_format_args(m_reactor_num, (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr))));  \
+                fmt::vformat_to(fmt::appender(buf), fmt::string_view{__m}, fmt::make_format_args(args...));            \
+                return true;                                                                                           \
+            }),                                                                                                        \
+            __l, ##__VA_ARGS__);                                                                                       \
     }
 
 class IOThreadMetrics : public sisl::MetricsGroup {

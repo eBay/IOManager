@@ -106,6 +106,6 @@ ENUM(drive_type, uint8_t,
      unknown       // Try to deduce it while loading
 )
 
-#define IOMGR_LOG_MODS iomgr, spdk, io_wd, httpserver_lmod
+#define IOMGR_LOG_MODS iomgr, spdk, io_wd
 SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 } // namespace iomgr

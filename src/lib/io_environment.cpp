@@ -12,9 +12,10 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#include "io_environment.hpp"
-#include "http_server.hpp"
+#include <iomgr/io_environment.hpp>
+#include <iomgr/http_server.hpp>
 #include "iomgr_config.hpp"
+
 #include <sisl/sobject/sobject.hpp>
 
 namespace iomgr {
@@ -25,9 +26,7 @@ IOEnvironment::IOEnvironment() {
 }
 
 IOEnvironment::~IOEnvironment() {
-#ifdef WITH_EVHTP
     if (m_http_server) { m_http_server->stop(); }
-#endif
     if (m_file_watcher) { m_file_watcher->stop(); }
 }
 
@@ -48,8 +47,6 @@ IOEnvironment& IOEnvironment::with_http_server(std::string const& ssl_cert, std:
 
     return get_instance();
 }
-
-#endif // #ifdef WITH_EVHTP
 
 IOEnvironment& IOEnvironment::with_file_watcher() {
     if (!m_file_watcher) {
@@ -80,11 +77,9 @@ IOEnvironment& IOEnvironment::with_object_manager() {
     return get_instance();
 }
 
-std::string IOEnvironment::get_ssl_cert() const {
-    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
-}
-std::string IOEnvironment::get_ssl_key() const {
-    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
-}
+std::string IOEnvironment::get_ssl_cert() const { return m_ssl_cert; }
+std::string IOEnvironment::get_ssl_key() const { return m_ssl_key; }
+void IOEnvironment::set_ssl_cert(std::string const& ssl_cert) { m_ssl_cert = ssl_cert; }
+void IOEnvironment::set_ssl_key(std::string const& ssl_key) { m_ssl_key = ssl_key; }
 
 } // namespace iomgr

@@ -60,11 +60,11 @@ void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t num_fibers,
 
         m_reactor_num = sisl::ThreadLocalContext::my_thread_num();
         m_reactor_name = name.empty() ? fmt::format("{}-{}", m_reactor_num, loop_type()) : name;
-        REACTOR_LOG(INFO, "IOReactor {} started of loop type={} and assigned reactor id {}", m_reactor_name,
+        REACTOR_LOG(INFO, , , "IOReactor {} started of loop type={} and assigned reactor id {}", m_reactor_name,
                     loop_type(), m_reactor_num);
 
         init(num_fibers);
-        if (m_keep_running) { REACTOR_LOG(INFO, "IOReactor is ready to go to listen loop"); }
+        if (m_keep_running) { REACTOR_LOG(INFO, , , "IOReactor is ready to go to listen loop"); }
     }
 
     if (!m_user_controlled_loop && m_keep_running) {
@@ -100,10 +100,10 @@ void IOReactor::init(uint32_t num_fibers) {
             iface->on_reactor_start(this);
             ++added_iface;
         } else {
-            REACTOR_LOG(INFO, "{} with scope={} ignored to add", iface->name(), iface->scope());
+            REACTOR_LOG(INFO, , , "{} with scope={} ignored to add", iface->name(), iface->scope());
         }
     });
-    REACTOR_LOG(INFO, "Reactor added {} interfaces", added_iface);
+    REACTOR_LOG(INFO, , , "Reactor added {} interfaces", added_iface);
 
     m_rand_fiber_dist = std::uniform_int_distribution< size_t >(0, m_io_fibers.size() - 1);
     m_rand_sync_fiber_dist = std::uniform_int_distribution< size_t >(1, m_io_fibers.size() - 1);
@@ -151,10 +151,10 @@ void IOReactor::stop() {
             iface->on_reactor_stop(this);
             ++removed_iface;
         } else {
-            REACTOR_LOG(INFO, "{} with scope={} ignored to remove", iface->name(), iface->scope());
+            REACTOR_LOG(INFO, , , "{} with scope={} ignored to remove", iface->name(), iface->scope());
         }
     });
-    REACTOR_LOG(INFO, "Reactor stop removed {} interfaces", removed_iface);
+    REACTOR_LOG(INFO, , , "Reactor stop removed {} interfaces", removed_iface);
 
     for (size_t i{1}; i < m_io_fibers.size(); ++i) {
         auto msg = iomgr_msg::create([]() {}); // Send empty message for loop to come out and yield
@@ -197,7 +197,7 @@ void IOReactor::fiber_loop(IOFiber* fiber) {
     iomgr_msg* msg;
     while (true) {
         if ((msg = fiber->pop_msg()) != nullptr) {
-            REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
+            REACTOR_LOG(DEBUG, , , "Fiber {} picked the msg and handling it", fiber->ordinal);
             handle_msg(msg);
         }
 

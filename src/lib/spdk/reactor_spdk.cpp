@@ -127,7 +127,7 @@ void IOReactorSPDK::stop_impl() {
 
 void IOReactorSPDK::add_external_spdk_thread(struct spdk_thread* sthread) {
     m_external_spdk_threads.push_back(sthread);
-    REACTOR_LOG(INFO, "Added External SPDK Thread {} to this reactor", spdk_thread_get_name(sthread));
+    REACTOR_LOG(INFO, , , "Added External SPDK Thread {} to this reactor", spdk_thread_get_name(sthread));
 }
 
 int IOReactorSPDK::add_iodev_impl(const io_device_ptr& iodev) {

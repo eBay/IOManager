@@ -123,7 +123,9 @@ public:
         LOGINFO("Starting iomgr with {} threads, spdk: {}", m_nthreads, is_spdk);
         ioenvironment.with_iomgr(iomgr_params{.num_threads = m_nthreads, .is_spdk = is_spdk, .num_fibers = nfibers});
 
-        LOGINFO("IOManager ver. {}", iomgr::get_version());
+        std::stringstream iomgr_ver;
+        iomgr_ver << iomgr::get_version();
+        LOGINFO("IOManager ver. {}", iomgr_ver.str());
         m_iodev = iomgr::DriveInterface::open_dev(m_dev_path, O_CREAT | O_RDWR);
         s_driveattr = iomgr::DriveInterface::get_attributes(m_dev_path);
     }
