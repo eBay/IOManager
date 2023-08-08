@@ -12,12 +12,12 @@
 #endif
 
 #include <sisl/fds/utils.hpp>
-#include <iomgr.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <gtest/gtest.h>
 
-#include "io_environment.hpp"
+#include <iomgr/io_environment.hpp>
+#include <iomgr/iomgr.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -25,7 +25,7 @@ using namespace std::chrono_literals;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_write_zeros,
-                  (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/wz1"), "path"),
+                  (dev, "", "dev", "dev", ::cxxopts::value< std::string >()->default_value("/tmp/test_wz"), "path"),
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"),
                   //(size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2147483648"), "number"),
                   (size, "", "size", "size", ::cxxopts::value< uint64_t >()->default_value("2097152"), "number"),
@@ -65,8 +65,8 @@ using random_bytes_engine = std::independent_bits_engine< std::default_random_en
 class WriteZeroTest : public ::testing::Test {
 public:
     void SetUp() override {
-        m_size = SISL_OPTIONS["size"].as< uint64_t >();
-        m_offset = SISL_OPTIONS["offset"].as< uint64_t >();
+        m_total_size = SISL_OPTIONS["size"].as< uint64_t >();
+        m_start_offset = SISL_OPTIONS["offset"].as< uint64_t >();
 
         const auto dev{SISL_OPTIONS["dev"].as< std::string >()};
         const auto dev_size{SISL_OPTIONS["size"].as< uint64_t >() + SISL_OPTIONS["offset"].as< uint64_t >()};
@@ -80,7 +80,7 @@ public:
         }
 
         const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-        ioenvironment.with_iomgr(1, is_spdk);
+        ioenvironment.with_iomgr(iomgr_params{.num_threads = 1, .is_spdk = is_spdk});
 
         int oflags{O_CREAT | O_RDWR};
         if (is_spdk) { oflags |= O_DIRECT; }
@@ -101,10 +101,8 @@ public:
     };
 
     void write_zero_test() {
-        auto remain_size{m_size};
-        auto cur_offset{m_offset};
-
-        m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_write_completion, 2));
+        auto remain_size = m_total_size;
+        auto cur_offset = m_start_offset;
 
         // First fill in the entire set with some value in specific pattern
         random_bytes_engine rbe;
@@ -117,66 +115,53 @@ public:
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz = std::min(max_io_size, remain_size);
-            io_req* req = new io_req();
-            req->buf = buf;
-            req->size = this_sz;
-            m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset,
-                                                    (uint8_t*)req);
+            m_iodev->drive_interface()
+                ->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset)
+                .thenValue([this, this_sz, buf](auto) { on_write_completion(buf, this_sz); });
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
     }
 
-    void on_write_completion(int64_t res, uint8_t* cookie) {
-        ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
-        io_req* req = (io_req*)cookie;
-        m_filled_size += req->size;
+    void on_write_completion(uint8_t* buf, uint64_t size_written) {
+        m_filled_size += size_written;
+        if (m_filled_size < m_total_size) { return; }
 
-        if (m_filled_size == m_size) {
-            LOGINFO("Filling with rand bytes for size={} offset={} completed in {} usecs, now filling with 0s", m_size,
-                    m_offset, get_elapsed_time_us(m_start_time));
-            m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_zero_completion, 2));
-            iomanager.iobuf_free(req->buf);
+        LOGINFO("Filling with rand bytes for size={} offset={} completed in {} usecs, now filling with 0s",
+                m_total_size, m_start_offset, get_elapsed_time_us(m_start_time));
+        iomanager.iobuf_free(buf);
 
-            // Now issue write zeros
-            m_start_time = Clock::now();
-            m_iodev->drive_interface()->write_zero(m_iodev.get(), m_size, m_offset, nullptr);
-        }
-        delete req;
+        iomanager.run_on_forget(reactor_regex::random_worker, fiber_regex::syncio_only,
+                                [this]() { write_zero_and_read(); });
     }
 
-    void on_zero_completion(int64_t res, [[maybe_unused]] void* cookie) {
-        ASSERT_EQ(res, 0) << "Expected write_zeros to be successful";
-        LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_size,
+    void write_zero_and_read() {
+        // Now issue write zeros
+        m_start_time = Clock::now();
+        m_iodev->drive_interface()->sync_write_zero(m_iodev.get(), m_total_size, m_start_offset);
+        LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_total_size,
                 get_elapsed_time_us(m_start_time));
 
-        m_iodev->drive_interface()->attach_completion_cb(bind_this(WriteZeroTest::on_read_completion, 2));
-
-        auto remain_size{m_size};
-        auto cur_offset{m_offset};
-
-        // Read back and ensure all bytes are 0s
         m_start_time = Clock::now();
-        while (remain_size > 0) {
-            const auto this_sz{std::min(max_io_size, remain_size)};
+        auto read_remain_size = m_total_size;
+        auto cur_offset = m_start_offset;
+        while (read_remain_size > 0) {
+            const auto this_sz = std::min(max_io_size, read_remain_size);
 
-            io_req* req = new io_req();
-            req->buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-            req->size = this_sz;
-            m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)req->buf, (uint32_t)this_sz, cur_offset,
-                                                   (uint8_t*)req);
+            auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
+            m_iodev->drive_interface()
+                ->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz, cur_offset)
+                .thenValue([read_buf, this, this_sz](auto) { validate_zeros(read_buf, this_sz); });
             cur_offset += this_sz;
-            remain_size -= this_sz;
+            read_remain_size -= this_sz;
         }
     }
 
-    void on_read_completion(int64_t res, uint8_t* cookie) {
-        ASSERT_EQ(res, 0) << "Expected read to be successful";
+    void validate_zeros(uint8_t* buf, size_t size) {
         bool all_zero{true};
-        io_req* req = (io_req*)cookie;
-        size_t remain_size = req->size;
+        size_t remain_size = size;
 
-        const int* pInt = reinterpret_cast< int* >(req->buf);
+        const int* pInt = r_cast< int* >(buf);
         for (; remain_size >= sizeof(int); remain_size -= sizeof(int), ++pInt) {
             if (*pInt != 0) {
                 all_zero = false;
@@ -185,7 +170,7 @@ public:
         }
 
         if (all_zero && (remain_size > 0)) {
-            const uint8_t* pByte{reinterpret_cast< const uint8_t* >(pInt)};
+            const uint8_t* pByte = r_cast< const uint8_t* >(pInt);
             for (; remain_size > 0; --remain_size, ++pByte) {
                 if (*pByte != 0x00) {
                     all_zero = false;
@@ -195,11 +180,10 @@ public:
         }
         ASSERT_TRUE(all_zero) << "Expected all bytes to be zero, but not";
 
-        m_validated_size += req->size;
-        iomanager.iobuf_free(req->buf);
-        delete req;
+        m_validated_size += size;
+        iomanager.iobuf_free(buf);
 
-        if (m_validated_size == m_size) {
+        if (m_validated_size == m_total_size) {
             LOGINFO("Write zeros of size={} validated in {} microseconds", remain_size,
                     get_elapsed_time_us(m_start_time));
             s_runner.job_done();
@@ -207,8 +191,8 @@ public:
     }
 
 protected:
-    uint64_t m_size;
-    uint64_t m_offset;
+    uint64_t m_total_size;
+    uint64_t m_start_offset;
     uint64_t m_filled_size{0};
     uint64_t m_validated_size{0};
     io_device_ptr m_iodev;
@@ -217,9 +201,7 @@ protected:
 };
 
 TEST_F(WriteZeroTest, fill_zero_validate) {
-    iomanager.run_on(
-        thread_regex::least_busy_worker, [this]([[maybe_unused]] auto taddr) { this->write_zero_test(); },
-        wait_type_t::no_wait);
+    iomanager.run_on_forget(reactor_regex::least_busy_worker, [this]() { this->write_zero_test(); });
     s_runner.wait();
 }
 
@@ -229,6 +211,6 @@ int main(int argc, char* argv[]) {
     sisl::logging::SetLogger("test_write_zero");
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
-    auto ret{RUN_ALL_TESTS()};
+    auto const ret = RUN_ALL_TESTS();
     return ret;
 }

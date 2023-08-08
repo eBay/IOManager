@@ -25,7 +25,9 @@ IOEnvironment::IOEnvironment() {
 }
 
 IOEnvironment::~IOEnvironment() {
+#ifdef WITH_EVHTP
     if (m_http_server) { m_http_server->stop(); }
+#endif
     if (m_file_watcher) { m_file_watcher->stop(); }
 }
 
@@ -46,6 +48,8 @@ IOEnvironment& IOEnvironment::with_http_server(std::string const& ssl_cert, std:
 
     return get_instance();
 }
+
+#endif // #ifdef WITH_EVHTP
 
 IOEnvironment& IOEnvironment::with_file_watcher() {
     if (!m_file_watcher) {
@@ -74,6 +78,13 @@ IOEnvironment& IOEnvironment::with_object_manager() {
     if (!m_object_mgr) { m_object_mgr = std::make_shared< sisl::sobject_manager >(); }
 
     return get_instance();
+}
+
+std::string IOEnvironment::get_ssl_cert() const {
+    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_cert_file) : "";
+}
+std::string IOEnvironment::get_ssl_key() const {
+    return (IM_DYNAMIC_CONFIG(io_env->encryption)) ? SECURITY_DYNAMIC_CONFIG(ssl_key_file) : "";
 }
 
 } // namespace iomgr

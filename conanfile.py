@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.8.1"
+    version = "9.2.1"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -20,7 +20,9 @@ class IOMgrConan(ConanFile):
         "coverage": ['True', 'False'],
         "grpc_support": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        "spdk": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "fiber_impl" : ['boost', 'folly']
         }
     default_options = {
         'shared':       False,
@@ -28,8 +30,10 @@ class IOMgrConan(ConanFile):
         'coverage':     False,
         'grpc_support': True,
         'sanitize':     False,
+        'spdk':         True,
         'testing':      'full',
         'sisl:prerelease':   True,
+        'fiber_impl':   'boost',
     }
 
     generators = "cmake", "cmake_find_package"
@@ -46,7 +50,7 @@ class IOMgrConan(ConanFile):
 
     def build_requirements(self):
         self.build_requires("gtest/1.13.0")
-        self.build_requires("cpr/1.9.3")
+        self.build_requires("cpr/1.10.4")
 
     def requirements(self):
         self.requires("sisl/[~=10, include_prerelease=True]@oss/master")
@@ -55,7 +59,7 @@ class IOMgrConan(ConanFile):
         self.requires("folly/nu2.2022.01.31.00")
         if self.options.grpc_support:
             self.requires("grpc/1.50.1")
-            self.requires("grpc_internal/1.50.1")
+            self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
         self.requires("libevent/2.1.12")
         self.requires("spdk/21.07.y")
@@ -65,6 +69,7 @@ class IOMgrConan(ConanFile):
         self.requires("flatbuffers/1.12.0", override=True)
         self.requires("openssl/3.1.1", override=True)
         self.requires("zlib/1.2.13", override=True)
+        self.requires("libcurl/8.0.1", override=True)
 
     def build(self):
         cmake = CMake(self)
@@ -72,28 +77,28 @@ class IOMgrConan(ConanFile):
                        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
                        'MEMORY_SANITIZER_ON': 'OFF'}
-        test_target = None
 
-        run_tests = True
+        test_target = None
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
             elif self.options.coverage:
                 definitions['BUILD_COVERAGE'] = 'ON'
                 test_target = 'coverage'
-            else:
-                run_tests = False
+
+        if self.options.fiber_impl == "boost":
+            definitions['FIBER_IMPL'] = 'boost'
+        else:
+            definitions['FIBER_IMPL'] = 'folly'
 
         cmake.configure(defs=definitions)
         cmake.build()
-        # Only test in Sanitizer mode, Coverage mode or Release mode
-        if run_tests:
-            cmake.test(target=test_target, output_on_failure=True)
+        cmake.test(target=test_target, output_on_failure=True)
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
-        copy(self, "*.h", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
-        copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include", "iomgr"), keep_path=True)
+        copy(self, "*.h", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
+        copy(self, "*.hpp", join(self.source_folder, "src", "include"), join(self.package_folder, "include"), keep_path=True)
         copy(self, "*iomgr_config_generated.h", join(self.build_folder, "src"), join(self.package_folder, "include", "iomgr"), keep_path=False)
         copy(self, "*.a", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
         copy(self, "*.so", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
