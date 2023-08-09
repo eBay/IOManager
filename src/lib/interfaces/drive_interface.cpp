@@ -32,10 +32,13 @@
 #include <sisl/flip/flip.hpp>
 #include <boost/algorithm/string.hpp>
 
-#include "iomgr.hpp"
-#include "drive_interface.hpp"
-#include "kernel_drive_interface.hpp"
-#include "spdk_drive_interface.hpp"
+#include <iomgr/iomgr.hpp>
+#include <iomgr/iomgr_flip.hpp>
+#include <iomgr/drive_interface.hpp>
+#include "interfaces/kernel_drive_interface.hpp"
+#include "interfaces/spdk_drive_interface.hpp"
+#include "iomgr_config.hpp"
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 std::unordered_map< std::string, drive_type > DriveInterface::s_dev_type;
@@ -275,6 +278,74 @@ io_device_ptr DriveInterface::open_dev(const std::string& dev_name, int oflags) 
 
 size_t DriveInterface::get_size(IODevice* iodev) { return iodev->drive_interface()->get_dev_size(iodev); }
 
+void DriveInterface::increment_outstanding_counter(drive_iocb* iocb) {
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::FSYNC:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_fsync_cnt, 1);
+        break;
+    case DriveOpType::UNMAP:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case DriveOpType::WRITE_ZERO:
+        COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_fsync_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+
+    auto& thread_metrics = iomanager.this_thread_metrics();
+    ++thread_metrics.outstanding_ops;
+    ++thread_metrics.drive_io_count;
+}
+
+void DriveInterface::decrement_outstanding_counter(drive_iocb* iocb) {
+    switch (iocb->op_type) {
+    case DriveOpType::READ:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
+        break;
+    case DriveOpType::WRITE:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_cnt, 1);
+        break;
+    case DriveOpType::FSYNC:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_fsync_cnt, 1);
+        break;
+    case DriveOpType::UNMAP:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_unmap_cnt, 1);
+        break;
+    case DriveOpType::WRITE_ZERO:
+        COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_write_zero_cnt, 1);
+        break;
+    default:
+        LOGDFATAL("Invalid operation type {}", iocb->op_type);
+    }
+    --(iomanager.this_thread_metrics().outstanding_ops);
+}
+
+#ifdef _PRERELEASE
+bool DriveInterface::inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb) {
+    auto closure = [iocb, cb = std::move(delayed_cb)]() {
+        LOGDEBUGMOD(iomgr, "[device={},op_type={}]: Delayed completion simulation - finish", iocb->iodev->devname,
+                    enum_name(iocb->op_type));
+        cb(iocb);
+    };
+
+    if (iomgr_flip::instance()->delay_flip(
+            "simulate_drive_delay", closure, iocb->iodev->devname, enum_name(iocb->op_type),
+            iocb->initiating_reactor ? (int)iocb->initiating_reactor->reactor_idx() : -1)) {
+        LOGDEBUGMOD(iomgr, "[device={},op_type={}]: Delayed completion simulation - start", iocb->iodev->devname,
+                    enum_name(iocb->op_type));
+        return true;
+    }
+    return false;
+}
+#endif
+
 /////////////////////////// KernelDriveInterface Section /////////////////////////////////////
 size_t KernelDriveInterface::get_dev_size(IODevice* iodev) {
     if (std::filesystem::is_regular_file(std::filesystem::status(iodev->devname))) {
@@ -329,7 +400,7 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
 
 void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const drive_type dev_type) {
 #ifdef __linux__
-    if ((dev_type == drive_type::block_nvme) && IM_DYNAMIC_CONFIG(aio.zeros_by_ioctl)) {
+    if ((dev_type == drive_type::block_nvme) && IM_DYNAMIC_CONFIG(drive.zeros_by_ioctl)) {
         if (m_max_write_zeros == std::numeric_limits< uint64_t >::max()) {
             m_max_write_zeros = get_max_write_zeros(devname);
         }
@@ -353,10 +424,10 @@ void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const
     }
 }
 
-ssize_t KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
+void KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
     ssize_t written_size = 0;
     uint32_t resubmit_cnt = 0;
-    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
         written_size = pwrite(iodev->fd(), data, (ssize_t)size, (off_t)offset);
 #ifdef _PRERELEASE
         auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
@@ -368,15 +439,12 @@ ssize_t KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint
         folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
                                             offset, size, written_size, errno, iodev->fd()));
     }
-
-    return written_size;
 }
 
-ssize_t KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                          uint64_t offset) {
+void KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     ssize_t written_size = 0;
     uint32_t resubmit_cnt = 0;
-    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+    while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
         written_size = pwritev(iodev->fd(), iov, iovcnt, offset);
 #ifdef _PRERELEASE
         auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("write_sync_resubmit_io");
@@ -389,14 +457,12 @@ ssize_t KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int
             fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
                         size, written_size, iovcnt, errno, iodev->fd()));
     }
-
-    return written_size;
 }
 
-ssize_t KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
+void KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
     ssize_t read_size = 0;
     uint32_t resubmit_cnt = 0;
-    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
         read_size = pread(iodev->fd(), data, (ssize_t)size, (off_t)offset);
 #ifdef _PRERELEASE
         auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
@@ -408,15 +474,12 @@ ssize_t KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t si
         folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
                                             offset, size, read_size, errno, iodev->fd()));
     }
-
-    return read_size;
 }
 
-ssize_t KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                         uint64_t offset) {
+void KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
     ssize_t read_size = 0;
     uint32_t resubmit_cnt = 0;
-    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(max_resubmit_cnt)) {
+    while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
         read_size = preadv(iodev->fd(), iov, iovcnt, (off_t)offset);
 #ifdef _PRERELEASE
         auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_sync_resubmit_io");
@@ -429,19 +492,17 @@ ssize_t KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int 
             fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,
                         size, read_size, iovcnt, errno, iodev->fd()));
     }
-
-    return read_size;
 }
 
-void KernelDriveInterface::write_zero(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+void KernelDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
     if ((iodev->dtype == drive_type::block_nvme) && (m_max_write_zeros != 0)) {
-        write_zero_ioctl(iodev, size, offset, cookie);
+        write_zero_ioctl(iodev, size, offset);
     } else {
-        write_zero_writev(iodev, size, offset, cookie);
+        write_zero_writev(iodev, size, offset);
     }
 }
 
-void KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+void KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset) {
     assert(m_max_write_zeros != 0);
 
 #ifdef __linux__
@@ -459,11 +520,10 @@ void KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size
         offset += this_size;
         size -= this_size;
     }
-    if (m_comp_cb) { m_comp_cb(((ret != 0) ? errno : 0), cookie); }
 #endif
 }
 
-void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset, uint8_t* cookie) {
+void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset) {
     if (size == 0 || !m_zero_buf) {
         assert(false);
         return;
@@ -495,8 +555,5 @@ void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uin
     }
 
     assert(total_sz_written == size);
-
-    if (m_comp_cb) { m_comp_cb(errno, cookie); }
 }
-
 } // namespace iomgr

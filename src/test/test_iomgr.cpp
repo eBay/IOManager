@@ -12,7 +12,6 @@
 #include <stdexcept>
 #include <string>
 
-#include <drive_interface.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
@@ -21,8 +20,9 @@
 #include <fcntl.h>
 #endif
 
-#include <iomgr.hpp>
-#include "io_environment.hpp"
+#include <iomgr/iomgr.hpp>
+#include <iomgr/io_environment.hpp>
+#include <iomgr/drive_interface.hpp>
 
 using log_level = spdlog::level::level_enum;
 
@@ -143,7 +143,7 @@ static void do_verify() {
     LOGINFO("All IOs completed (total_excluding_preload={}) for this thread, running verification",
             work.nios_completed);
     auto sthread = sisl::named_thread("verify_thread", []() mutable {
-        const auto loop_type{SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP};
+        const auto loop_type = SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP;
         iomanager.run_io_loop(loop_type, nullptr, [](bool is_started) {
             if (is_started) {
                 uint8_t* const rbuf{iomanager.iobuf_alloc(g_driveattr.align_size, io_size)};
@@ -226,7 +226,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     // Start the IOManager
-    ioenvironment.with_iomgr(nthreads, SISL_OPTIONS["spdk"].as< bool >());
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = nthreads, .is_spdk = SISL_OPTIONS["spdk"].as< bool >()});
     std::ostringstream ss;
     ss << iomgr::get_version();
     LOGINFO("IOManager ver. {}", ss.str());
@@ -246,16 +246,12 @@ int main(int argc, char* argv[]) {
     g_driveattr = iomgr::DriveInterface::get_attributes(dev_path);
     g_iodev->drive_interface()->attach_completion_cb(on_io_completion);
 
-    iomanager.set_io_memory_limit(1073741824UL);
-    uint8_t* buf{iomanager.iobuf_alloc(g_driveattr.align_size, 8192)};
+    uint8_t* buf = iomanager.iobuf_alloc(g_driveattr.align_size, 8192);
     LOGINFO("Allocated iobuf size = {}", iomanager.iobuf_size(buf));
     iomanager.iobuf_free(buf);
 
     if (iomanager.is_spdk_mode()) {
-        void* mempool{iomanager.create_mempool(io_size, 32)};
-        RELEASE_ASSERT_NOTNULL(mempool, "Mempool was not created successfully");
-        LOGINFO("Allocated mempool size = {}", io_size);
-        uint8_t* mempool_buf{iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size)};
+        uint8_t* mempool_buf = iomanager.iobuf_pool_alloc(g_driveattr.align_size, io_size);
         RELEASE_ASSERT_NOTNULL((void*)mempool_buf, "Mempool buffer was not created successfully");
         iomanager.iobuf_pool_free(mempool_buf, io_size);
     }

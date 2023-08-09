@@ -9,7 +9,7 @@
 #include <sisl/fds/atomic_status_counter.hpp>
 #include <atomic>
 #include <sisl/utility/enum.hpp>
-#include "iomgr.hpp"
+#include <iomgr/iomgr.hpp>
 #include "io_examiner.hpp"
 
 namespace iomgr {
@@ -35,7 +35,7 @@ public:
             m_examiner{examiner}, m_cfg{cfg}, m_start_time(Clock::now()) {
         if (cfg.interrupt_ops_sec > 0) {
             iomanager.schedule_global_timer(cfg.interrupt_ops_sec * 1000ul * 1000ul * 1000ul, true, nullptr,
-                                            iomgr::thread_regex::all_worker,
+                                            iomgr::reactor_regex::all_worker,
                                             [this](void* cookie) { try_run_one_iteration(); });
         }
     }
@@ -52,8 +52,7 @@ public:
     virtual std::string job_name() const = 0;
 
     void start_job(wait_till_t wait_till = wait_till_t::completion) {
-        iomanager.run_on(iomgr::thread_regex::all_worker,
-                         [this](iomgr::io_thread_addr_t a) { start_in_this_thread(); });
+        iomanager.run_on_forget(iomgr::reactor_regex::all_worker, [this]() { start_in_this_thread(); });
         if (wait_till == wait_till_t::execution) {
             wait_for_execution();
         } else if (wait_till == wait_till_t::completion) {

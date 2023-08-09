@@ -13,7 +13,7 @@
 #include <fmt/format.h>
 #include <sisl/fds/buffer.hpp>
 
-#include "iomgr.hpp"
+#include <iomgr/iomgr.hpp>
 #include "job.hpp"
 
 static constexpr uint64_t Ki{1024};
@@ -154,7 +154,7 @@ public:
                 {m_cfg.io_dist[io_type_t::write], m_cfg.io_dist[io_type_t::read], m_cfg.io_dist[io_type_t::unmap]}} {
         // Integrated mode is not supported until lambdas or per request completion routine can be passed to iomgr.
         // Otherwise the completion of client iomgr will go back to homestore layer.
-        examiner->attach_completion_cb(bind_this(IOJob::on_completion, 2));
+        // examiner->attach_completion_cb(bind_this(IOJob::on_completion, 2));
     }
 
     virtual ~IOJob() override = default;
@@ -322,7 +322,7 @@ private:
     // *************** Different IO Generator ******************
     bool write_io() {
         bool ret = false;
-        const IoFuncType write_function{bind_this(IOJob::write_vol, 3)};
+        const IoFuncType write_function = bind_this(IOJob::write_vol, 3);
         switch (m_cfg.load_type) {
         case load_type_t::random:
             ret = run_io(bind_this(IOJob::writeable_rand_lbas, 0), write_function);
@@ -372,7 +372,7 @@ private:
     }
 
     bool run_io(const LbaGeneratorType& lba_generator, const IoFuncType& io_function) {
-        const auto gen_lba{lba_generator()};
+        const auto gen_lba = lba_generator();
         return (gen_lba.valid_io) ? io_function(gen_lba.vol_idx, gen_lba.lba, gen_lba.num_lbas) : false;
     }
 
@@ -384,7 +384,7 @@ private:
 
     // *************** Actual Read/Write/Unmap methods ******************
     bool write_vol(const uint32_t vol_idx, const uint64_t lba, const uint32_t nlbas) {
-        io_req_t* req{sisl::ObjectAllocator< io_req_t >::make_object()};
+        io_req_t* req = new io_req_t();
         req->vol_info = m_examiner->m_vol_info[vol_idx];
         req->lba = lba;
         req->nlbas = nlbas;
@@ -399,14 +399,15 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_write_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        vol_dev->drive_interface()->async_write(vol_dev.get(), reinterpret_cast< const char* >(req->buffer), size,
-                                                lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        vol_dev->drive_interface()
+            ->async_write(vol_dev.get(), r_cast< const char* >(req->buffer), size, lba * req->vol_info->m_page_size)
+            .thenValue([this, req](auto) { on_completion(req); });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
 
     bool read_vol(const uint32_t vol_idx, const uint64_t lba, const uint32_t nlbas) {
-        io_req_t* req{sisl::ObjectAllocator< io_req_t >::make_object()};
+        io_req_t* req = new io_req_t();
         req->vol_info = m_examiner->m_vol_info[vol_idx];
         req->lba = lba;
         req->nlbas = nlbas;
@@ -420,15 +421,16 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_read_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        vol_dev->drive_interface()->async_read(vol_dev.get(), reinterpret_cast< char* >(req->buffer), size,
-                                               lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        vol_dev->drive_interface()
+            ->async_read(vol_dev.get(), r_cast< char* >(req->buffer), size, lba * req->vol_info->m_page_size)
+            .thenValue([this, req](auto) { on_completion(req); });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         m_output.read_cnt.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 
     bool unmap_vol(const uint32_t vol_idx, const uint64_t lba, const uint32_t nlbas) {
-        io_req_t* req{sisl::ObjectAllocator< io_req_t >::make_object()};
+        io_req_t* req = new io_req_t();
         req->vol_info = m_examiner->m_vol_info[vol_idx];
         req->lba = lba;
         req->nlbas = nlbas;
@@ -439,15 +441,15 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_unmap_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        vol_dev->drive_interface()->async_unmap(vol_dev.get(), nlbas * req->vol_info->m_page_size,
-                                                lba * req->vol_info->m_page_size, reinterpret_cast< uint8_t* >(req));
+        vol_dev->drive_interface()
+            ->async_unmap(vol_dev.get(), nlbas * req->vol_info->m_page_size, lba * req->vol_info->m_page_size)
+            .thenValue([this, req](auto) { on_completion(req); });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
 
         return true;
     }
 
-    void on_completion(int64_t res, uint8_t* cookie) {
-        io_req_t* req = reinterpret_cast< io_req_t* >(cookie);
+    void on_completion(io_req_t* req) {
         if (req->op_type == io_type_t::read) {
             HISTOGRAM_OBSERVE(m_metrics, iojob_read_latency, get_elapsed_time_us(req->start_time));
         } else if (req->op_type == io_type_t::write) {
@@ -460,7 +462,7 @@ private:
             std::unique_lock< std::mutex > lk(req->vol_info->m_mtx);
             req->vol_info->mark_lbas_free(req->lba, req->nlbas);
         }
-        sisl::ObjectAllocator< io_req_t >::deallocate(req);
+        delete req;
         m_outstanding_ios.fetch_sub(1, std::memory_order_acq_rel);
 
         try_run_one_iteration();

@@ -3,12 +3,13 @@
 #include <chrono>
 #include <mutex>
 
-#include <iomgr.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 #include <sisl/fds/buffer.hpp>
-#include "io_environment.hpp"
+
+#include <iomgr/io_environment.hpp>
+#include <iomgr/iomgr.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -25,6 +26,8 @@ SISL_OPTION_GROUP(test_msg,
 
 #define ENABLED_OPTIONS logging, iomgr, test_msg, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
+
+using run_method_t = std::function< void(void) >;
 
 struct timer_test_info {
     std::mutex mtx;
@@ -50,7 +53,7 @@ void glob_setup() {
     g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
     g_iters = SISL_OPTIONS["iters"].as< uint64_t >();
 
-    ioenvironment.with_iomgr(g_io_threads, g_is_spdk);
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_client_threads, .is_spdk = g_is_spdk});
 }
 
 void glob_teardown() { iomanager.stop(); }
@@ -60,14 +63,14 @@ public:
     void SetUp() override {}
     void TearDown() override {}
 
-    void msg_sender_thread(const wait_type_t wtype, const thread_specifier& to_threads, const run_method_t& receiver) {
+    void msg_sender_thread(bool is_wait, const thread_specifier& dest, const run_method_t& receiver) {
         static thread_local uint64_t this_thread_sent_count{0};
         for (uint64_t i{0}; i < g_iters; ++i) {
             int count{0};
-            if (std::holds_alternative< io_thread_t >(to_threads)) {
-                count = iomanager.run_on(std::get< io_thread_t >(to_threads), receiver, wtype);
-            } else if (std::holds_alternative< thread_regex >(to_threads)) {
-                count = iomanager.run_on(std::get< thread_regex >(to_threads), receiver, wtype);
+            if (std::holds_alternative< io_fiber_t >(dest)) {
+                count = iomanager.run_on(is_wait, std::get< io_fiber_t >(dest), receiver);
+            } else if (std::holds_alternative< reactor_regex >(dest)) {
+                count = iomanager.run_on(is_wait, std::get< reactor_regex >(dest), receiver);
             }
             // LOGINFO("Message sent iter={} total={}", i, m_sent_count.load() + count);
             this_thread_sent_count += count;
@@ -77,11 +80,11 @@ public:
         // LOGINFO("Sent {} messages from this thread", this_thread_sent_count);
     }
 
-    void sync_msg_test(const thread_specifier& to_threads, const run_method_t& receiver) {
+    void sync_msg_test(const thread_specifier& dest, const run_method_t& receiver) {
         std::vector< std::thread > ts;
         for (uint32_t i{0}; i < g_client_threads; ++i) {
-            ts.push_back(std::move(sisl::thread_factory("test_thread", &MsgTest::msg_sender_thread, this,
-                                                        wait_type_t::sleep, to_threads, receiver)));
+            ts.push_back(std::move(
+                sisl::thread_factory("test_thread", &MsgTest::msg_sender_thread, this, true, dest, receiver)));
         }
         for (auto& t : ts) {
             if (t.joinable()) t.join();
@@ -89,30 +92,11 @@ public:
         ASSERT_EQ(m_sent_count, m_rcvd_count) << "Missing messages";
     }
 
-    void spin_msg_test(const thread_specifier& to_threads, const run_method_t& receiver) {
+    void async_msg_test(const thread_specifier& dest, const run_method_t& receiver) {
         std::vector< std::thread > ts;
         for (uint32_t i{0}; i < g_client_threads; ++i) {
-            auto sthread = sisl::named_thread("test_thread", [this, &to_threads, &receiver]() mutable {
-                iomanager.run_io_loop(INTERRUPT_LOOP, nullptr, [&](bool is_started) {
-                    if (is_started) {
-                        this->msg_sender_thread(wait_type_t::spin, to_threads, receiver);
-                        iomanager.stop_io_loop();
-                    }
-                });
-            });
-            ts.push_back(std::move(sthread));
-        }
-        for (auto& t : ts) {
-            if (t.joinable()) t.join();
-        }
-        ASSERT_EQ(m_sent_count, m_rcvd_count) << "Missing messages";
-    }
-
-    void async_msg_test(const thread_specifier& to_threads, const run_method_t& receiver) {
-        std::vector< std::thread > ts;
-        for (uint32_t i{0}; i < g_client_threads; ++i) {
-            ts.push_back(std::move(sisl::thread_factory("test_thread", &MsgTest::msg_sender_thread, this,
-                                                        wait_type_t::no_wait, to_threads, receiver)));
+            ts.push_back(std::move(
+                sisl::thread_factory("test_thread", &MsgTest::msg_sender_thread, this, false, dest, receiver)));
         }
         for (auto& t : ts) {
             if (t.joinable()) t.join();
@@ -143,19 +127,17 @@ public:
         // if (--ti->pending_count == 0) { iomanager.cancel_timer(ti->hdl); }
     }
 
-    void msg_with_timer_test(const wait_type_t wtype, const thread_specifier& to_threads) {
+    void msg_with_timer_test(bool is_wait, const thread_specifier& dest) {
         auto ti = std::make_unique< timer_test_info >(1 * 1000ul * 1000ul, g_iters);
         ti->start_timer_time = Clock::now();
-        ti->hdl = iomanager.schedule_global_timer(ti->nanos_after, true, ti.get(), thread_regex::all_worker,
+        ti->hdl = iomanager.schedule_global_timer(ti->nanos_after, true, ti.get(), reactor_regex::all_worker,
                                                   validate_timeout, true /* wait */);
 
-        auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-        if (wtype == wait_type_t::sleep) {
-            sync_msg_test(to_threads, sink);
-        } else if (wtype == wait_type_t::spin) {
-            spin_msg_test(to_threads, sink);
+        auto sink = [this]() { ++this->m_rcvd_count; };
+        if (is_wait) {
+            sync_msg_test(dest, sink);
         } else {
-            async_msg_test(to_threads, sink);
+            async_msg_test(dest, sink);
         }
 
         {
@@ -173,95 +155,74 @@ protected:
 
 /**************************Broadcast Msg ************************************/
 TEST_F(MsgTest, sync_broadcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    sync_msg_test(thread_regex::all_io, sink);
-}
-
-TEST_F(MsgTest, spin_broadcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) {
-        static thread_local uint64_t this_thread_recv_count{0};
-        ++this_thread_recv_count;
-        // LOGINFO("Message received this_thread total={}", this_thread_recv_count);
-        this->m_rcvd_count.fetch_add(1);
-    };
-    spin_msg_test(thread_regex::all_worker, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    sync_msg_test(reactor_regex::all_io, sink);
 }
 
 TEST_F(MsgTest, async_broadcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    async_msg_test(thread_regex::all_io, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    async_msg_test(reactor_regex::all_io, sink);
 }
 
 /**************************Randomcast Msg ************************************/
 TEST_F(MsgTest, sync_randomcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    sync_msg_test(thread_regex::random_worker, sink);
-}
-
-TEST_F(MsgTest, spin_randomcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    spin_msg_test(thread_regex::random_worker, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    sync_msg_test(reactor_regex::random_worker, sink);
 }
 
 TEST_F(MsgTest, async_randomcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    async_msg_test(thread_regex::random_worker, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    async_msg_test(reactor_regex::random_worker, sink);
 }
 
 /**************************Multicast Msg ************************************/
 TEST_F(MsgTest, sync_multicast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    sync_msg_test(thread_regex::least_busy_io, sink);
-}
-
-TEST_F(MsgTest, spin_multicast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    spin_msg_test(thread_regex::least_busy_worker, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    sync_msg_test(reactor_regex::least_busy_io, sink);
 }
 
 TEST_F(MsgTest, async_multicast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    async_msg_test(thread_regex::least_busy_io, sink);
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    async_msg_test(reactor_regex::least_busy_io, sink);
 }
 
 /**************************Relay Broadcast/Randomcast/Multicast Msg ************************/
 TEST_F(MsgTest, async_relay_broadcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    auto relay = [this, sink]([[maybe_unused]] auto taddr) {
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    auto relay = [this, sink]() {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::all_io, sink, wait_type_t::no_wait)};
+        const auto count{iomanager.run_on_forget(reactor_regex::all_io, sink)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };
-    async_msg_test(thread_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
+    async_msg_test(reactor_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
 }
 
 TEST_F(MsgTest, async_relay_randomcast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    auto relay = [this, sink]([[maybe_unused]] auto taddr) {
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    auto relay = [this, sink]() {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::random_worker, sink, wait_type_t::no_wait)};
+        const auto count{iomanager.run_on_forget(reactor_regex::random_worker, sink)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };
-    async_msg_test(thread_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
+    async_msg_test(reactor_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
 }
 
 TEST_F(MsgTest, async_relay_multicast_msg) {
-    auto sink = [this]([[maybe_unused]] auto taddr) { ++this->m_rcvd_count; };
-    auto relay = [this, sink]([[maybe_unused]] auto taddr) {
+    auto sink = [this]() { ++this->m_rcvd_count; };
+    auto relay = [this, sink]() {
         ++this->m_rcvd_count;
-        const auto count{iomanager.run_on(thread_regex::least_busy_io, sink)};
+        const auto count{iomanager.run_on_forget(reactor_regex::least_busy_io, sink)};
         ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
         m_sent_count.fetch_add(count);
     };
-    async_msg_test(thread_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
+    async_msg_test(reactor_regex::least_busy_io, relay); // Send it to one thread which broadcast to all io threads
 }
 
 /**************************Messages with timer ************************/
-TEST_F(MsgTest, sync_broadcast_msg_with_timer) { msg_with_timer_test(wait_type_t::sleep, thread_regex::all_io); }
-TEST_F(MsgTest, spin_broadcast_msg_with_timer) { msg_with_timer_test(wait_type_t::spin, thread_regex::all_worker); }
-TEST_F(MsgTest, async_broadcast_msg_with_timer) { msg_with_timer_test(wait_type_t::no_wait, thread_regex::all_io); }
+TEST_F(MsgTest, sync_broadcast_msg_with_timer) { msg_with_timer_test(true, reactor_regex::all_io); }
+TEST_F(MsgTest, async_broadcast_msg_with_timer) { msg_with_timer_test(false, reactor_regex::all_io); }
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
@@ -270,7 +231,7 @@ int main(int argc, char* argv[]) {
     spdlog::set_pattern("[%D %H:%M:%S.%f] [%l] [%t] %v");
 
     glob_setup();
-    auto ret{RUN_ALL_TESTS()};
+    auto ret = RUN_ALL_TESTS();
     glob_teardown();
     return ret;
 }

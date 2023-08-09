@@ -53,9 +53,10 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include "include/iomgr.hpp"
-#include "include/aio_drive_interface.hpp"
-#include "include/iomgr_config.hpp"
+#include <iomgr/iomgr.hpp>
+#include "interfaces/aio_drive_interface.hpp"
+#include "iomgr_config.hpp"
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 #ifdef __APPLE__
@@ -73,8 +74,45 @@ ssize_t pwritev(int fd, const iovec* iov, int iovcnt, off_t offset) {
 #endif
 using namespace std;
 
-thread_local aio_thread_context* AioDriveInterface::t_aio_ctx;
+thread_local std::unique_ptr< aio_thread_context > AioDriveInterface::t_aio_ctx;
 std::vector< int > AioDriveInterface::s_poll_interval_table;
+
+static drive_aio_iocb* prep_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, char* data, uint64_t size,
+                                 uint64_t offset) {
+    auto diocb = new drive_aio_iocb(iface, iodev, op_type, size, offset);
+    diocb->set_data(data);
+    auto* kernel_iocb = &diocb->kernel_iocb;
+
+#ifdef __linux__
+    if (op_type == DriveOpType::READ) {
+        io_prep_pread(kernel_iocb, iodev->fd(), (void*)data, size, offset);
+    } else if (op_type == DriveOpType::WRITE) {
+        io_prep_pwrite(kernel_iocb, iodev->fd(), (void*)data, size, offset);
+    }
+    kernel_iocb->data = diocb;
+#elif defined(__APPLE__)
+    kernel_iocb->aio_fildes = iodev->fd();
+    kernel_iocb->aio_offset = offset;
+    kernel_iocb->aio_buf = (void*)data;
+    kernel_iocb->aio_nbytes = size;
+#endif
+    return diocb;
+}
+
+static drive_aio_iocb* prep_iocb_v(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, const iovec* iov,
+                                   int iovcnt, uint32_t size, uint64_t offset) {
+    auto diocb = new drive_aio_iocb(iface, iodev, op_type, size, offset);
+    diocb->set_iovs(iov, iovcnt);
+    auto* kernel_iocb = &diocb->kernel_iocb;
+
+    if (op_type == DriveOpType::READ) {
+        io_prep_preadv(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
+    } else if (op_type == DriveOpType::WRITE) {
+        io_prep_pwritev(kernel_iocb, iodev->fd(), iov, iovcnt, offset);
+    }
+    kernel_iocb->data = diocb;
+    return diocb;
+}
 
 AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : KernelDriveInterface(cb) {
     init_poll_interval_table();
@@ -96,9 +134,10 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
         return nullptr;
     }
 
-    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, thread_regex::all_io);
+    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
-    iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iothread_self() : nullptr;
+    iodev->creator =
+        iomanager.am_i_io_reactor() ? iomanager.this_reactor()->pick_fiber(fiber_regex::main_only) : nullptr;
     iodev->dtype = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an
@@ -117,52 +156,37 @@ void AioDriveInterface::close_dev(const io_device_ptr& iodev) {
     iodev->clear();
 }
 
-void AioDriveInterface::init_iface_thread_ctx([[maybe_unused]] const io_thread_t& thr) {
-    // TODO: Ideally we need to move this aio_thread_context from thread_local to IOInterface::thread_local
-    // so that we can support multiple AioDriveInterfaces within the thread if needed.
-    t_aio_ctx = new aio_thread_context();
-    t_aio_ctx->ev_fd = eventfd(0, EFD_NONBLOCK);
-    t_aio_ctx->ev_io_dev =
-        iomanager.generic_interface()->make_io_device(backing_dev_t(t_aio_ctx->ev_fd), EPOLLIN, 0, nullptr, true,
+void AioDriveInterface::init_iface_reactor_context(IOReactor*) {
+    t_aio_ctx = std::make_unique< aio_thread_context >();
+    t_aio_ctx->m_ev_io_dev =
+        iomanager.generic_interface()->make_io_device(backing_dev_t(t_aio_ctx->m_ev_fd), EPOLLIN, 0, nullptr, true,
                                                       bind_this(AioDriveInterface::on_event_notification, 3));
-
-    int err = io_setup(MAX_OUTSTANDING_IO, &t_aio_ctx->ioctx);
-    if (err) {
-        LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
-        folly::throwSystemError(fmt::format("io_setup failed with ret status {} errno {}", err, errno));
-    }
-
-    t_aio_ctx->iocb_info_prealloc(MAX_OUTSTANDING_IO);
-    t_aio_ctx->poll_cb_idx =
+    t_aio_ctx->m_poll_cb_idx =
         iomanager.this_reactor()->register_poll_interval_cb(bind_this(AioDriveInterface::handle_completions, 0));
 }
 
-void AioDriveInterface::clear_iface_thread_ctx([[maybe_unused]] const io_thread_t& thr) {
-    iomanager.this_reactor()->unregister_poll_interval_cb(t_aio_ctx->poll_cb_idx);
-
-    int err = io_destroy(t_aio_ctx->ioctx);
-    if (err) { LOGERROR("io_destroy failed with ret status={} errno={}", err, errno); }
-
-    iomanager.generic_interface()->remove_io_device(t_aio_ctx->ev_io_dev);
-    close(t_aio_ctx->ev_fd);
-    delete t_aio_ctx;
+void AioDriveInterface::clear_iface_reactor_context(IOReactor*) {
+    iomanager.this_reactor()->unregister_poll_interval_cb(t_aio_ctx->m_poll_cb_idx);
+    iomanager.generic_interface()->remove_io_device(t_aio_ctx->m_ev_io_dev);
+    t_aio_ctx.reset(nullptr);
 }
 
 void AioDriveInterface::on_event_notification(IODevice* iodev, [[maybe_unused]] void* cookie,
                                               [[maybe_unused]] int event) {
-    assert(iodev->fd() == t_aio_ctx->ev_fd);
+    assert(iodev->fd() == t_aio_ctx->m_ev_fd);
 
     uint64_t temp = 0;
-    [[maybe_unused]] auto rsize = read(t_aio_ctx->ev_fd, &temp, sizeof(uint64_t));
+    [[maybe_unused]] auto rsize = read(t_aio_ctx->m_ev_fd, &temp, sizeof(uint64_t));
 
-    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {}", iodev->fd(), t_aio_ctx->ev_fd);
+    LOGTRACEMOD(iomgr, "Received completion on fd = {} ev_fd = {}", iodev->fd(), t_aio_ctx->m_ev_fd);
     handle_completions();
 }
 
 void AioDriveInterface::handle_completions() {
     auto& tmetrics = iomanager.this_thread_metrics();
 
-    const int nevents = io_getevents(t_aio_ctx->ioctx, 0, MAX_COMPLETIONS, t_aio_ctx->events, NULL);
+    const int nevents =
+        io_getevents(t_aio_ctx->m_ioctx, 0, t_aio_ctx->m_events.size(), t_aio_ctx->m_events.data(), NULL);
     ++tmetrics.io_callbacks;
 
     if (nevents == 0) {
@@ -176,218 +200,213 @@ void AioDriveInterface::handle_completions() {
     }
 
     for (int i = 0; i < nevents; ++i) {
-        auto& e = t_aio_ctx->events[i];
+        auto& e = t_aio_ctx->m_events[i];
 
         auto ret = static_cast< int64_t >(e.res);
-        auto iocb = (struct iocb*)e.obj;
-        auto info = (iocb_info_t*)iocb;
+        auto kiocb = r_cast< kernel_iocb_t* >(e.obj);
+        auto diocb = aio_thread_context::to_drive_iocb(kiocb);
+
+        t_aio_ctx->dec_submitted_aio();
 
         LOGTRACEMOD(iomgr, "Event[{}]: Result {} res2={}", i, e.res, e.res2);
-#ifdef _PRERELEASE
-        auto flip_resubmit_cnt = flip::Flip::instance().get_test_flip< int >("read_write_resubmit_io");
-        if (flip_resubmit_cnt != boost::none && info->resubmit_cnt < (uint32_t)flip_resubmit_cnt.get()) { e.res = 0; }
-#endif
         if (ret < 0) {
             COUNTER_INCREMENT(m_metrics, completion_errors, 1);
-            LOGDFATAL("Error in completion of aio, result: {} info: {}", ret, info->to_string());
-        } else if ((e.res != info->size) || e.res2) {
+            LOGDFATAL("Error in completion of aio, result: {} diocb: {}", ret, diocb->to_string());
+        } else if ((e.res != diocb->size) || e.res2) {
             COUNTER_INCREMENT(m_metrics, completion_errors, 1);
-            LOGERROR("io is not completed properly. size read/written {} info {} error {}", e.res, info->to_string(),
+            LOGERROR("io is not completed properly. size read/written {} diocb {} error {}", e.res, diocb->to_string(),
                      e.res2);
             if (e.res2 == 0) { e.res2 = EIO; }
-            if (resubmit_iocb_on_err(iocb)) { continue; }
+            if (handle_io_failure(diocb, e.res2)) { continue; }
+        } else {
+            diocb->result = 0;
+            complete_io(diocb);
         }
-
-        auto user_cookie = (uint8_t*)iocb->data;
-        t_aio_ctx->dec_submitted_aio();
-        t_aio_ctx->free_iocb(iocb);
-        retry_io();
-        if (m_comp_cb) { m_comp_cb(e.res2, user_cookie); }
+        issue_pending_ios();
     }
 }
 
-bool AioDriveInterface::resubmit_iocb_on_err(struct iocb* iocb) {
-    auto info = (iocb_info_t*)iocb;
-    if (info->resubmit_cnt > IM_DYNAMIC_CONFIG(max_resubmit_cnt)) { return false; }
-    ++info->resubmit_cnt;
-    t_aio_ctx->prep_iocb_for_resubmit(iocb);
-    auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-    COUNTER_INCREMENT(m_metrics, resubmit_io_on_err, 1);
-    if (ret != 1) { handle_io_failure(iocb); }
-    return true;
-}
-
-void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                                    bool part_of_batch) {
-    if (!t_aio_ctx->can_submit_aio()) {
-        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
-        push_retry_list(iocb, true /* no_slot */);
-        return;
+bool AioDriveInterface::submit_io(drive_aio_iocb* diocb) {
+    if (!t_aio_ctx->can_submit_io()) {
+        push_to_pending_list(diocb, false);
+        return false;
     }
-
-    if (part_of_batch && t_aio_ctx->can_be_batched(0)) {
-        t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), false /* is_read */, data, size, offset, cookie);
-    } else {
-        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), false, data, size, offset, cookie);
-        auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.iface_io_batch_count;
-        ++metrics.iface_io_actual_count;
-
-        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-        t_aio_ctx->inc_submitted_aio(ret);
-        if (ret != 1) {
-            handle_io_failure(iocb);
-            return;
-        }
-    }
-}
-
-void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, uint8_t* cookie,
-                                   bool part_of_batch) {
-    if (!t_aio_ctx->can_submit_aio()) {
-        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
-        push_retry_list(iocb, true /* no_slot */);
-        return;
-    }
-    if (part_of_batch && t_aio_ctx->can_be_batched(0)) {
-        t_aio_ctx->prep_iocb(true /* batch_io */, iodev->fd(), true /* is_read */, data, size, offset, cookie);
-    } else {
-        auto iocb = t_aio_ctx->prep_iocb(false, iodev->fd(), true, data, size, offset, cookie);
-        auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.iface_io_batch_count;
-        ++metrics.iface_io_actual_count;
-
-        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-        t_aio_ctx->inc_submitted_aio(ret);
-        if (ret != 1) {
-            handle_io_failure(iocb);
-            return;
-        }
-    }
-}
-
-void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                     uint8_t* cookie, bool part_of_batch) {
-    if (!t_aio_ctx->can_submit_aio()
-#ifdef _PRERELEASE
-        || flip::Flip::instance().test_flip("io_write_iocb_empty_flip")
-#endif
-    ) {
-        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
-        push_retry_list(iocb, true /* no_slot */);
-        return;
-    }
-    if (part_of_batch && t_aio_ctx->can_be_batched(iovcnt)) {
-        t_aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), false /* is_read */, iov, iovcnt, size, offset,
-                               cookie);
-    } else {
-        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), false, iov, iovcnt, size, offset, cookie);
-        auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.iface_io_batch_count;
-        ++metrics.iface_io_actual_count;
-
-        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-        t_aio_ctx->inc_submitted_aio(ret);
-        if (ret != 1) {
-            handle_io_failure(iocb);
-            return;
-        }
-    }
-}
-
-void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                    uint8_t* cookie, bool part_of_batch) {
-    if (!t_aio_ctx->can_submit_aio()
-#ifdef _PRERELEASE
-        || flip::Flip::instance().test_flip("io_read_iocb_empty_flip")
-#endif
-    ) {
-        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
-        push_retry_list(iocb, true /* no_slot */);
-        return;
-    }
-
-    if (part_of_batch && t_aio_ctx->can_be_batched(iovcnt)) {
-        t_aio_ctx->prep_iocb_v(true /* batch_io */, iodev->fd(), true /* is_read */, iov, iovcnt, size, offset, cookie);
-    } else {
-        auto iocb = t_aio_ctx->prep_iocb_v(false, iodev->fd(), true, iov, iovcnt, size, offset, cookie);
-        auto& metrics = iomanager.this_thread_metrics();
-        ++metrics.iface_io_batch_count;
-        ++metrics.iface_io_actual_count;
-
-        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-        t_aio_ctx->inc_submitted_aio(ret);
-        if (ret != 1) {
-            handle_io_failure(iocb);
-            return;
-        }
-    }
-}
-
-void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, uint8_t* cookie,
-                                    bool part_of_batch) {}
-
-void AioDriveInterface::submit_batch() {
-    auto ibatch = t_aio_ctx->move_cur_batch();
-    LOGTRACEMOD(iomgr, "submit pending batch n_iocbs={}", ibatch.n_iocbs);
-    if (ibatch.n_iocbs == 0) { return; } // No batch to submit
 
     auto& metrics = iomanager.this_thread_metrics();
     ++metrics.iface_io_batch_count;
+    ++metrics.iface_io_actual_count;
 
-    auto n_issued = io_submit(t_aio_ctx->ioctx, ibatch.n_iocbs, ibatch.get_iocb_list());
+    auto kiocb = &diocb->kernel_iocb;
+    auto ret = io_submit(t_aio_ctx->m_ioctx, 1, &kiocb);
+    if (ret != 1) {
+        handle_io_failure(diocb, errno);
+        return false;
+    }
+
+    t_aio_ctx->inc_submitted_aio(ret);
+    return true;
+}
+
+void AioDriveInterface::submit_batch() {
+    auto n_issued = io_submit(t_aio_ctx->m_ioctx, t_aio_ctx->m_cur_batch_size, t_aio_ctx->m_iocb_batch.data());
     if (n_issued < 0) { n_issued = 0; }
+
+    auto& metrics = iomanager.this_thread_metrics();
+    ++metrics.iface_io_batch_count;
     metrics.iface_io_actual_count += n_issued;
     t_aio_ctx->inc_submitted_aio(n_issued);
 
-    // For those which we are not able to issue, convert that to sync io
-    auto n_iocbs = ibatch.n_iocbs;
-    for (auto i = n_issued; i < n_iocbs; ++i) {
-        auto info = ibatch.iocb_info[i];
-        auto iocb = (struct iocb*)info;
-        handle_io_failure(iocb);
+    // For those which we are not able to issue, do failure handling
+    for (auto i = n_issued; i < t_aio_ctx->m_cur_batch_size; ++i) {
+        handle_io_failure(r_cast< drive_aio_iocb* >(t_aio_ctx->m_iocb_batch[i]->data), errno);
     }
+    t_aio_ctx->reset_batch();
 }
 
-void AioDriveInterface::retry_io() {
-    struct iocb* iocb = nullptr;
-    while ((t_aio_ctx->can_submit_aio()) && (iocb = t_aio_ctx->pop_retry_list()) != nullptr) {
+void AioDriveInterface::issue_pending_ios() {
+    while (t_aio_ctx->can_submit_io() && !t_aio_ctx->m_iocb_pending_list.empty()) {
         COUNTER_DECREMENT(m_metrics, retry_list_size, 1);
-        auto ret = io_submit(t_aio_ctx->ioctx, 1, &iocb);
-        t_aio_ctx->inc_submitted_aio(ret);
-        if (ret != 1 && handle_io_failure(iocb)) { break; }
+        auto diocb = t_aio_ctx->m_iocb_pending_list.front();
+        t_aio_ctx->m_iocb_pending_list.pop();
+        if (!submit_io(diocb)) { break; }
     }
 }
 
-void AioDriveInterface::push_retry_list(struct iocb* iocb, const bool no_slot) {
-    auto info = (iocb_info_t*)iocb;
-    COUNTER_INCREMENT_IF_ELSE(m_metrics, no_slot, queued_aio_slots_full, retry_io_eagain_error, 1);
+void AioDriveInterface::push_to_pending_list(drive_aio_iocb* diocb, bool because_no_slot) {
+    COUNTER_INCREMENT_IF_ELSE(m_metrics, because_no_slot, queued_aio_slots_full, retry_io_eagain_error, 1);
     COUNTER_INCREMENT(m_metrics, retry_list_size, 1);
-    LOGDEBUGMOD(iomgr, "adding io into retry list: {}", info->to_string());
-    t_aio_ctx->push_retry_list(iocb);
-    if (!t_aio_ctx->timer_set) {
-        t_aio_ctx->timer_set = true;
-        iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(aio->retry_timeout), false, nullptr, [this](void* cookie) {
-            t_aio_ctx->timer_set = false;
-            retry_io();
-        });
+
+    LOGDEBUGMOD(iomgr, "adding io into retry list: {}", diocb->to_string());
+    t_aio_ctx->m_iocb_pending_list.push(diocb);
+    if (!t_aio_ctx->m_timer_set) {
+        t_aio_ctx->m_timer_set = true;
+        iomanager.schedule_thread_timer(IM_DYNAMIC_CONFIG(drive.retry_timeout_us) * 1000, false, nullptr,
+                                        [this](void*) {
+                                            t_aio_ctx->m_timer_set = false;
+                                            issue_pending_ios();
+                                        });
     }
 }
 
-bool AioDriveInterface::handle_io_failure(struct iocb* iocb) {
-    auto info = (iocb_info_t*)iocb;
-    bool ret = true;
-
-    if (errno == EAGAIN) {
-        push_retry_list(iocb, false /* no_slot */);
+bool AioDriveInterface::handle_io_failure(drive_aio_iocb* diocb, int error) {
+    if (error == EAGAIN) {
+        push_to_pending_list(diocb, false /* no_slot */);
+        return true;
+    } else if (diocb->resubmit_cnt > IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
+        ++diocb->resubmit_cnt;
+        COUNTER_INCREMENT(m_metrics, resubmit_io_on_err, 1);
+        push_to_pending_list(diocb, false /* no_slot */);
+        return true;
     } else {
-        LOGERROR("io submit fail: io info: {}, errno: {}", info->to_string(), errno);
-        COUNTER_INCREMENT_IF_ELSE(m_metrics, info->is_read, read_io_submission_errors, write_io_submission_errors, 1);
-        ret = false;
-        t_aio_ctx->free_iocb(iocb);
-        if (m_comp_cb) m_comp_cb(errno, (uint8_t*)iocb->data);
+        LOGERROR("io submit fail: diocb: {}, errno: {}", diocb->to_string(), error);
+        diocb->result = error;
+        complete_io(diocb);
+        return false;
+    }
+}
+
+void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
+    if (diocb->result == 0) {
+        std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
+                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
+                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
+                   diocb->completion);
+    } else {
+        std::visit(overloaded{[&](folly::Promise< bool >& p) {
+                                  p.setException(folly::makeSystemErrorExplicit(diocb->result, "Error in aio"));
+                              },
+                              [&](FiberManagerLib::Promise< bool >& p) {
+                                  p.setException(std::make_exception_ptr(
+                                      folly::makeSystemErrorExplicit(diocb->result, "Error in aio")));
+                              },
+                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result > 0 ? 0 : diocb->result); }},
+                   diocb->completion);
+    }
+    delete diocb;
+}
+
+void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_aio_iocb* diocb, bool part_of_batch) {
+#ifdef __linux
+    auto kiocb = &diocb->kernel_iocb;
+    io_set_eventfd(kiocb, t_aio_ctx->m_ev_fd);
+#endif
+    if (part_of_batch) {
+        if (t_aio_ctx->add_to_batch(diocb)) { iface->submit_batch(); }
+    } else {
+        iface->submit_io(diocb);
+    }
+}
+
+folly::Future< bool > AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                                     bool part_of_batch) {
+    auto diocb = prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
+    diocb->completion = std::move(folly::Promise< bool >{});
+    auto ret = diocb->folly_comp_promise().getFuture();
+
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
+    }
+
+    return ret;
+}
+
+folly::Future< bool > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                    bool part_of_batch) {
+    auto diocb = prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
+    diocb->completion = std::move(folly::Promise< bool >{});
+    auto ret = diocb->folly_comp_promise().getFuture();
+
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
     return ret;
+}
+
+folly::Future< bool > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                      uint64_t offset, bool part_of_batch) {
+    auto diocb = prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
+    diocb->completion = std::move(folly::Promise< bool >{});
+    auto ret = diocb->folly_comp_promise().getFuture();
+
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
+    }
+    return ret;
+}
+
+folly::Future< bool > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                     uint64_t offset, bool part_of_batch) {
+    auto diocb = prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
+    diocb->completion = std::move(folly::Promise< bool >{});
+    auto ret = diocb->folly_comp_promise().getFuture();
+
+    if (iomanager.this_reactor() != nullptr) {
+        submit_in_this_thread(this, diocb, part_of_batch);
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker,
+                                [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
+    }
+    return ret;
+}
+
+folly::Future< bool > AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                     bool part_of_batch) {
+    RELEASE_ASSERT(0, "async_unmap is not supported for aio yet");
+    return folly::makeFuture< bool >(false);
+}
+
+folly::Future< bool > AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+    RELEASE_ASSERT(0, "async_write_zero is not supported for aio yet");
+    return folly::makeFuture< bool >(false);
 }
 
 void AioDriveInterface::init_poll_interval_table() {
@@ -405,19 +424,54 @@ void AioDriveInterface::init_poll_interval_table() {
 }
 
 /////////////////////////// aio_thread_context /////////////////////////////////////////////////
-void aio_thread_context::dec_submitted_aio() {
-    --submitted_aio;
-    iomanager.this_reactor()->set_poll_interval((submitted_aio >= AioDriveInterface::s_poll_interval_table.size())
-                                                    ? 0
-                                                    : AioDriveInterface::s_poll_interval_table[submitted_aio]);
+aio_thread_context::aio_thread_context() {
+#ifdef __linux__
+    m_ev_fd = eventfd(0, EFD_NONBLOCK);
+
+    int err = io_setup(MAX_OUTSTANDING_IO, &m_ioctx);
+    if (err) {
+        LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
+        folly::throwSystemError(fmt::format("io_setup failed with ret status {} errno {}", err, errno));
+    }
+#elif defined(__APPLE__)
+#endif
+}
+
+aio_thread_context::~aio_thread_context() {
+    int err = io_destroy(m_ioctx);
+    if (err) { LOGERROR("io_destroy failed with ret status={} errno={}", err, errno); }
+    close(m_ev_fd);
+}
+
+bool aio_thread_context::can_submit_io() const { return (m_submitted_ios < MAX_OUTSTANDING_IO); }
+
+bool aio_thread_context::add_to_batch(drive_aio_iocb* diocb) {
+    m_iocb_batch[m_cur_batch_size++] = &diocb->kernel_iocb;
+    return (m_cur_batch_size == max_batch_iocb_count);
 }
 
 void aio_thread_context::inc_submitted_aio(int count) {
     if (count < 0) { return; }
-    submitted_aio += count;
+    m_submitted_ios += count;
 
-    iomanager.this_reactor()->set_poll_interval(submitted_aio >= AioDriveInterface::s_poll_interval_table.size()
+    iomanager.this_reactor()->set_poll_interval(m_submitted_ios >= AioDriveInterface::s_poll_interval_table.size()
                                                     ? 0
-                                                    : AioDriveInterface::s_poll_interval_table[submitted_aio]);
+                                                    : AioDriveInterface::s_poll_interval_table[m_submitted_ios]);
+}
+
+void aio_thread_context::dec_submitted_aio() {
+    --m_submitted_ios;
+    iomanager.this_reactor()->set_poll_interval((m_submitted_ios >= AioDriveInterface::s_poll_interval_table.size())
+                                                    ? 0
+                                                    : AioDriveInterface::s_poll_interval_table[m_submitted_ios]);
+}
+
+void aio_thread_context::reset_batch() { m_cur_batch_size = 0; }
+
+drive_aio_iocb* aio_thread_context::to_drive_iocb(kernel_iocb_t* kiocb) {
+#ifdef __linux__
+    return r_cast< drive_aio_iocb* >(kiocb->data);
+#else
+#endif
 }
 } // namespace iomgr

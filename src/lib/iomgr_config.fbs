@@ -5,7 +5,7 @@ namespace iomgrcfg;
 attribute "hotswap";
 attribute "deprecated";
 
-table SpdkDriveInterface {
+table DriveInterface {
     /* Number of batched io limit for SPDK request */
     num_batch_io_limit: uint32 = 64 (hotswap); 
 
@@ -17,14 +17,33 @@ table SpdkDriveInterface {
 
     // io timeout limit in seconds
     io_timeout_limit_sec: uint64 = 60 (hotswap);
+
+    retry_timeout_us: uint32 = 1000 (hotswap);
+
+    // Not applicable for Spdk devices
+    zeros_by_ioctl: bool = false;
+
+    partial_read_max_resubmit_cnt: uint32 = 256 (hotswap); // max resubmit cnt of io in case of partial read, only valid for uring
+                                                           // TODO: this value should be set by consumer of iomgr, which should be (max_io_size / physical_page_sz) in worst case
+
+    max_resubmit_cnt: uint32 = 3 (hotswap); // max resubmit cnt of io in case of error 
 }
 
-table AioDriveInterface {
-    retry_timeout: uint32 = 1000 (hotswap);
-    zeros_by_ioctl: bool = false;
+table PoolEntry {
+    // Size of each mempool entry
+    size : uint64; 
+
+    // Percentage of total pool memory
+    percent : double; 
 }
 
 table IOMemory {
+    // General Memory size available for the app in MiB
+    app_mem_size_mb: uint64 = 0;
+    
+    // If its a hugepage based available memory for hugepages (to do IO)
+    hugepage_size_mb: uint64 = 0;
+
     // Percentage of memory to be filled by app before we ask underlying mem allocator to free it up
     soft_mem_release_threshold: uint32 = 85;
 
@@ -36,6 +55,15 @@ table IOMemory {
 
     // Frequency in count of alloc/free to check if memory limit is exceeded
     limit_check_freq: uint32 = 1000;
+
+    // Array of pool sizes
+    pool_sizes : [PoolEntry];
+}
+
+table Thread {
+    num_workers: uint32 = 2;
+
+    num_fibers: uint32 = 4;
 }
 
 table Poll {
@@ -67,31 +95,27 @@ table Poll {
     backoff_delay_max_us : uint64 = 500 (hotswap);
 }
 
+table Message {
+    // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
+    max_msgs_before_yield: uint32 = 100 (hotswap);
+}
+
 table IoEnv {
+    cpuset_path: string;
+
     http_port: uint32 = 5000;
 
     http_max_request_size: uint64 = 4000000;
 
     http_num_threads: uint32 = 1;
-    
-    // Turn on security features
-    encryption: bool = false;
-    authorization: bool = false;
 }
 
 table IomgrSettings {
-    spdk: SpdkDriveInterface;
-    aio : AioDriveInterface;
     iomem: IOMemory;
+    thread: Thread;
+    drive: DriveInterface;
     poll: Poll;
-    cpuset_path: string;
-
-    // Max messages processed before yielding for other completions. As of now it is applicable only for EPOLL Reactor
-    max_msgs_before_yield: uint32 = 100 (hotswap);
-    max_resubmit_cnt: uint32 = 3 (hotswap); // max resubmit cnt of io in case of error 
-    partial_read_max_resubmit_cnt: uint32 = 256 (hotswap); // max resubmit cnt of io in case of partial read, only valid for uring
-                                                           // TODO: this value should be set by consumer of iomgr, which should be (max_io_size / physical_page_sz) in worst case
-
+    message: Message;
     io_env: IoEnv;
 }
 

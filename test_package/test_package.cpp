@@ -30,8 +30,9 @@ int main(int argc, char* argv[]) {
     sisl::logging::install_crash_handler();
     spdlog::set_pattern("[%D %T.%e] [%^%l%$] [%t] %v");
 
+    auto params = iomgr::iomgr_params { SISL_OPTIONS["io_threads"].as<uint32_t>(), false };
     // Start the IOManager
-    ioenvironment.with_iomgr(SISL_OPTIONS["io_threads"].as<uint32_t>(), true);
+    ioenvironment.with_iomgr(params);
 
     iomanager.stop();
     LOGINFO("Done.");

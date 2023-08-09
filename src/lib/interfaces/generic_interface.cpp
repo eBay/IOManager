@@ -13,189 +13,149 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #include <sisl/logging/logging.h>
-#include "include/iomgr.hpp"
-#include "include/iomgr_msg.hpp"
-#include "include/io_interface.hpp"
+#include <iomgr/iomgr.hpp>
+#include <iomgr/iomgr_msg.hpp>
+#include <iomgr/io_interface.hpp>
+#include "reactor/reactor.hpp"
 
 namespace iomgr {
 
-IOInterface::IOInterface() { m_iface_thread_ctx.reserve(IOManager::max_io_threads); }
+IOInterface::IOInterface() = default;
 IOInterface::~IOInterface() = default;
 
 void IOInterface::close_dev(const io_device_ptr& iodev) {
-    if (iodev->ready) { remove_io_device(iodev); }
+    if (iodev->ready) { remove_io_device(iodev, true /* wait_to_remove */); }
 }
 
-void IOInterface::add_io_device(const io_device_ptr& iodev, const wait_type_t wtype,
-                                const run_on_closure_t& add_done_cb) {
-    if (iodev->is_my_thread_scope()) {
-        auto r = iomanager.this_reactor();
-        if (r) {
-            // Select one thread among reactor in possible round robin fashion and add it there.
-            auto& thr = r->select_thread();
-            add_to_my_reactor(iodev, thr);
-            iodev->ready = true;
+int IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
+    auto add_to_reactor = [this, iodev]() {
+        auto reactor = iomanager.this_reactor();
+        if (reactor) {
+            LOGDEBUGMOD(iomgr, "IODev {} is being added to reactor {}", iodev->dev_id(), reactor->reactor_idx());
+            reactor->add_iodev(iodev);
         } else {
             LOGDFATAL("IOManager does not support adding local iodevices through non-io threads yet. Send a message to "
                       "an io thread");
         }
-        if (add_done_cb) { add_done_cb(); }
+        iodev->decrement_pending();
+    };
+
+    auto post_add = [](IODevice* iodev) {
+        LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
+        iodev->ready = true;
+    };
+
+    int added_count{0};
+    if (iodev->is_my_thread_scope()) {
+        add_to_reactor();
+        ++added_count;
+        post_add(iodev.get());
     } else {
         {
             std::unique_lock lg(m_mtx);
             m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
         }
-
-        // Need a callback to mark device ready, so run as callback version
-        const auto run_wtype{(wtype == wait_type_t::no_wait) ? wait_type_t::callback : wtype};
-        iomanager.run_on(
-            iodev->global_scope(),
-            [this, iodev](io_thread_addr_t taddr) {
-                LOGDEBUGMOD(iomgr, "IODev {} is being added to thread {}.{}", iodev->dev_id(),
-                            iomanager.this_reactor()->reactor_idx(), taddr);
-                add_to_my_reactor(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
-            },
-            run_wtype,
-            [iodev, add_done_cb]() {
-                LOGDEBUGMOD(iomgr, "IODev {} added to all threads, marking it as ready", iodev->dev_id());
-                iodev->ready = true;
-                if (add_done_cb) { add_done_cb(); }
-            });
+        if (wait_to_add) {
+            added_count = iomanager.run_on_wait(iodev->global_scope(), add_to_reactor);
+            post_add(iodev.get());
+        } else {
+            iodev->post_add_remove_cb = post_add;
+            added_count = iomanager.run_on_forget(iodev->global_scope(), add_to_reactor);
+            iodev->increment_pending(added_count);
+        }
     }
+
+    return added_count;
 }
 
-void IOInterface::remove_io_device(const io_device_ptr& iodev, const wait_type_t wtype,
-                                   const run_on_closure_t& remove_done_cb) {
+int IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remove) {
     if (!iodev->ready) {
         LOGINFO("Device {} is not added to IOManager. Ignoring this request", iodev->dev_id());
-        return;
+        return 0;
     }
 
     auto state = iomanager.get_state();
     if ((state != iomgr_state::running) && (state != iomgr_state::stopping)) {
         LOGDFATAL("Expected IOManager to be running or stopping state before we receive remove io device");
-        return;
+        return 0;
     }
 
-    if (iodev->is_my_thread_scope()) {
-        auto r = iomanager.this_reactor();
-        if (r) {
-            remove_from_my_reactor(iodev, iodev->per_thread_scope());
+    auto remove_from_reactor = [this, iodev]() {
+        auto reactor = iomanager.this_reactor();
+        if (reactor) {
+            LOGDEBUGMOD(iomgr, "IODev {} is being removed from reactor {}", iodev->dev_id(), reactor->reactor_idx());
+            reactor->remove_iodev(iodev);
         } else {
             LOGDFATAL("IOManager does not support removing local iodevices through non-io threads yet. Send a "
                       "message to an io thread");
         }
-        if (remove_done_cb) { remove_done_cb(); }
-    } else {
-        const auto run_wtype{(wtype == wait_type_t::no_wait) ? wait_type_t::callback : wtype};
+        iodev->decrement_pending();
+    };
 
+    auto post_remove = [](IODevice* iodev) {
+        LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
+        iodev->close();
+        iodev->ready = false;
+    };
+
+    int removed_count{0};
+    if (iodev->is_my_thread_scope()) {
+        remove_from_reactor();
+        ++removed_count;
+        post_remove(iodev.get());
+    } else {
         {
             std::unique_lock lg(m_mtx);
             m_iodev_map.erase(iodev->dev);
         }
-        iomanager.run_on(
-            iodev->global_scope(),
-            [this, iodev](io_thread_addr_t taddr) {
-                LOGDEBUGMOD(iomgr, "IODev {} is being removed from thread {}.{}", iodev->dev_id(),
-                            iomanager.this_reactor()->reactor_idx(), taddr);
-                remove_from_my_reactor(iodev, iomanager.this_reactor()->addr_to_thread(taddr));
-            },
-            run_wtype,
-            [iodev, remove_done_cb]() {
-                LOGDEBUGMOD(iomgr, "IODev {} removed from all threads, marking it NOTREADY", iodev->dev_id());
-                iodev->ready = false;
-                if (remove_done_cb) { remove_done_cb(); }
-            });
+
+        if (wait_to_remove) {
+            removed_count = iomanager.run_on_wait(iodev->global_scope(), remove_from_reactor);
+            post_remove(iodev.get());
+        } else {
+            iodev->post_add_remove_cb = post_remove;
+            removed_count = iomanager.run_on_forget(iodev->global_scope(), remove_from_reactor);
+            iodev->increment_pending(removed_count);
+        }
     }
+    return removed_count;
 }
 
-void IOInterface::on_io_thread_start(const io_thread_t& thr) {
-    IOInterfaceThreadContext* iface_thread_ctx{nullptr};
+void IOInterface::on_reactor_start(IOReactor* reactor) {
+    init_iface_reactor_context(reactor);
+    uint32_t added_count{0};
     {
-        // This step ensures that sparse vector if need be expands under lock.
-        // Once a slot is assigned, there is no contention
-        std::unique_lock lk(m_ctx_init_mtx);
-        iface_thread_ctx = m_iface_thread_ctx[thr->thread_idx].get();
+        std::shared_lock lg(m_mtx);
+        for (auto& iodev : m_iodev_map) {
+            if (reactor->is_iodev_addable(iodev.second)) {
+                reactor->add_iodev(iodev.second);
+                ++added_count;
+            }
+        }
     }
+    LOGINFOMOD(iomgr, "Added {} [scope={}] and iodevices [{} out of {}] to reactor [{}]", name(), scope(), added_count,
+               m_iodev_map.size(), reactor->reactor_idx());
+}
 
-    if (iface_thread_ctx == nullptr) {
-        init_iface_thread_ctx(thr);
-
-        // Add all devices part of this interface to this thread
-        uint32_t added_count{0};
-        {
-            std::shared_lock lg(m_mtx);
-            for (auto& iodev : m_iodev_map) {
-                if (add_to_my_reactor(iodev.second, thr)) { ++added_count; }
+void IOInterface::on_reactor_stop(IOReactor* reactor) {
+    clear_iface_reactor_context(reactor);
+    uint32_t removed_count{0};
+    {
+        std::shared_lock lg(m_mtx);
+        for (auto& iodev : m_iodev_map) {
+            if (reactor->is_iodev_addable(iodev.second)) {
+                reactor->remove_iodev(iodev.second);
+                ++removed_count;
             }
         }
 
-        // If the derived class iface_thread_ctx is still not written, create one for ourselves
-        if (m_iface_thread_ctx[thr->thread_idx] == nullptr) {
-            m_iface_thread_ctx[thr->thread_idx] = std::make_unique< IOInterfaceThreadContext >();
-        }
-        LOGINFOMOD(iomgr, "Added {} [scope={}] and iodevices [{} out of {}] to io_thread [idx={},addr={}]", name(),
-                   scope(), added_count, m_iodev_map.size(), thr->thread_idx, thr->thread_addr);
-    } else {
-        LOGINFO("IO Thread is already started, duplicate request to init thread context, ignoring");
+        LOGINFOMOD(iomgr, "Removed {} [scope={}] and iodevices [{} out of {}] from reactor [{}]", name(), scope(),
+                   removed_count, m_iodev_map.size(), reactor->reactor_idx());
     }
 }
 
-void IOInterface::on_io_thread_stopped(const io_thread_t& thr) {
-    if (m_iface_thread_ctx[thr->thread_idx] != nullptr) {
-        uint32_t removed_count{0};
-        {
-            std::shared_lock lg(m_mtx);
-            for (auto& iodev : m_iodev_map) {
-                if (remove_from_my_reactor(iodev.second, thr)) { ++removed_count; }
-            }
-        }
-
-        clear_iface_thread_ctx(thr);
-        m_iface_thread_ctx[thr->thread_idx].reset();
-        LOGINFOMOD(iomgr, "Removed {} [scope={}] and iodevices [{} out of {}] from io_thread [idx={},addr={}]", name(),
-                   scope(), removed_count, m_iodev_map.size(), thr->thread_idx, thr->thread_addr);
-    }
-}
-
-bool IOInterface::add_to_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
-    bool added{false};
-    IODeviceThreadContext* iodev_thread_ctx{nullptr};
-    {
-        // This step ensures that sparse vector if need be expands under lock.
-        // Once a slot is assigned, there is no contention
-        std::unique_lock lk(iodev->m_ctx_init_mtx);
-        iodev_thread_ctx = iodev->m_iodev_thread_ctx[thr->thread_idx].get();
-    }
-
-    if (iodev_thread_ctx == nullptr) {
-        if (thr->reactor->is_iodev_addable(iodev, thr)) {
-            thr->reactor->add_iodev(iodev, thr);
-            added = true;
-        }
-        init_iodev_thread_ctx(iodev, thr);
-        if (iodev->m_iodev_thread_ctx[thr->thread_idx] == nullptr) {
-            iodev->m_iodev_thread_ctx[thr->thread_idx] = std::make_unique< IODeviceThreadContext >();
-        }
-    }
-    return added;
-}
-
-bool IOInterface::remove_from_my_reactor(const io_device_ptr& iodev, const io_thread_t& thr) {
-    bool removed{false};
-    if (iodev->m_iodev_thread_ctx[thr->thread_idx]) {
-        if (thr->reactor->is_iodev_addable(iodev, thr)) {
-            thr->reactor->remove_iodev(iodev, thr);
-            removed = true;
-        }
-        clear_iodev_thread_ctx(iodev, thr);
-        iodev->m_iodev_thread_ctx[thr->thread_idx].reset();
-    }
-    return removed;
-}
-
-io_device_ptr IOInterface::alloc_io_device(const backing_dev_t dev, const int events_interested, const int pri,
-                                           void* cookie, const thread_specifier& scope, const ev_callback& cb) {
+io_device_ptr IOInterface::alloc_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+                                           const thread_specifier& scope, const ev_callback& cb) {
     auto iodev = std::make_shared< IODevice >(pri, scope);
     iodev->dev = dev;
     iodev->cb = cb;
@@ -207,54 +167,42 @@ io_device_ptr IOInterface::alloc_io_device(const backing_dev_t dev, const int ev
 }
 
 ///////////////////////////////////////// GenericIOInterface Section ////////////////////////////////////////////
-io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const int events_interested, const int pri,
-                                                 void* cookie, const bool is_per_thread_dev, const ev_callback& cb) {
+thread_local listen_sentinel_cb_t GenericIOInterface::t_listen_sentinel_cb;
+io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+                                                 bool is_per_thread_dev, const ev_callback& cb) {
     return make_io_device(dev, events_interested, pri, cookie,
-                          is_per_thread_dev ? thread_specifier{iomanager.iothread_self()}
-                                            : thread_specifier{thread_regex::all_io},
+                          is_per_thread_dev ? thread_specifier{iomanager.this_reactor()->main_fiber()}
+                                            : thread_specifier{reactor_regex::all_io},
                           std::move(cb));
 }
 
-io_device_ptr GenericIOInterface::make_io_device(const backing_dev_t dev, const int events_interested, const int pri,
-                                                 void* cookie, const thread_specifier& scope, const ev_callback& cb) {
+io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+                                                 const thread_specifier& scope, const ev_callback& cb) {
     auto iodev = alloc_io_device(dev, events_interested, pri, cookie, scope, cb);
-    add_io_device(iodev);
+    add_io_device(iodev, true /* wait_to_add */);
     return iodev;
 }
 
-void GenericIOInterface::init_iface_thread_ctx(const io_thread_t& thr) {
-    auto ctx = std::make_unique< GenericInterfaceThreadContext >();
-    ctx->listen_sentinel_cb = m_listen_sentinel_cb;
-    m_iface_thread_ctx[thr->thread_idx] = std::move(ctx);
-}
+void GenericIOInterface::init_iface_reactor_context(IOReactor* reactor) { t_listen_sentinel_cb = m_listen_sentinel_cb; }
 
-void GenericIOInterface::clear_iface_thread_ctx(const io_thread_t& thr) { m_iface_thread_ctx[thr->thread_idx].reset(); }
+void GenericIOInterface::clear_iface_reactor_context(IOReactor* reactor) { t_listen_sentinel_cb = nullptr; }
 
-void GenericIOInterface::attach_listen_sentinel_cb(const listen_sentinel_cb_t& cb, const wait_type_t wtype) {
+void GenericIOInterface::attach_listen_sentinel_cb(const listen_sentinel_cb_t& cb) {
     {
         std::unique_lock lg(m_mtx);
         m_listen_sentinel_cb = cb;
     }
-    iomanager.run_on(
-        thread_regex::all_io,
-        [this, cb]([[maybe_unused]] io_thread_addr_t taddr) { thread_ctx()->listen_sentinel_cb = cb; }, wtype);
+    iomanager.run_on_wait(reactor_regex::all_io, [this]() { t_listen_sentinel_cb = m_listen_sentinel_cb; });
 }
 
-void GenericIOInterface::detach_listen_sentinel_cb(const wait_type_t wtype) {
+void GenericIOInterface::detach_listen_sentinel_cb() {
     {
         std::unique_lock lg(m_mtx);
         m_listen_sentinel_cb = nullptr;
     }
-    iomanager.run_on(
-        thread_regex::all_io,
-        [this]([[maybe_unused]] io_thread_addr_t taddr) { thread_ctx()->listen_sentinel_cb = nullptr; }, wtype);
+    iomanager.run_on_wait(reactor_regex::all_io, [this]() { t_listen_sentinel_cb = nullptr; });
 }
 
-listen_sentinel_cb_t& GenericIOInterface::get_listen_sentinel_cb() { return thread_ctx()->listen_sentinel_cb; }
-
-GenericInterfaceThreadContext* GenericIOInterface::thread_ctx() {
-    return static_cast< GenericInterfaceThreadContext* >(
-        m_iface_thread_ctx[IOReactor::this_reactor->default_thread_idx()].get());
-}
+listen_sentinel_cb_t& GenericIOInterface::get_listen_sentinel_cb() { return t_listen_sentinel_cb; }
 
 } // namespace iomgr

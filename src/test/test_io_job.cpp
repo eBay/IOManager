@@ -13,8 +13,7 @@
 
 #include <gtest/gtest.h>
 
-#include <iomgr.hpp>
-
+#include <iomgr/iomgr.hpp>
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;
@@ -28,19 +27,21 @@ SISL_OPTION_GROUP(test_io,
                   (device_list, "", "device_list", "List of device paths",
                    ::cxxopts::value< std::vector< std::string > >(), "path [...]"),
                   (device_size, "", "device_size", "size of devices to do IO on",
-                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"))
+                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"),
+                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_io, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 TEST(IOMgrTest, basic_io_test) {
-    const auto nthreads{SISL_OPTIONS["num_threads"].as< uint32_t >()};
-    const auto examiner{std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */)};
+    const auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
+    const auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
+    auto examiner = std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */, is_spdk);
 
     // Create an add the device
-    std::vector< std::string > devs{"/tmp/io_test"}; // Default if user has not provided
+    std::vector< std::string > devs{fmt::format("/tmp/io_test_{}", is_spdk ? "spdk" : "epoll")};
     if (SISL_OPTIONS.count("device_list")) { devs = SISL_OPTIONS["device_list"].as< std::vector< std::string > >(); }
-    const auto dev_size{SISL_OPTIONS["device_size"].as< uint64_t >()};
+    const auto dev_size = SISL_OPTIONS["device_size"].as< uint64_t >();
     for (const auto& dev : devs) {
         const std::filesystem::path file_path{dev};
         if (!std::filesystem::exists(file_path)) {
@@ -60,7 +61,7 @@ TEST(IOMgrTest, basic_io_test) {
 
     IOJob job(examiner, cfg);
     job.start_job(wait_till_t::completion);
-
+    examiner->close_devices();
     LOGINFO("Result: {}", job.job_result());
 }
 

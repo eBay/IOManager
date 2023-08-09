@@ -12,8 +12,10 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#include "io_environment.hpp"
-#include "http_server.hpp"
+#include <iomgr/io_environment.hpp>
+#include <iomgr/http_server.hpp>
+#include "iomgr_config.hpp"
+
 #include <sisl/sobject/sobject.hpp>
 
 namespace iomgr {
@@ -21,7 +23,6 @@ namespace iomgr {
 IOEnvironment::IOEnvironment() {
     // init default settings
     IOMgrDynamicConfig::init_settings_default();
-    SecurityDynamicConfig::init_settings_default();
 }
 
 IOEnvironment::~IOEnvironment() {
@@ -29,13 +30,20 @@ IOEnvironment::~IOEnvironment() {
     if (m_file_watcher) { m_file_watcher->stop(); }
 }
 
+void IOEnvironment::restart_http_server(std::string const& ssl_cert, std::string const& ssl_key) {
+    m_http_server.reset();
+    with_http_server(ssl_cert, ssl_key);
+}
+
 void IOEnvironment::restart_http_server() {
     m_http_server.reset();
     with_http_server();
 }
 
-IOEnvironment& IOEnvironment::with_http_server() {
-    if (!m_http_server) { m_http_server = std::make_shared< iomgr::HttpServer >(); }
+IOEnvironment& IOEnvironment::with_http_server() { return with_http_server("", ""); }
+
+IOEnvironment& IOEnvironment::with_http_server(std::string const& ssl_cert, std::string const& ssl_key) {
+    if (!m_http_server) { m_http_server = std::make_shared< iomgr::HttpServer >(ssl_cert, ssl_key); }
 
     return get_instance();
 }
@@ -49,20 +57,14 @@ IOEnvironment& IOEnvironment::with_file_watcher() {
     return get_instance();
 }
 
-IOEnvironment& IOEnvironment::with_auth_security() { return with_auth_manager().with_trf_client(); }
-
-IOEnvironment& IOEnvironment::with_auth_manager() {
-    if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
-        if (!m_auth_manager) { m_auth_manager = std::make_shared< sisl::AuthManager >(); }
-    }
+IOEnvironment& IOEnvironment::with_token_verifier(std::shared_ptr< sisl::TokenVerifier >&& token_verifier) {
+    if (!m_token_verifier) { m_token_verifier = token_verifier; }
 
     return get_instance();
 }
 
-IOEnvironment& IOEnvironment::with_trf_client() {
-    if (IM_DYNAMIC_CONFIG(io_env->authorization)) {
-        if (!m_trf_client) { m_trf_client = std::make_shared< sisl::TrfClient >(); }
-    }
+IOEnvironment& IOEnvironment::with_token_client(std::shared_ptr< sisl::TokenClient >&& token_client) {
+    if (!m_token_client) { m_token_client = token_client; }
 
     return get_instance();
 }
@@ -71,6 +73,13 @@ IOEnvironment& IOEnvironment::with_object_manager() {
     if (!m_object_mgr) { m_object_mgr = std::make_shared< sisl::sobject_manager >(); }
 
     return get_instance();
+}
+
+std::string IOEnvironment::get_ssl_cert() const { return m_ssl_cert; }
+std::string IOEnvironment::get_ssl_key() const { return m_ssl_key; }
+void IOEnvironment::set_ssl_certs(std::string const& ssl_cert, std::string const& ssl_key) {
+    m_ssl_cert = ssl_cert;
+    m_ssl_key = ssl_key;
 }
 
 } // namespace iomgr
