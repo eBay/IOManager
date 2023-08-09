@@ -150,7 +150,10 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-    create_worker_reactors();
+
+
+    // Caller can override the number of fibers per thread; o.w., it is taken from dynamic config
+    create_worker_reactors((0 < params.num_fibers) ? params.num_fibers : IM_DYNAMIC_CONFIG(thread.num_fibers));
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -226,7 +229,7 @@ void IOManager::stop() {
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 }
 
-void IOManager::create_worker_reactors() {
+void IOManager::create_worker_reactors(uint32_t num_fibers) {
     // First populate the full sparse vector of m_worker_reactors before starting workers.
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_reactors.push_back(nullptr);
@@ -235,7 +238,7 @@ void IOManager::create_worker_reactors() {
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_threads.emplace_back(
             m_impl->create_reactor_impl(fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP,
-                                        IM_DYNAMIC_CONFIG(thread.num_fibers), (int)i, nullptr));
+                                        num_fibers, (int)i, nullptr));
         LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
     }
 }

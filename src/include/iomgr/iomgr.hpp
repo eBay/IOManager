@@ -68,7 +68,7 @@ ENUM(iomgr_state, uint16_t,
 struct iomgr_params {
     size_t num_threads{0};
     bool is_spdk{false};
-    uint32_t num_fibers{4};
+    uint32_t num_fibers{0};
     uint32_t app_mem_size_mb{0};
     uint32_t hugepage_size_mb{0};
 };
@@ -300,7 +300,7 @@ private:
     ~IOManager();
 
     void foreach_interface(const interface_cb_t& iface_cb);
-    void create_worker_reactors();
+    void create_worker_reactors(uint32_t num_fibers);
     void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name,
                       const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
 
