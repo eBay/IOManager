@@ -67,9 +67,9 @@ class IOMgrConan(ConanFile):
         self.requires("pistache/0.0.5")
         self.requires("zmarok-semver/1.1.0")
 
-        self.requires("flatbuffers/1.12.0", override=True)
+        
         self.requires("openssl/3.1.1", override=True)
-        self.requires("zlib/1.2.13", override=True)
+        
         self.requires("libcurl/8.0.1", override=True)
 
     def build(self):
