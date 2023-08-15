@@ -125,7 +125,8 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Do Poller specific pre interface initialization
     m_impl->pre_interface_init();
-    m_is_uring_capable = check_uring_capability();
+    bool new_interface_supported = false;
+    m_is_uring_capable = check_uring_capability(new_interface_supported);
     LOGINFOMOD(iomgr, "System has uring_capability={}", m_is_uring_capable);
 
     // Create all in-built interfaces here
@@ -138,7 +139,8 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
         iface_adder();
     } else {
         if (m_is_uring_capable && !m_is_spdk) {
-            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< UringDriveInterface >()));
+            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(
+                std::make_shared< UringDriveInterface >(new_interface_supported)));
         } else {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
         }
@@ -150,7 +152,6 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
-
 
     // Caller can override the number of fibers per thread; o.w., it is taken from dynamic config
     create_worker_reactors((0 < params.num_fibers) ? params.num_fibers : IM_DYNAMIC_CONFIG(thread.num_fibers));
@@ -236,9 +237,8 @@ void IOManager::create_worker_reactors(uint32_t num_fibers) {
     }
 
     for (uint32_t i{0}; i < m_num_workers; ++i) {
-        m_worker_threads.emplace_back(
-            m_impl->create_reactor_impl(fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP,
-                                        num_fibers, (int)i, nullptr));
+        m_worker_threads.emplace_back(m_impl->create_reactor_impl(
+            fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, num_fibers, (int)i, nullptr));
         LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
     }
 }
