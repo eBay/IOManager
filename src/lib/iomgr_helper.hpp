@@ -18,33 +18,43 @@ static constexpr uint64_t Gi{Ki * Mi};
 static constexpr uint64_t Ti{Ki * Gi};
 static const std::string hugepage_env{"HUGEPAGE"};
 
-static bool check_uring_capability() {
+static bool check_uring_capability(bool& new_interface_supported) {
 #ifdef __linux__
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 6, 0)
+    bool uring_supported{true};
+    new_interface_supported = true;
     if (syscall(__NR_io_uring_register, 0, IORING_UNREGISTER_BUFFERS, NULL, 0) && errno == ENOSYS) {
         // No io_uring
-        return false;
+        new_interface_supported = false;
+        uring_supported = false;
     } else {
         // io_uring
-        return true;
+        uring_supported = true;
     }
-#else
-    std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
-                              IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
 
-    bool supported{true};
-    struct io_uring_probe* probe = io_uring_get_probe();
-    if (probe == nullptr) { return false; }
+    if (uring_supported) {
+        // do futher check if new interfaces are supported (starting available with kernel 5.6);
+        std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
+                                  IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
 
-    for (auto& op : ops) {
-        if (!io_uring_opcode_supported(probe, op)) {
-            supported = false;
-            break;
+        struct io_uring_probe* probe = io_uring_get_probe();
+        if (probe == nullptr) {
+            new_interface_supported = false;
+            goto exit;
         }
+
+        for (auto& op : ops) {
+            if (!io_uring_opcode_supported(probe, op)) {
+                new_interface_supported = false;
+                break;
+            }
+        }
+
+        free(probe);
     }
-    free(probe);
-    return supported;
-#endif
+
+exit:
+    return uring_supported;
+
 #else
     return false;
 #endif

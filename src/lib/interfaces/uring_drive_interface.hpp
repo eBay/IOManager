@@ -80,7 +80,7 @@ class UringDriveInterface : public KernelDriveInterface {
 public:
     static constexpr uint32_t per_thread_qdepth = 256;
 
-    UringDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
+    UringDriveInterface(const bool new_interface_supported, const io_interface_comp_cb_t& cb = nullptr);
     virtual ~UringDriveInterface() = default;
     drive_interface_type interface_type() const override { return drive_interface_type::uring; }
     std::string name() const override { return "uring_drive_interface"; }
@@ -119,5 +119,6 @@ private:
 private:
     static thread_local uring_drive_channel* t_uring_ch;
     UringDriveInterfaceMetrics m_metrics;
+    bool m_new_intfc;
 };
 } // namespace iomgr
