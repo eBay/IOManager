@@ -31,7 +31,7 @@ class IOMgrConan(ConanFile):
         'grpc_support': True,
         'sanitize':     False,
         'spdk':         True,
-        'testing':      'full',
+        'testing':      'epoll_mode',
         'sisl:prerelease':   True,
         'fiber_impl':   'boost',
     }
@@ -74,15 +74,17 @@ class IOMgrConan(ConanFile):
         definitions = {'CMAKE_TEST_TARGET': self.options.testing,
                        'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
                        'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
-                       'MEMORY_SANITIZER_ON': 'OFF'}
+                       'MEMORY_SANITIZER_ON': 'OFF',
+                       'BUILD_TESTING': 'OFF',
+        }
+        if self.options.testing:
+            definitions['BUILD_TESTING'] = 'ON'
 
-        test_target = None
         if self.settings.build_type == "Debug":
             if self.options.sanitize:
                 definitions['MEMORY_SANITIZER_ON'] = 'ON'
-            elif self.options.coverage:
-                definitions['BUILD_COVERAGE'] = 'ON'
-                test_target = 'coverage'
+        if self.options.coverage:
+            definitions['BUILD_COVERAGE'] = 'ON'
 
         if self.options.fiber_impl == "boost":
             definitions['FIBER_IMPL'] = 'boost'
@@ -91,7 +93,8 @@ class IOMgrConan(ConanFile):
 
         cmake.configure(defs=definitions)
         cmake.build()
-        cmake.test(target=test_target, output_on_failure=True)
+        if self.options.testing:
+            cmake.test(output_on_failure=True)
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)

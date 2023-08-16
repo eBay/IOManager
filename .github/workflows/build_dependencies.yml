@@ -132,17 +132,10 @@ jobs:
     - name: Build Cache
       run: |
         conan install \
-            -o prerelease=${{ inputs.prerelease }} \
-            -o malloc_impl=${{ inputs.malloc-impl }} \
-            -o testing=False \
-            -s build_type=${{ inputs.build-type }} \
-            --build missing \
-            import/sisl
-        conan install \
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o sisl:testing=False \
-            -o testing=off \
+            -o iomgr:testing=off \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
@@ -163,13 +156,35 @@ jobs:
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
+    - name: Code Coverage Run
+      run: |
+        conan install \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
+            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+            -o sisl:testing=False \
+            -o coverage=True \
+            -o testing=epoll_mode \
+            -s build_type=${{ inputs.build-type }} \
+            --build missing \
+            .
+        conan build .
+      if: ${{ inputs.testing == 'True' && inputs.platform == 'ubuntu-22.04' && inputs.build-type == 'Debug' && inputs.malloc-impl == 'libc' && inputs.prerelease == 'False' }}
+
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        gcov: true
+      if: ${{ inputs.testing == 'True' && inputs.platform == 'ubuntu-22.04' && inputs.build-type == 'Debug' && inputs.malloc-impl == 'libc' && inputs.prerelease == 'False' }}
+
+
     - name: Create and test Package
       run: |
         conan create \
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o sisl:testing=False \
-            -o iomgr:testing=off \
+            -o iomgr:testing='epoll_mode' \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
