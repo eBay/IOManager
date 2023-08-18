@@ -41,6 +41,7 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
     add_executable(test_http_server ${TEST_HTTP_SERVER_SOURCES})
     target_link_libraries(test_http_server ${TEST_DEPS} cpr::cpr)
     add_test(NAME TestHttpServer COMMAND test_http_server)
+
     set(TEST_DRIVE_FILES test_drive_interface.cpp)
     add_executable(test_drive ${TEST_DRIVE_FILES})
     target_link_libraries(test_drive ${TEST_DEPS} )
@@ -60,6 +61,7 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
         add_test(NAME TestWriteZero-Epoll COMMAND test_write_zero --dev /tmp/test_wz_epoll)
         add_test(NAME TestDrive-Epoll COMMAND test_drive --dev_path /tmp/iomgr_test_drive_epoll)
         add_test(NAME TestMsg-Epoll COMMAND test_msg)
+        add_test(NAME test_shared_mutex-Epoll COMMAND test_shared_mutex)
         SET_TESTS_PROPERTIES(TestMsg-Epoll PROPERTIES DEPENDS TestWriteZero-Epoll)
     endif()
 

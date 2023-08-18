@@ -29,11 +29,11 @@ SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_fiber_shared_mutex,
                   (num_threads, "", "num_threads", "number of threads",
-                   ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
+                   ::cxxopts::value< uint32_t >()->default_value("50"), "number"),
                   (num_fibers, "", "num_fibers", "number of fibers per thread",
-                   ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
+                   ::cxxopts::value< uint32_t >()->default_value("1"), "number"),
                   (num_iters, "", "num_iters", "number of iterations",
-                   ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
+                   ::cxxopts::value< uint64_t >()->default_value("50000"), "number"),
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"));
 
 #define ENABLED_OPTIONS logging, iomgr, test_fiber_shared_mutex, config
