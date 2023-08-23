@@ -32,7 +32,6 @@ class IOMgrConan(ConanFile):
         'sanitize':     False,
         'spdk':         True,
         'testing':      'epoll_mode',
-        'sisl:prerelease':   True,
         'fiber_impl':   'boost',
     }
 
@@ -45,9 +44,12 @@ class IOMgrConan(ConanFile):
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
+            if self.options.testing == 'off':
+                if self.options.coverage or self.options.sanitize:
+                    raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
     def build_requirements(self):
-        self.build_requires("gtest/1.13.0")
+        self.build_requires("gtest/1.14.0")
         self.build_requires("cpr/1.10.4")
 
     def requirements(self):
