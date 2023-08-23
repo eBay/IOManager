@@ -19,6 +19,10 @@ on:
       prerelease:
         required: true
         type: string
+      tooling:
+        required: false
+        type: string
+        default: 'None'
       testing:
         required: false
         type: string
@@ -60,6 +64,13 @@ on:
           - 'True'
           - 'False'
         default: 'False'
+      tooling:
+        required: false
+        type: choice
+          - 'Sanitize'
+          - 'Coverage'
+          - 'None'
+        default: 'None'
       testing:
         description: 'Build and Run'
         required: true
@@ -135,7 +146,7 @@ jobs:
             -o sisl:prerelease=${{ inputs.prerelease }} \
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o sisl:testing=False \
-            -o iomgr:testing=off \
+            -o testing=off \
             -s build_type=${{ inputs.build-type }} \
             --build missing \
             .
@@ -156,6 +167,20 @@ jobs:
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
+    - name: Create and Test Package
+      run: |
+        sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
+        conan create \
+            -o sisl:prerelease=${{ inputs.prerelease }} \
+            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
+            -o sisl:testing=False \
+            -o iomgr:sanitize=${sanitize} \
+            -o iomgr:testing='epoll_mode' \
+            -s build_type=${{ inputs.build-type }} \
+            --build missing \
+            .
+      if: ${{ inputs.testing == 'True' && inputs.tooling != 'Coverage' }}
+
     - name: Code Coverage Run
       run: |
         conan install \
@@ -168,24 +193,11 @@ jobs:
             --build missing \
             .
         conan build .
-      if: ${{ inputs.testing == 'True' && inputs.platform == 'ubuntu-22.04' && inputs.build-type == 'Debug' && inputs.malloc-impl == 'libc' && inputs.prerelease == 'False' }}
+      if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v3
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         gcov: true
-      if: ${{ inputs.testing == 'True' && inputs.platform == 'ubuntu-22.04' && inputs.build-type == 'Debug' && inputs.malloc-impl == 'libc' && inputs.prerelease == 'False' }}
-
-
-    - name: Create and test Package
-      run: |
-        conan create \
-            -o sisl:prerelease=${{ inputs.prerelease }} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o sisl:testing=False \
-            -o iomgr:testing='epoll_mode' \
-            -s build_type=${{ inputs.build-type }} \
-            --build missing \
-            .
-      if: ${{ inputs.testing == 'True' }}
+      if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
