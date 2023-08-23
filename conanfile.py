@@ -43,8 +43,6 @@ class IOMgrConan(ConanFile):
         if self.options.shared:
             del self.options.fPIC
         if self.settings.build_type == "Debug":
-            if self.options.sanitize:
-                self.options['sisl'].sanitize = True
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
 
