@@ -66,8 +66,10 @@ void FiberManagerLib::shared_mutex::lock() {
         } else {
             // Owned by the writer or reader, add ourselves to writer queue
             if (s_writer_priority) {
-                ++m_write_waiters;
-                am_i_write_waiter = true;
+                if (!am_i_write_waiter) {
+                    ++m_write_waiters;
+                    am_i_write_waiter = true;
+                }
                 LOGTRACEMOD(iomgr, "[Writer Lock for ctx={}]: Queued, owned by owner={} num_readers={}",
                             (void*)active_ctx, (void*)m_write_owner, m_readers);
             }
