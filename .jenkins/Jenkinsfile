@@ -5,10 +5,9 @@ pipeline {
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
         CONAN_USER = 'oss'
         TARGET_BRANCH = 'master'
-        TESTING_BRANCH = 'testing/v*'
         STABLE_BRANCH = 'stable/v*'
-        LAST_COMMITS = ''
         built_chain = ''
+        failed_pkg = ''
     }
 
     parameters {
@@ -17,23 +16,20 @@ pipeline {
 
     stages {
         stage('Adjust Tag for Master/PR') {
-            when { not { anyOf {
-                branch "${TESTING_BRANCH}"
+            when { not {
                 branch "${STABLE_BRANCH}"
-            } } }
+            } }
             steps {
                 script {
-                    sh(script: "sed -Ei 's,version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
+                    sh(script: "sed -Ei 's, version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*, version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
                     BUILD_MISSING = "--build missing"
-                    LAST_COMMITS = sh(script: "git log -n 2 --pretty=short", returnStdout: true)
                 }
             }
         }
         stage('Adjust for Testing/Stable') {
-            when { anyOf {
-                branch "${TESTING_BRANCH}"
+            when {
                 branch "${STABLE_BRANCH}"
-            } }
+            }
             steps {
                 script {
                     BUILD_MISSING = ""
@@ -45,7 +41,7 @@ pipeline {
             steps {
                 script {
                     PROJECT = sh(script: "grep -m 1 'name =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
-                    VER = sh(script: "grep -m 1 'version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
+                    VER = sh(script: "grep -m 1 ' version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
                     CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
                     TAG = "${VER}@${CONAN_USER}/${CONAN_CHANNEL}"
                     slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* is building: ${BUILD_URL}"
@@ -63,128 +59,25 @@ pipeline {
             }
         }
 
-        stage('Build') {
-            failFast true
-            matrix {
-                agent { label 'sds-builder-2204 && hugepages' }
-                axes {
-                    axis {
-                        name 'BUILD_TYPE'
-                        values 'sanitize', 'release', 'debug', 'test'
-                    }
-                    axis {
-                        name 'COVERAGE'
-                        values 'False'
-                    }
-                }
-                excludes { 
-                    exclude {
-                        axis {
-                            name 'BUILD_TYPE'
-                            values 'sanitize', 'test', 'release'
-                        }
-                        axis {
-                            name 'COVERAGE'
-                            values 'True'
-                        }
-                    }
-                }
-
-                stages {
-                    stage('Adjust Tag for Master/PR') {
-                        when { not { anyOf {
-                            branch "${TESTING_BRANCH}"
-                            branch "${STABLE_BRANCH}"
-                        } } }
-                        steps {
-                            sh(script: "sed -Ei 's,version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
-                        }
-                    }
-
-                    stage("Build") {
-                        when { allOf {
-                            expression { "${COVERAGE}" == "False" }
-                        } }
-                        steps {
-                            script {
-                                def PRERELEASE = 'True'
-                                def BUILD_PROFILE = "${BUILD_TYPE}"
-                                def SANITIZE = 'False'
-
-                                if ("${BUILD_TYPE}" == 'sanitize') {
-                                    SANITIZE = 'True'
-                                    BUILD_PROFILE = "debug"
-                                }
-
-                                if ("${BUILD_TYPE}" == "release") {
-                                    PRERELEASE = 'False'
-                                    BUILD_PROFILE = "test"
-                                }
-
-                                if (("${env.BRANCH_NAME}" =~ /PR-/) && ("$BUILD_TYPE" == "debug")) {
-                                    sh "echo Skipping debug build for PR branch"
-                                } else {
-                                    sh "conan create ${BUILD_MISSING} -o sisl:prerelease=${PRERELEASE} -o ${PROJECT}:sanitize=${SANITIZE} -pr ${BUILD_PROFILE} . ${PROJECT}/${TAG}"
-                                }
-                            }
-                        }
-                    }
-                    stage("Deploy") {
-                        when { allOf {
-                            expression { "${COVERAGE}" == 'False' }
-                            expression { "${BUILD_TYPE}" != 'sanitize' }
-                            expression { !(env.BRANCH_NAME =~ /PR-/) }
-                        } }
-                        steps {
-                            sh "conan user -r ebay-local -p ${ARTIFACTORY_PASS} _service_sds"
-                            sh "conan upload ${PROJECT}/${TAG} -c --all -r ebay-local"
-                        }
-                    }
-
-                    stage('Coverage') {
-                        when { not { anyOf {
-                            branch "${STABLE_BRANCH}"
-                            expression { "${COVERAGE}" == 'False' }
-                            expression { !(env.BRANCH_NAME =~ /PR-/) }
-                        } } }
-
-                        stages {
-                            stage("Adjust Sonar Branch") {
-                                when {
-                                    not {
-                                        branch "${TARGET_BRANCH}"
-                                    }
-                                }
-                                steps {
-                                    sh "echo \"sonar.branch.target=${TARGET_BRANCH}\" >> sonar-project.properties"
-                                }
-                            }
-                            stage("Code Coverage") {
-                                steps {
-                                    slackSend channel: '#sds-ci', message: "*${PROJECT}:${TAG}* is undergoing Code Coverage."
-                                    sh "echo \"sonar.branch.name=${BRANCH_NAME}\" >> sonar-project.properties"
-                                    sh "conan install -pr ${BUILD_TYPE} ${BUILD_MISSING} -o ${PROJECT}:coverage=True ."
-                                    sh "build-wrapper-linux-x86-64 --out-dir /tmp/sonar conan build ."
-                                    sh "find . -name \"*.gcno\" -exec gcov {} \\;"
-                                    withSonarQubeEnv('sds-sonar')  {
-                                        sh "sonar-scanner -Dsonar.projectBaseDir=. -Dsonar.projectVersion=\"${VER}\""
-                                    }
-                                }
-                            }
-                            stage("Quality Gate") {
-                                steps {
-                                    timeout(time: 30, unit: 'MINUTES') {
-                                        waitForQualityGate abortPipeline: true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        stage("Compile") {
+            steps {
+                sh "conan create ${BUILD_MISSING} -pr debug -o ${PROJECT}:sanitize=True . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr debug . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr test -o sisl:malloc_impl=tcmalloc . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr test -o sisl:prerelease=True -o sisl:malloc_impl=tcmalloc . ${PROJECT}/${TAG} ; \
+                    "
             }
         }
 
-/* FIXME (bszmyd): Disabled till integration.
+        stage("Deploy") {
+            when {
+                expression { !(env.BRANCH_NAME =~ /PR-/) }
+            }
+            steps {
+                sh "conan user -r ebay-local -p ${ARTIFACTORY_PASS} _service_sds"
+                sh "conan upload ${PROJECT}/${TAG} -c --all -r ebay-local"
+            }
+        }
         stage("Downstream Build") {
             when { allOf {
                expression { (env.BRANCH_NAME == "${TARGET_BRANCH}") }
@@ -217,18 +110,15 @@ pipeline {
                 }
             }
         }
-*/
     }
 
     post {
         failure {
-/*
             script {
                 if ("${failed_pkg}" != "") {
-                    slackSend color: '#E43237', channel: '#homestore-build', message: "@here IOManager's downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\n*Last 2 commits:* ```${LAST_COMMITS}```\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
+                    slackSend color: '#E43237', channel: '#homestore-build', message: "@here IOManager's downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
                 }
             }
-*/
             slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
         }
         success {
