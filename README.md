@@ -95,5 +95,6 @@ Event Fd, Generic linux file descriptors, Spdk bdevs (aio, nvme), NVMeOF (Qpairs
 ## Build
 To build (assuming a recent version of conan package manager is installed)
 ```
+   $ ./prepare.sh # this will export some recipes to the conan cache
    $ conan create . <user>/<channel>
 ```
