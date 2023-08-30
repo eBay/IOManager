@@ -25,19 +25,14 @@ pipeline {
             steps {
                 script {
                     sh(script: "sed -Ei 's,version = .*\"([[:digit:]]+\\.[[:digit:]]+\\.[[:digit:]]+).*,version = \"\\1-${env.BUILD_NUMBER}\",' conanfile.py")
-                    BUILD_MISSING = "--build missing"
                     LAST_COMMITS = sh(script: "git log -n 2 --pretty=short", returnStdout: true)
                 }
             }
         }
-        stage('Adjust for Testing/Stable') {
-            when { anyOf {
-                branch "${TESTING_BRANCH}"
-                branch "${STABLE_BRANCH}"
-            } }
+        stage('Include build missing') {
             steps {
                 script {
-                    BUILD_MISSING = ""
+                    BUILD_MISSING = "--build missing"
                 }
             }
         }
