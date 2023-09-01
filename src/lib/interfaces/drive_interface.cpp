@@ -366,11 +366,7 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
     drive_attributes attr;
     attr.phys_page_size = 4096;
     attr.align_size = 512;
-#ifndef NDEBUG
-    attr.atomic_phys_page_size = 512;
-#else
     attr.atomic_phys_page_size = 4096;
-#endif
     attr.num_streams = 1;
 
     if ((drive_type == drive_type::block_hdd) || (drive_type == drive_type::file_on_hdd)) {
