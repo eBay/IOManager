@@ -57,10 +57,10 @@ pipeline {
 
         stage("Compile") {
             steps {
-                sh "conan create ${BUILD_MISSING} -pr debug -o ${PROJECT}:sanitize=True . ${PROJECT}/${TAG} ; \
-                    conan create ${BUILD_MISSING} -pr debug . ${PROJECT}/${TAG} ; \
-                    conan create ${BUILD_MISSING} -pr test -o sisl:malloc_impl=tcmalloc . ${PROJECT}/${TAG} ; \
-                    conan create ${BUILD_MISSING} -pr test -o sisl:prerelease=True -o sisl:malloc_impl=tcmalloc . ${PROJECT}/${TAG} ; \
+                sh "conan create ${BUILD_MISSING} -pr debug -o ${PROJECT}:sanitize=True -o ${PROJECT}:testing=full . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr debug -o ${PROJECT}:testing=full . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr test -o sisl:malloc_impl=tcmalloc -o ${PROJECT}:testing=full . ${PROJECT}/${TAG} ; \
+                    conan create ${BUILD_MISSING} -pr test -o sisl:prerelease=True -o sisl:malloc_impl=tcmalloc -o ${PROJECT}:testing=full . ${PROJECT}/${TAG} ; \
                     "
             }
         }

@@ -119,20 +119,20 @@ public:
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
 
-    folly::Future< bool > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                       bool part_of_batch = false) override;
-    folly::Future< bool > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                     bool part_of_batch = false) override;
-    folly::Future< bool > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset);
-    folly::Future< bool > queue_fsync(IODevice* iodev) override {
+    folly::Future< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                                 bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                  uint64_t offset, bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                 uint64_t offset, bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                 bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset);
+    folly::Future< std::error_code > queue_fsync(IODevice* iodev) override {
         LOGWARN("fsync on aio drive interface is not supported");
-        return folly::makeFuture< bool >(false);
+        return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
     }
 
     virtual void submit_batch() override;

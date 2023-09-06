@@ -84,27 +84,27 @@ public:
 
     size_t get_dev_size(IODevice* iodev) override;
 
-    folly::Future< bool > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                       bool part_of_batch = false) override;
-    folly::Future< bool > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                     bool part_of_batch = false) override;
-    folly::Future< bool > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                      bool part_of_batch = false) override;
-    folly::Future< bool > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
+    folly::Future< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                                 bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                  uint64_t offset, bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                 uint64_t offset, bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                 bool part_of_batch = false) override;
+    folly::Future< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
 
-    void sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
-    void sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    void sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
-    void sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    void sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset);
+    std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
+    std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    std::error_code sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
+    std::error_code sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
+    std::error_code sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset);
 
-    folly::Future< bool > queue_fsync(IODevice* iodev) override {
+    folly::Future< std::error_code > queue_fsync(IODevice* iodev) override {
         LOGWARN("fsync on spdk drive interface is not supported");
-        return folly::makeFuture< bool >(false);
+        return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
     }
     void submit_batch() override;
 
@@ -128,7 +128,7 @@ private:
     void clear_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor) override;
 
     void submit_async_io(SpdkIocb* iocb, bool part_of_batch);
-    void submit_sync_io(SpdkIocb* iocb);
+    std::error_code submit_sync_io(SpdkIocb* iocb);
 
 private:
     std::mutex m_sync_cv_mutex;
