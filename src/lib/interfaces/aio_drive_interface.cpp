@@ -307,19 +307,19 @@ bool AioDriveInterface::handle_io_failure(drive_aio_iocb* diocb, int error) {
 
 void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
     if (diocb->result == 0) {
-        std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
-                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
+        static std::error_code success;
+        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) { p.setValue(success); },
+                              [&](FiberManagerLib::Promise< std::error_code >& p) { p.setValue(success); },
                               [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
                    diocb->completion);
     } else {
-        std::visit(overloaded{[&](folly::Promise< bool >& p) {
-                                  p.setException(folly::makeSystemErrorExplicit(diocb->result, "Error in aio"));
+        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) {
+                                  p.setValue(std::error_code{int_cast(diocb->result), std::system_category()});
                               },
-                              [&](FiberManagerLib::Promise< bool >& p) {
-                                  p.setException(std::make_exception_ptr(
-                                      folly::makeSystemErrorExplicit(diocb->result, "Error in aio")));
+                              [&](FiberManagerLib::Promise< std::error_code >& p) {
+                                  p.setValue(std::error_code{int_cast(diocb->result), std::system_category()});
                               },
-                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result > 0 ? 0 : diocb->result); }},
+                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
                    diocb->completion);
     }
     delete diocb;
@@ -337,10 +337,10 @@ void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_ai
     }
 }
 
-folly::Future< bool > AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                                     bool part_of_batch) {
+folly::Future< std::error_code > AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size,
+                                                                uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
-    diocb->completion = std::move(folly::Promise< bool >{});
+    diocb->completion = std::move(folly::Promise< std::error_code >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
     if (iomanager.this_reactor() != nullptr) {
@@ -353,10 +353,10 @@ folly::Future< bool > AioDriveInterface::async_write(IODevice* iodev, const char
     return ret;
 }
 
-folly::Future< bool > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                                    bool part_of_batch) {
+folly::Future< std::error_code > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
+                                                               uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
-    diocb->completion = std::move(folly::Promise< bool >{});
+    diocb->completion = std::move(folly::Promise< std::error_code >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
     if (iomanager.this_reactor() != nullptr) {
@@ -368,10 +368,10 @@ folly::Future< bool > AioDriveInterface::async_read(IODevice* iodev, char* data,
     return ret;
 }
 
-folly::Future< bool > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                      uint64_t offset, bool part_of_batch) {
+folly::Future< std::error_code > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                 uint32_t size, uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
-    diocb->completion = std::move(folly::Promise< bool >{});
+    diocb->completion = std::move(folly::Promise< std::error_code >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
     if (iomanager.this_reactor() != nullptr) {
@@ -383,10 +383,10 @@ folly::Future< bool > AioDriveInterface::async_writev(IODevice* iodev, const iov
     return ret;
 }
 
-folly::Future< bool > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                     uint64_t offset, bool part_of_batch) {
+folly::Future< std::error_code > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                uint32_t size, uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
-    diocb->completion = std::move(folly::Promise< bool >{});
+    diocb->completion = std::move(folly::Promise< std::error_code >{});
     auto ret = diocb->folly_comp_promise().getFuture();
 
     if (iomanager.this_reactor() != nullptr) {
@@ -398,15 +398,15 @@ folly::Future< bool > AioDriveInterface::async_readv(IODevice* iodev, const iove
     return ret;
 }
 
-folly::Future< bool > AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                     bool part_of_batch) {
+folly::Future< std::error_code > AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                                bool part_of_batch) {
     RELEASE_ASSERT(0, "async_unmap is not supported for aio yet");
-    return folly::makeFuture< bool >(false);
+    return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
 }
 
-folly::Future< bool > AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+folly::Future< std::error_code > AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
     RELEASE_ASSERT(0, "async_write_zero is not supported for aio yet");
-    return folly::makeFuture< bool >(false);
+    return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
 }
 
 void AioDriveInterface::init_poll_interval_table() {

@@ -57,8 +57,8 @@ struct Workload {
     std::atomic< size_t > next_io_offset{0};
     size_t max_ios{10000};
     std::atomic< int64_t > available_qs{8};
-    folly::Promise< bool > preload_completion;
-    folly::Promise< bool > rw_completion;
+    folly::Promise< folly::Unit > preload_completion;
+    folly::Promise< folly::Unit > rw_completion;
 
     Workload() = default;
     Workload(Workload&& other) {
@@ -153,7 +153,7 @@ public:
             LOGTRACE("Preload offset={}", offset);
             m_iodev->drive_interface()
                 ->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset)
-                .thenValue([work, this, req](auto) {
+                .thenValue([work, this, req](auto&&) {
                     ++work->available_qs;
                     ++work->nios_completed;
                     delete req;
@@ -163,7 +163,7 @@ public:
                     } else if (work->nios_completed.load() == work->nios_issued.load()) {
                         LOGINFO("We are done with the preload of size={} with num_ios={}",
                                 s_io_size * work->nios_completed.load(), work->nios_completed.load());
-                        work->preload_completion.setValue(true);
+                        work->preload_completion.setValue();
                     }
                 });
 
@@ -189,7 +189,7 @@ public:
             std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
             auto* req = new io_req();
-            folly::Future< bool > f = folly::Future< bool >::makeEmpty();
+            folly::Future< std::error_code > f = folly::Future< std::error_code >::makeEmpty();
             if (io_pct(re) < s_read_pct) {
                 LOGTRACE("Read offset={}", offset);
                 f = m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset);
@@ -200,7 +200,7 @@ public:
                                                             offset);
             }
 
-            std::move(f).thenValue([work, this, req](bool) mutable {
+            std::move(f).thenValue([work, this, req](auto&&) mutable {
                 ++work->available_qs;
                 ++work->nios_completed;
                 delete req;
@@ -209,7 +209,7 @@ public:
                     issue_rw_io(work);
                 } else if (work->nios_completed.load() == work->nios_issued.load()) {
                     LOGINFO("IOs completed (total_excluding_preload={}) for this thread", work->nios_completed.load());
-                    work->rw_completion.setValue(true);
+                    work->rw_completion.setValue();
                 }
             });
         }
@@ -249,7 +249,7 @@ public:
                 LOGTRACE("Preload offset={}", offset);
                 m_iodev->drive_interface()
                     ->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset)
-                    .thenValue([work, this, req, &q_cv](auto) {
+                    .thenValue([work, this, req, &q_cv](auto&&) {
                         ++work->available_qs;
                         ++work->nios_completed;
                         delete req;
@@ -289,7 +289,7 @@ public:
                 std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
                 auto* req = new io_req();
-                folly::Future< bool > f = folly::Future< bool >::makeEmpty();
+                folly::Future< std::error_code > f = folly::Future< std::error_code >::makeEmpty();
                 if (io_pct(re) < s_read_pct) {
                     LOGTRACE("Read offset={}", offset);
                     f = m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size,
@@ -301,7 +301,7 @@ public:
                                                                 s_io_size, offset);
                 }
 
-                std::move(f).thenValue([work, this, req, &q_cv](bool) mutable {
+                std::move(f).thenValue([work, this, req, &q_cv](auto&&) mutable {
                     ++work->available_qs;
                     ++work->nios_completed;
                     delete req;
@@ -339,7 +339,7 @@ public:
 
             issue_preload(my_work);
 
-            my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
+            my_work->preload_completion.getFuture().thenValue([my_work, this](auto&&) {
                 my_work->reuse_ready();
                 issue_rw_io(my_work);
             });
@@ -391,7 +391,7 @@ public:
 
                                              issue_preload(my_work);
 
-                                             my_work->preload_completion.getFuture().thenValue([my_work, this](auto) {
+                                             my_work->preload_completion.getFuture().thenValue([my_work, this](auto&&) {
                                                  my_work->reuse_ready();
                                                  issue_rw_io(my_work);
                                              });

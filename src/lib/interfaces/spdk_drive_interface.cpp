@@ -421,23 +421,23 @@ static void complete_io(SpdkIocb* iocb, bool is_success) {
     iocb->owns_by_spdk = false;
     DriveInterface::decrement_outstanding_counter(iocb);
 
-    if (is_success) {
+    if (sisl_likely(is_success)) {
         iocb->result = 0;
-        std::visit(overloaded{[&](folly::Promise< bool >& p) { p.setValue(true); },
-                              [&](FiberManagerLib::Promise< bool >& p) { p.setValue(true); },
+        static std::error_code success;
+        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) { p.setValue(success); },
+                              [&](FiberManagerLib::Promise< std::error_code >& p) { p.setValue(success); },
                               [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
                    iocb->completion);
     } else {
         COUNTER_INCREMENT(iocb->iface->get_metrics(), completion_errors, 1);
         if (resubmit_io_on_err(iocb)) { return; }
+
         iocb->result = -1;
-        std::visit(
-            overloaded{[&](folly::Promise< bool >& p) { p.setException(std::ios_base::failure{"spdk io failed"}); },
-                       [&](FiberManagerLib::Promise< bool >& p) {
-                           p.setException(std::make_exception_ptr(std::ios_base::failure{"spdk io failed"}));
-                       },
-                       [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
-            iocb->completion);
+        static std::error_code io_error{EIO, std::generic_category()};
+        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) { p.setValue(io_error); },
+                              [&](FiberManagerLib::Promise< std::error_code >& p) { p.setValue(io_error); },
+                              [&](io_interface_comp_cb_t& cb) { cb(iocb->result); }},
+                   iocb->completion);
     }
 
     if (iomanager.get_io_wd()->is_on()) { iomanager.get_io_wd()->complete_io(iocb); }
@@ -455,7 +455,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool is_success, void* ct
     const auto flip_resubmit_cnt{flip::Flip::instance().get_test_flip< uint32_t >("read_write_resubmit_io")};
     if (flip_resubmit_cnt != boost::none && iocb->resubmit_cnt < flip_resubmit_cnt) { is_success = false; }
 #endif
-    if (is_success) {
+    if (sisl_likely(is_success)) {
         LOGDEBUGMOD(iomgr, "(bdev_io={}) iocb complete: mode=actual, {}", (void*)bdev_io, iocb->to_string());
     } else {
         LOGERRORMOD(iomgr, "(bdev_io={}) iocb failed with status [{}]: mode=actual, {}", (void*)bdev_io,
@@ -465,7 +465,7 @@ static void process_completions(spdk_bdev_io* bdev_io, bool is_success, void* ct
 }
 
 static void submit_io(void* b) {
-    SpdkIocb* iocb{static_cast< SpdkIocb* >(b)};
+    SpdkIocb* iocb = static_cast< SpdkIocb* >(b);
     int rc = 0;
     DEBUG_ASSERT_NOTNULL((void*)iocb->iodev->bdev_desc());
 
@@ -506,7 +506,7 @@ static void submit_io(void* b) {
     }
     spdk_set_thread(orig_thread);
 
-    if (rc != 0) {
+    if (sisl_unlikely(rc != 0)) {
         // adjust count since unsuccessful command
         if (rc == -ENOMEM) {
             DriveInterface::decrement_outstanding_counter(iocb);
@@ -582,130 +582,132 @@ void SpdkDriveInterface::submit_batch() {
     // it will be null operation if client calls this function without anything in s_batch_info_ptr
 }
 
-void SpdkDriveInterface::submit_sync_io(SpdkIocb* iocb) {
+std::error_code SpdkDriveInterface::submit_sync_io(SpdkIocb* iocb) {
     LOGDEBUGMOD(iomgr, "iocb submit: mode=sync, {}", iocb->to_string());
 
-    iocb->completion = std::move(FiberManagerLib::Promise< bool >{});
+    iocb->completion = std::move(FiberManagerLib::Promise< std::error_code >{});
     auto f = iocb->fiber_comp_promise().getFuture();
     submit_async_io(iocb, false /* part_of_batch */);
-    f.get();
+    return f.get();
 }
 
-folly::Future< bool > SpdkDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                                      bool part_of_batch) {
+folly::Future< std::error_code > SpdkDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size,
+                                                                 uint64_t offset, bool part_of_batch) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_data(const_cast< char* >(data));
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, part_of_batch);
     return ret;
 }
 
-folly::Future< bool > SpdkDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                                     bool part_of_batch) {
+folly::Future< std::error_code > SpdkDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
+                                                                uint64_t offset, bool part_of_batch) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_data(data);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, part_of_batch);
     return ret;
 }
 
-folly::Future< bool > SpdkDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                       uint64_t offset, bool part_of_batch) {
+folly::Future< std::error_code > SpdkDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                  uint32_t size, uint64_t offset, bool part_of_batch) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, part_of_batch);
     return ret;
 }
 
-folly::Future< bool > SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                      uint64_t offset, bool part_of_batch) {
+folly::Future< std::error_code > SpdkDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                 uint32_t size, uint64_t offset, bool part_of_batch) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, part_of_batch);
     return ret;
 }
 
-folly::Future< bool > SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                      bool part_of_batch) {
+folly::Future< std::error_code > SpdkDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                                 bool part_of_batch) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::UNMAP, size, offset);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, part_of_batch);
     return ret;
 }
 
-folly::Future< bool > SpdkDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+folly::Future< std::error_code > SpdkDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE_ZERO, size, offset);
     iocb->io_wait_entry.cb_fn = submit_io;
-    iocb->completion = std::move(folly::Promise< bool >{});
+    iocb->completion = std::move(folly::Promise< std::error_code >{});
 
     auto ret = iocb->folly_comp_promise().getFuture();
     submit_async_io(iocb, false);
     return ret;
 }
 
-void SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
+std::error_code SpdkDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
     DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_data(const_cast< char* >(data));
     iocb->io_wait_entry.cb_fn = submit_io;
-    submit_sync_io(iocb);
+    return submit_sync_io(iocb);
 }
 
-void SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+std::error_code SpdkDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                uint64_t offset) {
     // We should never do sync io on a tight loop thread
     DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
-    submit_sync_io(iocb);
+    return submit_sync_io(iocb);
 }
 
-void SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
+std::error_code SpdkDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
     DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_data(data);
     iocb->io_wait_entry.cb_fn = submit_io;
-    submit_sync_io(iocb);
+    return submit_sync_io(iocb);
 }
 
-void SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+std::error_code SpdkDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                               uint64_t offset) {
     // We should never do sync io on a tight loop thread
     DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::READ, size, offset);
     iocb->set_iovs(iov, iovcnt);
     iocb->io_wait_entry.cb_fn = submit_io;
-    submit_sync_io(iocb);
+    return submit_sync_io(iocb);
 }
 
-void SpdkDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+std::error_code SpdkDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
     // We should never do sync io on a tight loop thread
     DEBUG_ASSERT_EQ(iomanager.am_i_sync_io_capable(), true, "Sync io attempted not sync io capable thread");
 
     SpdkIocb* iocb = sisl::ObjectAllocator< SpdkIocb >::make_object(this, iodev, DriveOpType::WRITE_ZERO, size, offset);
     iocb->io_wait_entry.cb_fn = submit_io;
-    submit_sync_io(iocb);
+    return submit_sync_io(iocb);
 }
 
 size_t SpdkDriveInterface::get_dev_size(IODevice* iodev) {

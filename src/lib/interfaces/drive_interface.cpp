@@ -420,7 +420,7 @@ void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const
     }
 }
 
-void KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
     ssize_t written_size = 0;
     uint32_t resubmit_cnt = 0;
     while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
@@ -431,13 +431,17 @@ void KernelDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_
 #endif
         ++resubmit_cnt;
     }
-    if (written_size != size) {
-        folly::throwSystemError(fmt::format("Error during write offset={} write_size={} written_size={} errno={} fd={}",
-                                            offset, size, written_size, errno, iodev->fd()));
+    if (sisl_unlikely(written_size != size)) {
+        LOGWARN("Error during write offset={} write_size={} written_size={} errno={} fd={}", offset, size, written_size,
+                errno, iodev->fd());
+        return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
+    } else {
+        return std::error_code();
     }
 }
 
-void KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                  uint64_t offset) {
     ssize_t written_size = 0;
     uint32_t resubmit_cnt = 0;
     while ((written_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
@@ -448,14 +452,16 @@ void KernelDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int io
 #endif
         ++resubmit_cnt;
     }
-    if (written_size != size) {
-        folly::throwSystemError(
-            fmt::format("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset,
-                        size, written_size, iovcnt, errno, iodev->fd()));
+    if (sisl_unlikely(written_size != size)) {
+        LOGWARN("Error during writev offset={} write_size={} written_size={} iovcnt={} errno={} fd={}", offset, size,
+                written_size, iovcnt, errno, iodev->fd());
+        return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
+    } else {
+        return std::error_code();
     }
 }
 
-void KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
     ssize_t read_size = 0;
     uint32_t resubmit_cnt = 0;
     while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
@@ -466,13 +472,17 @@ void KernelDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size,
 #endif
         ++resubmit_cnt;
     }
-    if (read_size != size) {
-        folly::throwSystemError(fmt::format("Error during read offset={} to_read_size={} read_size={} errno={} fd={}",
-                                            offset, size, read_size, errno, iodev->fd()));
+    if (sisl_unlikely(read_size != size)) {
+        LOGWARN("Error during read offset={} to_read_size={} read_size={} errno={} fd={}", offset, size, read_size,
+                errno, iodev->fd());
+        return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
+    } else {
+        return std::error_code();
     }
 }
 
-void KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                 uint64_t offset) {
     ssize_t read_size = 0;
     uint32_t resubmit_cnt = 0;
     while ((read_size != size) && resubmit_cnt <= IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
@@ -483,23 +493,26 @@ void KernelDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iov
 #endif
         ++resubmit_cnt;
     }
-    if (read_size != size) {
-        folly::throwSystemError(
-            fmt::format("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset,
-                        size, read_size, iovcnt, errno, iodev->fd()));
-    }
-}
-
-void KernelDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
-    if ((iodev->dtype == drive_type::block_nvme) && (m_max_write_zeros != 0)) {
-        write_zero_ioctl(iodev, size, offset);
+    if (sisl_unlikely(read_size != size)) {
+        LOGWARN("Error during readv offset={} to_read_size={} read_size={} iovcnt={} errno={} fd={}", offset, size,
+                read_size, iovcnt, errno, iodev->fd());
+        return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
     } else {
-        write_zero_writev(iodev, size, offset);
+        return std::error_code{};
     }
 }
 
-void KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+    if ((iodev->dtype == drive_type::block_nvme) && (m_max_write_zeros != 0)) {
+        return write_zero_ioctl(iodev, size, offset);
+    } else {
+        return write_zero_writev(iodev, size, offset);
+    }
+}
+
+std::error_code KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size, uint64_t offset) {
     assert(m_max_write_zeros != 0);
+    std::error_code e;
 
 #ifdef __linux__
     uint64_t range[2];
@@ -509,23 +522,28 @@ void KernelDriveInterface::write_zero_ioctl(const IODevice* iodev, uint64_t size
         range[0] = offset;
         range[1] = this_size;
         ret = ioctl(iodev->fd(), BLKZEROOUT, range);
-        if (ret != 0) {
+        if (sisl_unlikely(ret != 0)) {
             LOGERROR("Error in writing zeros at offset={} size={} errno={}", offset, this_size, errno);
+            e = std::error_code(ret, std::generic_category());
             break;
         }
         offset += this_size;
         size -= this_size;
     }
 #endif
+
+    return e;
 }
 
-void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset) {
+std::error_code KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uint64_t offset) {
     if (size == 0 || !m_zero_buf) {
-        assert(false);
-        return;
+        DEBUG_ASSERT(false, "Invalid input size={} m_zero_buf={}", size, (void*)m_zero_buf.get());
+        return std::error_code(EINVAL, std::generic_category());
     }
 
     uint64_t total_sz_written = 0;
+    std::error_code ret;
+
     while (total_sz_written < size) {
         const uint64_t sz_to_write{(size - total_sz_written) > max_zero_write_size ? max_zero_write_size
                                                                                    : (size - total_sz_written)};
@@ -539,17 +557,17 @@ void KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_t size, uin
         }
 
         iov[iovcnt - 1].iov_len = sz_to_write - (max_buf_size * (iovcnt - 1));
-        try {
-            // returned written sz already asserted in sync_writev;
-            sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
-        } catch (std::exception& e) {
-            RELEASE_ASSERT(0, "Exception={} caught while doing sync_writev for devname={}, size={}", e.what(),
-                           iodev->devname, size);
+
+        // returned written sz already asserted in sync_writev;
+        ret = sync_writev(iodev, &(iov[0]), iovcnt, sz_to_write, offset + total_sz_written);
+        if (sisl_unlikely(ret)) {
+            LOGERROR("Error '{}' while doing sync_writev for devname={}, size={}", ret.message(), iodev->devname, size);
+            break;
         }
 
         total_sz_written += sz_to_write;
     }
-
-    assert(total_sz_written == size);
+    DEBUG_ASSERT_EQ(total_sz_written, size, "write zero couldn't completely zero out");
+    return ret;
 }
 } // namespace iomgr
