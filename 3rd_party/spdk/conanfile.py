@@ -50,6 +50,7 @@ class LibSPDKConan(ConanFile):
                 "--without-virtio",
                 "--with-fio={}/include/fio".format(self.deps_cpp_info["fio"].rootpath),
                 "--with-uring={}/include".format(self.deps_cpp_info["liburing"].rootpath),
+                "--without-isal",
                 "--disable-tests",
                 "--disable-unit-tests"]
         if not self.options.native_build:
