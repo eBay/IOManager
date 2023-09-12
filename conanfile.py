@@ -28,7 +28,7 @@ class IOMgrConan(ConanFile):
         'shared':       False,
         'fPIC':         True,
         'coverage':     False,
-        'grpc_support': True,
+        'grpc_support': False,
         'sanitize':     False,
         'spdk':         True,
         'testing':      'epoll_mode',

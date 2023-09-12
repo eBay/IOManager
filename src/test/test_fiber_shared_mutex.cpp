@@ -47,9 +47,7 @@ protected:
     iomgr::FiberManagerLib::shared_mutex m_cb_mtx;
     std::vector< iomgr::io_fiber_t > m_fibers;
     uint64_t m_count_per_fiber{0};
-    std::mutex m_test_done_mtx;
-    std::condition_variable m_test_done_cv;
-    uint32_t m_test_count{0};
+    std::atomic_uint32_t m_test_count{0};
 
 protected:
     void SetUp() override {
@@ -88,10 +86,7 @@ protected:
         }
 
         LOGINFO("Fiber completed {} of exclusive locks", m_count_per_fiber);
-        {
-            std::unique_lock lg(m_test_done_mtx);
-            if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
-        }
+        --m_test_count;
     }
 
     void all_reader() {
@@ -100,10 +95,7 @@ protected:
         }
 
         LOGINFO("Fiber completed {} of shared locks", m_count_per_fiber);
-        {
-            std::unique_lock lg(m_test_done_mtx);
-            if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
-        }
+        --m_test_count;
     }
 
     void random_reader_writer() {
@@ -124,10 +116,7 @@ protected:
         }
 
         LOGINFO("Fiber completed shared_locks={} exclusive_locks={}", read_count, write_count);
-        {
-            std::unique_lock lg(m_test_done_mtx);
-            if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
-        }
+        --m_test_count;
     }
 
     void write_once() {
@@ -145,26 +134,27 @@ protected:
 };
 
 TEST_F(SharedMutexTest, single_writer_multiple_readers) {
-    iomanager.run_on_forget(m_fibers[0], [this]() { all_writer(); });
+    auto e = folly::QueuedImmediateExecutor();
+    auto calls = std::vector< folly::SemiFuture< folly::Unit > >();
+    calls.push_back(
+        folly::makeSemiFuture().via(iomanager.fiberExecutor(m_fibers[0])).thenValue([this](auto) { all_writer(); }));
     for (auto it = m_fibers.begin() + 1; it < m_fibers.end(); ++it) {
-        iomanager.run_on_forget(*it, [this]() { all_reader(); });
+        calls.push_back(
+            folly::makeSemiFuture().via(iomanager.fiberExecutor(*it)).thenValue([this](auto) { all_reader(); }));
     }
-
-    {
-        std::unique_lock< std::mutex > lk(m_test_done_mtx);
-        m_test_done_cv.wait(lk, [&]() { return m_test_count == 0; });
-    }
+    folly::collectAll(calls).via(&e).get();
+    EXPECT_EQ(0, m_test_count.load());
 }
 
 TEST_F(SharedMutexTest, random_reader_writers) {
+    auto e = folly::QueuedImmediateExecutor();
+    auto calls = std::vector< folly::SemiFuture< folly::Unit > >();
     for (const auto& f : m_fibers) {
-        iomanager.run_on_forget(f, [this]() { random_reader_writer(); });
+        calls.push_back(
+            folly::makeSemiFuture().via(iomanager.fiberExecutor(f)).thenValue([this](auto) { all_reader(); }));
     }
-
-    {
-        std::unique_lock< std::mutex > lk(m_test_done_mtx);
-        m_test_done_cv.wait(lk, [&]() { return m_test_count == 0; });
-    }
+    folly::collectAll(calls).via(&e).get();
+    EXPECT_EQ(0, m_test_count.load());
 }
 
 int main(int argc, char* argv[]) {

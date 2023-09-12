@@ -222,6 +222,7 @@ void IOManager::stop() {
         // m_default_grpc_iface.reset();
         m_drive_ifaces.clear();
         m_iface_list.clear();
+        m_fiber_executors.clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
     assert(get_state() == iomgr_state::stopped);
 
@@ -314,6 +315,11 @@ void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
     }
 }
 
+folly::IOManagerExecutor* IOManager::fiberExecutor(io_fiber_t fiber) {
+    std::shared_lock lg(m_iface_list_mtx);
+    return &m_fiber_executors.at(fiber);
+}
+
 void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name,
                              const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier) {
     loop_type_t ltype = loop_type;
@@ -336,6 +342,11 @@ void IOManager::reactor_started(shared< IOReactor > reactor) {
     m_yet_to_stop_nreactors.increment();
     if (reactor->is_worker()) {
         m_worker_reactors[reactor->m_worker_slot_num] = reactor;
+        for (auto const& fiber : reactor->sync_io_capable_fibers()) {
+            auto lg = std::scoped_lock(m_iface_list_mtx);
+            auto [_, happened] = m_fiber_executors.emplace(fiber, folly::IOManagerExecutor(fiber));
+            RELEASE_ASSERT(happened, "Failed to Bind folly::Executor!");
+        }
         reactor->notify_thread_state(true);
 
         // All iomgr created reactors are initialized, move iomgr to sys init (next phase of start)
@@ -374,6 +385,15 @@ int IOManager::run_on_forget(io_fiber_t fiber, spdk_msg_signature_t fn, void* co
     return 1;
 }
 
+} // namespace iomgr
+
+namespace folly {
+void IOManagerExecutor::add(Func fn) {
+    iomanager.send_msg(_fiber, iomgr::iomgr_msg::create(std::move(fn).asStdFunction()));
+}
+} // namespace folly
+
+namespace iomgr {
 int IOManager::send_msg(io_fiber_t fiber, iomgr_msg* msg) {
     int ret{0};
     if (fiber->spdk_thr) {

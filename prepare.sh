@@ -10,8 +10,8 @@ echo -n "dpdk."
 conan export 3rd_party/dpdk
 echo -n "fio."
 conan export 3rd_party/fio
-echo -n "gprc_internal."
-conan export 3rd_party/grpc_internal
+#echo -n "gprc_internal."
+#conan export 3rd_party/grpc_internal
 echo -n "spdk."
 conan export 3rd_party/spdk
 

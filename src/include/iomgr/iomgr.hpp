@@ -27,6 +27,7 @@
 
 #include <semver200.h>
 #include <boost/fiber/all.hpp>
+#include <folly/Executor.h>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
@@ -43,6 +44,25 @@
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/io_device.hpp>
 #include <iomgr/fiber_lib.hpp>
+
+namespace folly {
+
+/**
+ * @class folly::IOManagerExecutor
+ *
+ * A folly::Executor for which to call `.via()` with when returning a folly::SemiFuture
+ * for runtime erasure.
+ *
+ **/
+class IOManagerExecutor : public Executor {
+    iomgr::io_fiber_t _fiber;
+
+public:
+    IOManagerExecutor(iomgr::io_fiber_t fiber) : _fiber(fiber) {}
+    void add(Func fn) override;
+};
+
+} // namespace folly
 
 namespace iomgr {
 
@@ -98,6 +118,8 @@ public:
     friend class SpdkDriveInterface;
     friend class IOManagerSpdkImpl;
     friend class IOManagerEpollImpl;
+
+    friend void folly::IOManagerExecutor::add(folly::Func);
 
     static IOManager& instance() {
         static IOManager inst;
@@ -253,6 +275,8 @@ public:
         }
     }
 
+    folly::IOManagerExecutor* fiberExecutor(io_fiber_t fiber);
+
     ///////////////////////////// Access related methods /////////////////////////////
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
@@ -371,6 +395,7 @@ private:
 
     std::shared_mutex m_iface_list_mtx;
     std::vector< std::shared_ptr< IOInterface > > m_iface_list;
+    std::map< io_fiber_t, folly::IOManagerExecutor > m_fiber_executors;
     std::vector< std::shared_ptr< DriveInterface > > m_drive_ifaces;
 
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
