@@ -93,15 +93,15 @@ pipeline {
                         failure { script { failed_pkg = "Homestore" } }
                     }
                 }
-                stage('HomeReplication') {
+                stage('HomeObject') {
                     steps {
                         script {
-                            def hrepl_res = build job: "HomeReplication/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
+                            def hrepl_res = build job: "HomeObject/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
                             built_chain = "${built_chain}" + ", " + "$hrepl_res.buildVariables.pkg_version"
                         }
                     }
                     post {
-                        failure { script { failed_pkg = "HomeReplication" } }
+                        failure { script { failed_pkg = "HomeObject" } }
                     }
                 }
             }
