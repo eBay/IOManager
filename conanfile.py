@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "10.0.3"
+    version = "10.0.4"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -50,7 +50,7 @@ class IOMgrConan(ConanFile):
 
     def build_requirements(self):
         self.build_requires("gtest/1.14.0")
-        self.build_requires("cpr/1.10.4")
+        self.build_requires("cpr/1.10.5")
 
     def requirements(self):
         self.requires("sisl/[~=10, include_prerelease=True]@oss/master")
