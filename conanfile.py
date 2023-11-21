@@ -60,7 +60,7 @@ class IOMgrConan(ConanFile):
         if self.options.grpc_support:
             self.requires("grpc/1.50.1")
             self.requires("grpc_internal/1.48.0")
-        self.requires("liburing/2.4")
+        self.requires("liburing/2.1")
         self.requires("libevent/2.1.12")
         if self.options.spdk:
             self.requires("spdk/21.07.y")
