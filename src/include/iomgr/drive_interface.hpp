@@ -24,7 +24,9 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
+#define __kernel_timespec linux_timespec
 #include <folly/futures/Future.h>
+#undef __kernel_timespec
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/fiber_lib.hpp>
