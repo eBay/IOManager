@@ -24,7 +24,13 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
+#ifndef NDEBUG
+#define __kernel_timespec linux_timespec
+#endif
 #include <folly/futures/Future.h>
+#ifndef NDEBUG
+#undef __kernel_timespec
+#endif
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/fiber_lib.hpp>
