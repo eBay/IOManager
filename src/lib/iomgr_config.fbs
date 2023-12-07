@@ -27,6 +27,8 @@ table DriveInterface {
                                                            // TODO: this value should be set by consumer of iomgr, which should be (max_io_size / physical_page_sz) in worst case
 
     max_resubmit_cnt: uint32 = 3 (hotswap); // max resubmit cnt of io in case of error 
+
+    disable_io_uring: bool = false; // flag to not use io uring even if the env supports it
 }
 
 table PoolEntry {

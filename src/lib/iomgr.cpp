@@ -126,7 +126,8 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     // Do Poller specific pre interface initialization
     m_impl->pre_interface_init();
     bool new_interface_supported = false;
-    m_is_uring_capable = check_uring_capability(new_interface_supported);
+    m_is_uring_capable =
+        !(IM_DYNAMIC_CONFIG(drive.disable_io_uring)) && check_uring_capability(new_interface_supported);
     LOGINFOMOD(iomgr, "System has uring_capability={}", m_is_uring_capable);
 
     // Create all in-built interfaces here
