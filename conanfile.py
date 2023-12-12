@@ -56,7 +56,7 @@ class IOMgrConan(ConanFile):
         self.requires("sisl/[~=10, include_prerelease=True]@oss/master")
 
         self.requires("boost/1.82.0")
-        self.requires("folly/nu2.2022.01.31.00")
+        self.requires("folly/nu2.2023.12.11.00")
         if self.options.grpc_support:
             self.requires("grpc/1.50.1")
             self.requires("grpc_internal/1.48.0")
