@@ -49,7 +49,7 @@ static bool check_uring_capability(bool& new_interface_supported) {
             }
         }
 
-        free(probe);
+        io_uring_free_probe(probe);
     }
 
 exit:
