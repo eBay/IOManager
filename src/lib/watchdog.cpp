@@ -3,6 +3,8 @@
 #include "watchdog.hpp"
 #include "iomgr_config.hpp"
 
+SISL_LOGGING_DEF(io_wd)
+
 namespace iomgr {
 IOWatchDog::IOWatchDog() {
     m_wd_on = IM_DYNAMIC_CONFIG(drive.io_watchdog_timer_on);
