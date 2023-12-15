@@ -54,7 +54,7 @@ class IOMgrConan(ConanFile):
         self.build_requires("cpr/1.10.4")
 
     def requirements(self):
-        self.requires("sisl/[~=11, include_prerelease=True]@oss/master")
+        self.requires("sisl/[>=10.3]")
 
         if self.options.grpc_support:
             self.requires("grpc/1.50.1")

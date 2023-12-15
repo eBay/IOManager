@@ -3,7 +3,8 @@
 #include "watchdog.hpp"
 #include "iomgr_config.hpp"
 
-SISL_LOGGING_DEF(io_wd)
+// SISL v11 change
+//SISL_LOGGING_DEF(io_wd)
 
 namespace iomgr {
 IOWatchDog::IOWatchDog() {
