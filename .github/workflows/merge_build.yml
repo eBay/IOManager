@@ -1,4 +1,4 @@
-name: IOManager Build
+name: IOManager Merge Build
 
 on:
   workflow_dispatch:
