@@ -69,7 +69,8 @@ SISL_OPTION_GROUP(iomgr,
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
                    ::cxxopts::value< uint32_t >(), "count"))
 
-SISL_LOGGING_DEF(iomgr)
+// SISL v11 change
+//SISL_LOGGING_DEF(iomgr)
 
 namespace iomgr {
 

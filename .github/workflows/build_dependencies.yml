@@ -109,7 +109,7 @@ jobs:
       with:
         repository: eBay/sisl
         path: import/sisl
-        ref: master
+        ref: stable/v10.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load Sisl Cache
@@ -117,7 +117,7 @@ jobs:
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: Sisl10Deps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
@@ -130,7 +130,7 @@ jobs:
     - name: Prepare Recipes
       run: |
         ./prepare.sh
-        conan export import/sisl oss/master
+        conan export import/sisl
         cached_pkgs=$(ls -1d ~/.conan/data/*/*/*/*/package | sed 's,.*data/,,' | cut -d'/' -f1,2 | paste -sd',' - -)
         echo "::info:: Pre-cached: ${cached_pkgs}"
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
@@ -158,7 +158,7 @@ jobs:
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: Sisl10Deps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
