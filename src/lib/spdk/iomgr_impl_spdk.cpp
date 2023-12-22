@@ -26,7 +26,7 @@ extern "C" {
 }
 
 // SISL v11 change
-//SISL_LOGGING_DEF(spdk)
+SISL_LOGGING_DEF(spdk)
 
 namespace iomgr {
 bool IOManagerSpdkImpl::g_spdk_env_prepared{false};
