@@ -4,7 +4,7 @@
 #include "iomgr_config.hpp"
 
 // SISL v11 change
-//SISL_LOGGING_DEF(io_wd)
+SISL_LOGGING_DEF(io_wd)
 
 namespace iomgr {
 IOWatchDog::IOWatchDog() {
