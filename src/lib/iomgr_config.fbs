@@ -29,6 +29,8 @@ table DriveInterface {
     max_resubmit_cnt: uint32 = 3 (hotswap); // max resubmit cnt of io in case of error 
 
     disable_io_uring: bool = false; // flag to not use io uring even if the env supports it
+
+    uring_per_thread_qdepth: uint32 = 256;
 }
 
 table PoolEntry {
