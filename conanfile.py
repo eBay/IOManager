@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.0.1"
+    version = "11.0.2"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
