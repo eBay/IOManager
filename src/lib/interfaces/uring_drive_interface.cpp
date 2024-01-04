@@ -39,7 +39,7 @@ namespace iomgr {
 thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};
 
 uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) {
-    int ret = io_uring_queue_init(UringDriveInterface::per_thread_qdepth, &m_ring, 0);
+    int ret = io_uring_queue_init(IM_DYNAMIC_CONFIG(drive.uring_per_thread_qdepth), &m_ring, 0);
     if (ret) { folly::throwSystemError(fmt::format("Unable to create uring queue created ret={}", ret)); }
 
     int ev_fd = eventfd(0, EFD_NONBLOCK);
@@ -128,7 +128,7 @@ static void prep_sqe_from_iocb(drive_iocb* iocb, struct io_uring_sqe* sqe) {
 }
 
 bool uring_drive_channel::can_submit() const {
-    return (m_in_flight_ios + m_prepared_ios) <= UringDriveInterface::per_thread_qdepth;
+    return (m_in_flight_ios + m_prepared_ios) <= IM_DYNAMIC_CONFIG(drive.uring_per_thread_qdepth);
 }
 
 void uring_drive_channel::drain_waitq() {
