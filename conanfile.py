@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.7.6"
+    version = "8.7.7"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -58,7 +58,6 @@ class IOMgrConan(ConanFile):
         self.requires("spdk/21.07.y")
         self.requires("pistache/0.0.5")
         self.requires("zmarok-semver/1.1.0")
-        self.requires("libcurl/7.86.0")
 
         self.requires("flatbuffers/1.12.0", override=True)
         self.requires("openssl/1.1.1q", override=True)
