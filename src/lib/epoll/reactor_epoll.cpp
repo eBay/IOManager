@@ -54,18 +54,18 @@ void IOReactorEPoll::init_impl() {
     m_epollfd = epoll_create1(0);
     if (m_epollfd < 1) {
         assert(0);
-        REACTOR_LOG(ERROR, , , "epoll_create failed: {}", strerror(errno));
+        REACTOR_LOG(ERROR, "epoll_create failed: {}", strerror(errno));
         goto error;
     }
     std::atomic_thread_fence(std::memory_order_acquire);
 
-    REACTOR_LOG(TRACE, , , "EPoll created: {}", m_epollfd);
+    REACTOR_LOG(TRACE, "EPoll created: {}", m_epollfd);
 
     // Create a message fd and add it to tht epollset
     evfd = eventfd(0, EFD_NONBLOCK);
     if (evfd == -1) {
         assert(0);
-        REACTOR_LOG(ERROR, , , "Unable to open the eventfd, marking this as non-io reactor");
+        REACTOR_LOG(ERROR, "Unable to open the eventfd, marking this as non-io reactor");
         goto error;
     }
     m_msg_iodev = iomanager.generic_interface()->make_io_device(backing_dev_t{evfd}, EPOLLIN, 1 /* pri */, nullptr,
@@ -103,6 +103,9 @@ void IOReactorEPoll::stop_impl() {
         iomgr_msg::free(msg);
     }
     if (dropped) { LOGINFO("Exiting the reactor with {} messages yet to handle, dropping them", dropped); }
+
+    // Now clear all the iodevs which were removed
+    m_removed_iodevs.clear();
 }
 
 void IOReactorEPoll::listen() {
@@ -117,27 +120,34 @@ void IOReactorEPoll::listen() {
         idle_time_wakeup_poller();
         return;
     } else if (num_fds < 0) {
-        REACTOR_LOG(ERROR, , , "epoll wait failed: {} strerror {}", errno, strerror(errno));
+        REACTOR_LOG(ERROR, "epoll wait failed: {} strerror {}", errno, strerror(errno));
         return;
     }
     m_metrics->fds_on_event_count += num_fds;
 
     // Next sort the events based on priority and handle them in that order
     std::sort(events.begin(), (events.begin() + num_fds), compare_priority);
-    for (auto i = 0; i < num_fds; ++i) {
+
+    m_event_processing_phase = true;
+    for (auto i = 0; (i < num_fds) && (m_keep_running); ++i) {
         auto& e = events[i];
         if (e.data.ptr == (void*)m_msg_iodev.get()) {
-            REACTOR_LOG(TRACE, , , "Processing event on msg fd: {}", m_msg_iodev->fd());
+            REACTOR_LOG(TRACE, "Processing event on msg fd: {}", m_msg_iodev->fd());
             ++m_metrics->msg_event_wakeup_count;
             on_msg_fd_notification();
 
             // It is possible for io thread status by the msg processor. Catch at the exit and return
             if (!is_io_reactor()) {
-                REACTOR_LOG(INFO, , , "listen will exit because this is no longer an io reactor");
+                REACTOR_LOG(INFO, "listen will exit because this is no longer an io reactor");
                 return;
             }
         } else {
             IODevice* iodev = (IODevice*)e.data.ptr;
+            if (!m_removed_iodevs.empty() && (m_removed_iodevs.find(iodev) != m_removed_iodevs.cend())) {
+                REACTOR_LOG(DEBUG, "Skipping event on fd {} as it is has been removed", iodev->fd());
+                continue;
+            }
+
             if (iodev->tinfo) {
                 ++m_metrics->timer_wakeup_count;
                 timer_epoll::on_timer_fd_notification(iodev);
@@ -146,6 +156,10 @@ void IOReactorEPoll::listen() {
             }
         }
     }
+    m_event_processing_phase = false;
+
+    // Now clear all the iodevs which were removed, thus free IODev pointer
+    if (!m_removed_iodevs.empty()) { m_removed_iodevs.clear(); }
 }
 
 int IOReactorEPoll::add_iodev_impl(const io_device_ptr& iodev) {
@@ -157,7 +171,7 @@ int IOReactorEPoll::add_iodev_impl(const io_device_ptr& iodev) {
                   strerror(errno));
         return -1;
     }
-    REACTOR_LOG(DEBUG, , , "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(), m_epollfd,
+    REACTOR_LOG(DEBUG, "Added fd {} to this io thread's epoll fd {}, data.ptr={}", iodev->fd(), m_epollfd,
                 (void*)ev.data.ptr);
     return 0;
 }
@@ -168,18 +182,24 @@ int IOReactorEPoll::remove_iodev_impl(const io_device_ptr& iodev) {
                   strerror(errno));
         return -1;
     }
-    REACTOR_LOG(DEBUG, , , "Removed fd {} from this io thread's epoll fd {}", iodev->fd(), m_epollfd);
+    REACTOR_LOG(DEBUG, "Removed fd {} from this io thread's epoll fd {}", iodev->fd(), m_epollfd);
+
+    // If we are processing batch of events and on first event, if we remove the iodev->fd from epoll and free the
+    // iodev, it is possible that next event could target the same iodev before epoll got a chance to process the
+    // epoll_ctl. In that case, listen() will refer to iodev, which could have been freed by the remove_iodev() caller
+    // and can cause use-after-free. Thus we are saving the iodev until we are done with the batch of events.
+    if (m_event_processing_phase) { m_removed_iodevs.insert(std::make_pair(iodev.get(), iodev)); }
     return 0;
 }
 
 void IOReactorEPoll::put_msg(iomgr_msg* msg) {
     if (!m_msg_iodev) {
-        REACTOR_LOG(INFO, , , "Received msg after reactor is shutdown, ignoring");
+        REACTOR_LOG(INFO, "Received msg after reactor is shutdown, ignoring");
         iomgr_msg::free(msg);
         return;
     }
 
-    REACTOR_LOG(DEBUG, , , "Put msg to its msg fd = {}, ptr = {}", m_msg_iodev->fd(), (void*)m_msg_iodev.get());
+    REACTOR_LOG(DEBUG, "Put msg to its msg fd = {}, ptr = {}", m_msg_iodev->fd(), (void*)m_msg_iodev.get());
 
     m_msg_q.enqueue(msg);
 
@@ -217,7 +237,7 @@ void IOReactorEPoll::process_messages() {
         }
 
         if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
-            REACTOR_LOG(DEBUG, , , "Reached max msg_count batch {}, yielding and will process again", msg_count);
+            REACTOR_LOG(DEBUG, "Reached max msg_count batch {}, yielding and will process again", msg_count);
             const uint64_t temp{1};
             while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {
                 ++m_metrics->msg_iodev_busy_count;
@@ -237,7 +257,7 @@ void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
     ++m_metrics->outstanding_ops;
     ++m_metrics->io_event_wakeup_count;
 
-    REACTOR_LOG(TRACE, , , "Processing event on user iodev: {}", iodev->dev_id());
+    REACTOR_LOG(TRACE, "Processing event on user iodev: {}", iodev->dev_id());
     iodev->cb(iodev, iodev->cookie, event);
 
     --m_metrics->outstanding_ops;

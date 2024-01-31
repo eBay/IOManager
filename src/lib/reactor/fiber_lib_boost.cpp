@@ -25,6 +25,11 @@ void FiberManagerLib::set_this_iofiber(IOFiber* f) {
 
 IOFiber* FiberManagerLib::iofiber_self() const { return &(*m_this_fiber); };
 
+uint32_t FiberManagerLib::iofiber_self_ordinal() const {
+    auto f = iofiber_self();
+    return f ? f->ordinal : 0;
+}
+
 void FiberManagerLib::yield() { boost::this_fiber::yield(); }
 
 void FiberManagerLib::yield_main() { boost::this_fiber::yield(); }

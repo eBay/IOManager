@@ -30,16 +30,14 @@ struct spdk_nvmf_qpair;
 struct spdk_bdev;
 
 namespace iomgr {
-#define REACTOR_LOG(level, mod, thr_addr, __l, ...)                                                                    \
+#define REACTOR_LOG(level, __l, ...)                                                                                   \
     {                                                                                                                  \
         LOG##level##MOD_FMT(                                                                                           \
-            BOOST_PP_IF(BOOST_PP_IS_EMPTY(mod), base, mod),                                                            \
-            ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                                   \
+            iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                            \
                 fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[{}:{}] "},                                      \
                                 fmt::make_format_args(file_name(__FILE__), __LINE__));                                 \
-                fmt::vformat_to(                                                                                       \
-                    fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                                         \
-                    fmt::make_format_args(m_reactor_num, (BOOST_PP_IF(BOOST_PP_IS_EMPTY(thr_addr), "*", thr_addr))));  \
+                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                             \
+                                fmt::make_format_args(m_reactor_num, m_fiber_mgr_lib->iofiber_self_ordinal()));        \
                 fmt::vformat_to(fmt::appender(buf), fmt::string_view{__m}, fmt::make_format_args(args...));            \
                 return true;                                                                                           \
             }),                                                                                                        \
