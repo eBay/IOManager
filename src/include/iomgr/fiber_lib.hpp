@@ -84,6 +84,7 @@ public:
     std::unique_ptr< IOFiber > create_iofiber(IOReactor* reactor, uint32_t fiber_ordinal);
     void start_iofiber(IOFiber* f, const std::function< void(IOFiber*) >& channel_loop);
     IOFiber* iofiber_self() const;
+    uint32_t iofiber_self_ordinal() const;
     void set_this_iofiber(IOFiber* f);
     void start_io_fiber();
     void yield();
@@ -203,6 +204,7 @@ public:
     std::unique_ptr< IOFiber > create_iofiber(IOReactor* reactor, uint32_t fiber_ordinal);
     void start_iofiber(IOFiber* f, const std::function< void(IOFiber*) >& channel_loop);
     IOFiber* iofiber_self() const;
+    uint32_t iofiber_self_ordinal() const;
     void set_this_iofiber(IOFiber* f);
     void start_io_fiber();
     void yield();
