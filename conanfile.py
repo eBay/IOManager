@@ -56,7 +56,7 @@ class IOMgrConan(ConanFile):
     def requirements(self):
         self.requires("sisl/[~=11, include_prerelease=True]@oss/master")
         if self.options.grpc_support:
-            self.requires("grpc/1.50.1")
+            self.requires("grpc/[>=1.50]")
             self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.4")
         if self.options.spdk:
@@ -64,6 +64,8 @@ class IOMgrConan(ConanFile):
         self.requires("pistache/0.0.5")
         self.requires("openssl/3.1.3", override=True)
         self.requires("libcurl/8.4.0", override=True)
+        self.requires("lz4/1.9.4", override=True)
+        self.requires("zstd/1.5.5", override=True)
 
     def build(self):
         cmake = CMake(self)
