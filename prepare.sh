@@ -13,6 +13,6 @@ conan export 3rd_party/fio
 echo -n "gprc_internal."
 conan export 3rd_party/grpc_internal
 echo -n "spdk."
-conan export 3rd_party/spdk
+conan export 3rd_party/spdk spdk/21.07.y@
 
 echo "done."
