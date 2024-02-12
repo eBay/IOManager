@@ -17,6 +17,7 @@
 #include "iomgr_config.hpp"
 
 #include <sisl/sobject/sobject.hpp>
+#include <sisl/grpc/rpc_client.hpp>
 
 namespace iomgr {
 
@@ -28,6 +29,7 @@ IOEnvironment::IOEnvironment() {
 IOEnvironment::~IOEnvironment() {
     if (m_http_server) { m_http_server->stop(); }
     if (m_file_watcher) { m_file_watcher->stop(); }
+    sisl::GrpcAsyncClientWorker::shutdown_all();
 }
 
 void IOEnvironment::restart_http_server(std::string const& ssl_cert, std::string const& ssl_key) {
@@ -72,6 +74,11 @@ IOEnvironment& IOEnvironment::with_token_client(std::shared_ptr< sisl::TokenClie
 IOEnvironment& IOEnvironment::with_object_manager() {
     if (!m_object_mgr) { m_object_mgr = std::make_shared< sisl::sobject_manager >(); }
 
+    return get_instance();
+}
+
+IOEnvironment& IOEnvironment::with_grpc_client_workers(std::string const& name, uint32_t const num_workers) {
+    sisl::GrpcAsyncClientWorker::create_worker(name, num_workers);
     return get_instance();
 }
 
