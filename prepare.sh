@@ -11,6 +11,6 @@ conan export 3rd_party/dpdk dpdk/21.05@
 echo -n "fio."
 conan export 3rd_party/fio
 echo -n "spdk."
-conan export 3rd_party/spdk
+conan export 3rd_party/spdk spdk/21.07.y@
 
 echo "done."
