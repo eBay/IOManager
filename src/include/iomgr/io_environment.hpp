@@ -47,6 +47,7 @@ public:
     IOEnvironment& with_token_verifier(std::shared_ptr< sisl::TokenVerifier >&& token_verifier);
     IOEnvironment& with_token_client(std::shared_ptr< sisl::TokenClient >&& token_client);
     IOEnvironment& with_object_manager();
+    IOEnvironment& with_grpc_client_workers(std::string const& name, uint32_t const num_workers);
 
     std::shared_ptr< iomgr::HttpServer > get_http_server() { return m_http_server; }
     std::shared_ptr< sisl::TokenVerifier > get_token_verifier() { return m_token_verifier; }
