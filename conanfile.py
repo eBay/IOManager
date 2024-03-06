@@ -1,8 +1,11 @@
 from conan import ConanFile
-from conan.tools.files import copy, get, save, load
-from conans import CMake
+from conan.errors import ConanInvalidConfiguration
+from conan.tools.build import check_min_cppstd
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
+from conan.tools.files import copy
 from os.path import join, exists
-import json
+
+required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
@@ -20,10 +23,10 @@ class IOMgrConan(ConanFile):
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
-        "grpc_support": ['True', 'False'],
         "sanitize": ['True', 'False'],
-        "spdk": ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
+        "grpc_support": ['True', 'False'],
+        "spdk": ['True', 'False'],
         "fiber_impl" : ['boost', 'folly']
         }
     default_options = {
@@ -32,36 +35,42 @@ class IOMgrConan(ConanFile):
         'coverage':     False,
         'grpc_support': False,
         'sanitize':     False,
-        'spdk':         True,
         'testing':      'epoll_mode',
+        'spdk':         True,
         'fiber_impl':   'boost',
     }
 
-    generators = "cmake", "cmake_find_package"
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
+
+    def _min_cppstd(self):
+        return 20
+
+    def validate(self):
+        if self.settings.compiler.get_safe("cppstd"):
+            check_min_cppstd(self, self._min_cppstd())
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
+            self.options.rm_safe("fPIC")
         if self.settings.build_type == "Debug":
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
-            if self.options.testing == 'off':
+            if self.conf.get("tools.build:skip_test", default=False):
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
 
     def build_requirements(self):
-        self.build_requires("gtest/1.14.0")
-        self.build_requires("cpr/1.10.4")
+        self.test_requires("gtest/1.14.0")
+        self.test_requires("cpr/1.10.4")
 
     def requirements(self):
-        self.requires("sisl/[~12.2, include_prerelease=True]@oss/master")
+        self.requires("sisl/[~12.2, include_prerelease=True]@oss/master", transitive_headers=True)
         if self.options.grpc_support:
             self.requires("grpc/[>=1.50]")
-        self.requires("liburing/2.4")
+        self.requires("liburing/2.4", transitive_headers=True)
         if self.options.spdk:
-            self.requires("spdk/21.07.y")
-        self.requires("pistache/0.0.5")
+            self.requires("spdk/21.07.y", transitive_headers=True)
+        self.requires("pistache/0.0.5", transitive_headers=True)
         self.requires("openssl/3.1.3", override=True)
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
@@ -83,36 +92,39 @@ class IOMgrConan(ConanFile):
         if self.options.grpc_support:
             self._download_grpc(self.source_folder)
 
+    def layout(self):
+        cmake_layout(self)
+
     def generate(self):
         if self.options.grpc_support:
             self._download_grpc(self.source_folder)
+        # This generates "conan_toolchain.cmake" in self.generators_folder
+        tc = CMakeToolchain(self)
+        tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
+        tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
+        tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
+        tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
+        tc.variables["BUILD_COVERAGE"] = "OFF"
+        tc.variables["CMAKE_TEST_TARGET"] = self.options.testing
+        tc.preprocessor_definitions["PACKAGE_VERSION"] = self.version
+        tc.preprocessor_definitions["PACKAGE_NAME"] = self.name
+        if self.settings.build_type == "Debug":
+            if self.options.get_safe("coverage"):
+                tc.variables['BUILD_COVERAGE'] = 'ON'
+            elif self.options.get_safe("sanitize"):
+                tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
+        tc.generate()
+
+        # This generates "boost-config.cmake" and "grpc-config.cmake" etc in self.generators_folder
+        deps = CMakeDeps(self)
+        deps.generate()
 
     def build(self):
         cmake = CMake(self)
-        definitions = {'CMAKE_TEST_TARGET': self.options.testing,
-                       'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
-                       'CONAN_CMAKE_SILENT_OUTPUT': 'ON',
-                       'MEMORY_SANITIZER_ON': 'OFF',
-                       'BUILD_TESTING': 'OFF',
-        }
-        if self.options.testing:
-            definitions['BUILD_TESTING'] = 'ON'
-
-        if self.settings.build_type == "Debug":
-            if self.options.sanitize:
-                definitions['MEMORY_SANITIZER_ON'] = 'ON'
-        if self.options.coverage:
-            definitions['BUILD_COVERAGE'] = 'ON'
-
-        if self.options.fiber_impl == "boost":
-            definitions['FIBER_IMPL'] = 'boost'
-        else:
-            definitions['FIBER_IMPL'] = 'folly'
-
-        cmake.configure(defs=definitions)
+        cmake.configure()
         cmake.build()
-        if self.options.testing:
-            cmake.test(output_on_failure=True)
+        if not self.conf.get("tools.build:skip_test", default=False):
+            cmake.test()
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
