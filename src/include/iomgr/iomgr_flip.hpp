@@ -40,8 +40,14 @@ public:
         };
 
         std::unique_lock< std::mutex > lk(m_mutex);
-        *thdl = IOManager::instance().schedule_thread_timer(delay_us.total_nanoseconds(), false /* recurring */,
-                                                            nullptr /* cookie */, cb);
+        if (IOManager::instance().am_i_io_reactor()) {
+            *thdl = IOManager::instance().schedule_thread_timer(delay_us.total_nanoseconds(), false /* recurring */,
+                                                                nullptr /* cookie */, cb);
+        } else {
+            *thdl =
+                IOManager::instance().schedule_global_timer(delay_us.total_nanoseconds(), false /* recurring */,
+                                                            nullptr /* cookie */, iomgr::reactor_regex::all_worker, cb);
+        }
         m_timer_instances.insert(std::make_pair(timer_name, thdl));
     }
 

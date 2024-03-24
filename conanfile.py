@@ -5,7 +5,7 @@ from conans import CMake
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.1.1"
+    version = "11.2.1"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -54,7 +54,7 @@ class IOMgrConan(ConanFile):
         self.build_requires("cpr/1.10.4")
 
     def requirements(self):
-        self.requires("sisl/[~=11, include_prerelease=True]@oss/master")
+        self.requires("sisl/[~=12, include_prerelease=True]@oss/master")
         if self.options.grpc_support:
             self.requires("grpc/[>=1.50]")
             self.requires("grpc_internal/1.48.0")
