@@ -1,11 +1,12 @@
-from os.path import join
 from conan import ConanFile
-from conan.tools.files import copy
+from conan.tools.files import copy, get, save, load
 from conans import CMake
+from os.path import join, exists
+import json
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.2.1"
+    version = "11.2.2"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -29,7 +30,7 @@ class IOMgrConan(ConanFile):
         'shared':       False,
         'fPIC':         True,
         'coverage':     False,
-        'grpc_support': True,
+        'grpc_support': False,
         'sanitize':     False,
         'spdk':         True,
         'testing':      'epoll_mode',
@@ -57,7 +58,6 @@ class IOMgrConan(ConanFile):
         self.requires("sisl/[~=12, include_prerelease=True]@oss/master")
         if self.options.grpc_support:
             self.requires("grpc/[>=1.50]")
-            self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.4")
         if self.options.spdk:
             self.requires("spdk/21.07.y")
@@ -66,6 +66,26 @@ class IOMgrConan(ConanFile):
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
         self.requires("zstd/1.5.5", override=True)
+
+    def _download_grpc(self, folder):
+        ref = self.dependencies['grpc'].ref.version
+        source_info = self.dependencies['grpc'].conan_data["sources"][f"{ref}"]
+        current_info_str = json.dumps(source_info, sort_keys=True)
+
+        touch_file_path = join(folder, "grpc_download")
+
+        if exists(touch_file_path) == False or load(self, touch_file_path) != current_info_str:
+            print("-------------- downloading grpc sources ---------")
+            get(self, **source_info, destination=join(folder, "grpc_internal"), strip_root=True)
+            save(self, touch_file_path, current_info_str)
+
+    def source(self):
+        if self.options.grpc_support:
+            self._download_grpc(self.source_folder)
+
+    def generate(self):
+        if self.options.grpc_support:
+            self._download_grpc(self.source_folder)
 
     def build(self):
         cmake = CMake(self)
