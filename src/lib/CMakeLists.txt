@@ -10,7 +10,6 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_VERSION=\\\"${PACKAGE_REVISIO
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\"")
 
 find_package(flatbuffers REQUIRED)
-find_package(grpc_internal QUIET)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
 find_package(Pistache REQUIRED)
