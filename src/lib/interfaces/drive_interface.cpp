@@ -433,7 +433,7 @@ std::error_code KernelDriveInterface::sync_write(IODevice* iodev, const char* da
         ++resubmit_cnt;
     }
     if (sisl_unlikely(written_size != size)) {
-        LOGWARN("Error during write offset={} write_size={} written_size={} errno={} fd={}", offset, size, written_size,
+        LOGWARN("Error during write offset={} size={} written_size={} errno={} fd={}", offset, size, written_size,
                 errno, iodev->fd());
         return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
     } else {
