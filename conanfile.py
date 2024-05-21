@@ -6,7 +6,7 @@ import json
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.1"
+    version = "11.3.2"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"

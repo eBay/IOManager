@@ -178,6 +178,7 @@ static std::string get_raid_hdd_vendor_model_megcli() {
 #endif
 
 static std::string get_raid_hdd_vendor_model() {
+    return ""; // see this issue for more details: https://github.com/eBay/IOManager/issues/82
 #ifdef MEGACLI_OPTION_ENABLED
     return get_raid_hdd_vendor_model_megcli();
 #else
@@ -216,7 +217,7 @@ drive_type DriveInterface::get_drive_type(const std::string& dev_name) {
         dtype = it->second;
     } else {
         dtype = detect_drive_type(dev_name);
-        LOGINFOMOD(iomgr, "Drive={} is detected to be drive_type={}", dev_name, dtype);
+        LOGINFO("Drive={} is detected to be drive_type={}", dev_name, dtype);
         s_dev_type.insert({dev_name, dtype});
     }
 
@@ -432,7 +433,7 @@ std::error_code KernelDriveInterface::sync_write(IODevice* iodev, const char* da
         ++resubmit_cnt;
     }
     if (sisl_unlikely(written_size != size)) {
-        LOGWARN("Error during write offset={} write_size={} written_size={} errno={} fd={}", offset, size, written_size,
+        LOGWARN("Error during write offset={} size={} written_size={} errno={} fd={}", offset, size, written_size,
                 errno, iodev->fd());
         return std::error_code{((errno == 0) ? ERANGE : errno), std::generic_category()};
     } else {
