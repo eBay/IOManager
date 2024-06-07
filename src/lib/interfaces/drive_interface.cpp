@@ -200,7 +200,7 @@ static std::string get_raid_hdd_vendor_model() {
 
 drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
     if (std::filesystem::is_regular_file(std::filesystem::status(dev_name))) {
-        auto device = std::filesystem::path(get_mounted_device(dev_name)).filename();
+        auto device = get_mounted_device(dev_name);
         return is_rotational_device(device) ? drive_type::file_on_hdd : drive_type::file_on_nvme;
     } else if (std::filesystem::is_block_file(std::filesystem::status(dev_name))) {
         return is_rotational_device(dev_name) ? drive_type::block_hdd : drive_type::block_nvme;
