@@ -1,10 +1,9 @@
-name: IOManager Merge Build
+name: IOManager v8 Build
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
       - stable/v8.x
 
 jobs:
