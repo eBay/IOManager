@@ -41,6 +41,8 @@ class IOMgrConan(ConanFile):
                 self.options['sisl'].sanitize = True
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
+        if self.settings.arch != "x86_64":
+            self.options["spdk"].native_build = True
 
     def build_requirements(self):
         self.build_requires("gtest/1.12.1")
