@@ -47,6 +47,8 @@ class IOMgrConan(ConanFile):
             if self.options.testing == 'off':
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
+        if self.settings.arch != "x86_64":
+            self.options["spdk"].native_build = True
 
     def build_requirements(self):
         self.build_requires("gtest/1.14.0")
@@ -67,7 +69,6 @@ class IOMgrConan(ConanFile):
         self.requires("pistache/0.0.5")
         self.requires("zmarok-semver/1.1.0")
         self.requires("openssl/3.1.1", override=True)
-        self.requires("libcurl/8.0.1", override=True)
 
     def build(self):
         cmake = CMake(self)

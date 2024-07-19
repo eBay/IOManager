@@ -1,15 +1,15 @@
-name: IOManager Build
+name: IOManager v8 Build
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
       - stable/v8.x
+      - stable/v9.x
   pull_request:
     branches:
-      - master
       - stable/v8.x
+      - stable/v9.x
 
 jobs:
   Build:
