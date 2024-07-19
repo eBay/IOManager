@@ -45,12 +45,12 @@ class LibDPDKConan(ConanFile):
 
     def generate(self):
         tc = MesonToolchain(self)
-        tc.preprocessor_definitions["machine"] = "default"
+        tc.project_options["machine"] = "generic"
         tc.preprocessor_definitions["use_numa"] = "false"
         if self.options.native_build:
-            meson_options['machine'] = 'native'
+            tc.project_options['machine'] = 'native'
         if self.options.numa:
-            meson_options['use_numa'] = 'true'
+            tc.preprocessor_definitions['use_numa'] = 'true'
         tc.generate()
 
     def build(self):
