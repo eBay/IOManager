@@ -101,7 +101,7 @@ class LibSPDKConan(ConanFile):
 
     def package_info(self):
         self.cpp_info.libs = [
-                              "-Wl,--whole-archive -lspdk_accel_ioat",
+                              "spdk_accel_ioat",
                               "spdk_blobfs",
                               "spdk_blob_bdev",
                               "spdk_bdev_uring",
@@ -141,6 +141,7 @@ class LibSPDKConan(ConanFile):
                               "spdk_env_dpdk",
                               "spdk_util",
                               "spdk_jsonrpc",
-                              "-lspdk_json -Wl,--no-whole-archive",
-                              "aio", "rt", "pthread", "uuid", "m"]
+                              "spdk_json"]
+
+        self.cpp_info.system_libs = ["aio", "rt", "pthread", "uuid", "m"]
         self.env_info.RTE_SDK = self.package_folder

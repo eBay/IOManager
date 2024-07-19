@@ -91,5 +91,5 @@ class LibDPDKConan(ConanFile):
         if self.options.numa:
             self.cpp_info.libs.append("numa")
         if self.settings.os == "Linux":
-            self.cpp_info.libs.extend(["pthread", "dl"])
+            self.cpp_info.system_libs.extend(["pthread", "dl"])
         self.env_info.RTE_SDK = self.package_folder
