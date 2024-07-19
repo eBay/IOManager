@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: ["ubuntu-22.04"]
-        build-type: ["Debug", "RelWithDebInfo"]
+        build-type: ["Debug", "Release"]
         malloc-impl: ["libc", "tcmalloc"]
         prerelease: ["True", "False"]
         tooling: ["Sanitize", "Coverage", "None"]
@@ -23,11 +23,11 @@ jobs:
             tooling: None
           - build-type: Debug
             malloc-impl: tcmalloc
-          - build-type: RelWithDebInfo
+          - build-type: Release
             malloc-impl: libc
-          - build-type: RelWithDebInfo
+          - build-type: Release
             tooling: Sanitize
-          - build-type: RelWithDebInfo
+          - build-type: Release
             tooling: Coverage
     uses: ./.github/workflows/build_commit.yml
     with:
