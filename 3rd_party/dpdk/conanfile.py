@@ -72,7 +72,7 @@ class LibDPDKConan(ConanFile):
 
     def package_info(self):
         self.cpp_info.libs = [
-                              "-Wl,--whole-archive -lrte_eal",
+                              "rte_eal",
                               "rte_timer",
                               "rte_power",
                               "rte_mempool",
@@ -84,9 +84,9 @@ class LibDPDKConan(ConanFile):
                               "rte_pci",
                               "rte_kvargs",
                               "rte_net",
-                              "-lrte_cryptodev",
-                              "-lrte_ethdev",
-                              "-lrte_rcu -Wl,--no-whole-archive"
+                              "rte_cryptodev",
+                              "rte_ethdev",
+                              "rte_rcu"
                               ]
         if self.options.numa:
             self.cpp_info.libs.append("numa")

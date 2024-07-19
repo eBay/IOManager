@@ -3,6 +3,8 @@ from conan.tools.gnu import Autotools, AutotoolsToolchain, AutotoolsDeps
 from conan.tools.files import apply_conandata_patches
 from conan.tools.files import patch, get, replace_in_file
 from conan.tools.env import Environment, VirtualBuildEnv
+from conan.tools.files import copy
+from os.path import join
 
 required_conan_version = ">=1.60.0"
 
@@ -20,7 +22,7 @@ class LibSPDKConan(ConanFile):
         "fPIC": ['True', 'False']
     }
     default_options = {
-        "native_build":False,
+        "native_build":True,
         "shared":False,
         "fPIC":True,
     }
@@ -34,7 +36,7 @@ class LibSPDKConan(ConanFile):
 
     def requirements(self):
         self.requires("dpdk/21.05", transitive_headers=True)
-        self.requires("liburing/2.1", transitive_headers=True)
+        self.requires("liburing/2.4", transitive_headers=True)
         self.requires("openssl/[>=1.1 <4]")
         self.requires("fio/3.28")
 
@@ -62,7 +64,8 @@ class LibSPDKConan(ConanFile):
                 "--with-uring={}/include".format(self.dependencies['liburing'].package_folder),
                 "--without-isal",
                 "--disable-tests",
-                "--disable-unit-tests"]
+                "--disable-unit-tests",
+                "--prefix=/"]
         if not self.options.native_build:
             tc.configure_args.append("--target-arch=corei7")
             replace_in_file(self, "configure", "x86_64", "corei7")
@@ -80,19 +83,21 @@ class LibSPDKConan(ConanFile):
         autotools.make()
 
     def package(self):
-        self.copy("common.sh", dst="scripts", src="scripts", keep_path=True)
-        self.copy("setup.sh", dst="scripts", src="scripts", keep_path=True)
-        self.copy("spdkcli*", dst="scripts", src="scripts", keep_path=True)
-        self.copy("rpc*", dst="scripts", src="scripts", keep_path=True)
-        self.copy("*.h", dst="include/spdk/lib", src="lib", keep_path=True)
-        self.copy("*.h", dst="include/spdk/module", src="module", keep_path=True)
-        autotools = AutoToolsBuildEnvironment(self)
-        autotools.install()
+        copy(self,"common.sh", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"setup.sh", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"spdkcli*", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"rpc*", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+
+        autotools = Autotools(self)
+        autotools.install(args=["DESTDIR={}".format(self.package_folder)])
+
+        copy(self,"*.h", dst=join(self.package_folder,"include/spdk/lib"), src="lib", keep_path=True)
+        copy(self,"*.h", dst=join(self.package_folder,"include/spdk/module"), src="module", keep_path=True)
 
     def deploy(self):
-        self.copy("*", dst="/usr/local/bin/spdk", src="bin")
-        self.copy("*", dst="/var/lib/spdk/scripts", src="scripts")
-        self.copy("*pci_ids.h", dst="/var/lib/spdk/include", src="include")
+        copy(self,"*", dst="/usr/local/bin/spdk", src="bin")
+        copy(self,"*", dst="/var/lib/spdk/scripts", src="scripts")
+        copy(self,"*pci_ids.h", dst="/var/lib/spdk/include", src="include")
 
     def package_info(self):
         self.cpp_info.libs = [

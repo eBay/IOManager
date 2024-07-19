@@ -75,6 +75,7 @@ class IOMgrConan(ConanFile):
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
         self.requires("zstd/1.5.5", override=True)
+        self.requires("libunwind/1.8.0", override=True)
 
     def _download_grpc(self, folder):
         ref = self.dependencies['grpc'].ref.version
