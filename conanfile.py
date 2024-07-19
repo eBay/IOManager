@@ -107,8 +107,6 @@ class IOMgrConan(ConanFile):
         tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
         tc.variables["BUILD_COVERAGE"] = "OFF"
         tc.variables["CMAKE_TEST_TARGET"] = self.options.testing
-        tc.preprocessor_definitions["PACKAGE_VERSION"] = self.version
-        tc.preprocessor_definitions["PACKAGE_NAME"] = self.name
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
                 tc.variables['BUILD_COVERAGE'] = 'ON'
