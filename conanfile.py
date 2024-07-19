@@ -101,6 +101,8 @@ class IOMgrConan(ConanFile):
             self._download_grpc(self.source_folder)
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
+        if not self.conf.get("tools.build:skip_test", default=False):
+            tc.variables["BUILD_TESTING"] = "ON"
         tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
         tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
