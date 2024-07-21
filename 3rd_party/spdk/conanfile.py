@@ -35,7 +35,7 @@ class LibSPDKConan(ConanFile):
     exports_sources = "patches/*"
 
     def requirements(self):
-        self.requires("dpdk/21.05", transitive_headers=True)
+        self.requires("dpdk/nbi.21.05", transitive_headers=True)
         self.requires("liburing/2.4", transitive_headers=True)
         self.requires("openssl/[>=1.1 <4]")
         self.requires("fio/3.28")
