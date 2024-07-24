@@ -1,0 +1,8 @@
+sources:
+  "nbi.21.07.y":
+    url: "https://github.com/SPDK/spdk/archive/96a91684d39bb0f18729f132a24b778876d3e8fc.tar.gz"
+    sha256: "07876855efed94cd62150366bf6d97d218bc1432be33c87991c28cb52761ec90"
+patches:
+  "nbi.21.07.y":
+    - patch_file: "patches/patch.diff"
+      patch_type: "conan"
