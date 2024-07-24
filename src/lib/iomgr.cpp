@@ -67,7 +67,7 @@ SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
                    ::cxxopts::value< std::string >()->default_value("pa"), "mode"),
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
-                   ::cxxopts::value< uint32_t >(), "count"))
+                   ::cxxopts::value< uint32_t >()->default_value("64"), "count"))
 
 //SISL v11 change
 SISL_LOGGING_DEF(iomgr)
