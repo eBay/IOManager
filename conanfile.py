@@ -91,11 +91,9 @@ class IOMgrConan(ConanFile):
             get(self, **source_info, destination=join(folder, "grpc_internal"), strip_root=True)
             save(self, touch_file_path, current_info_str)
 
-    def source(self):
+    def layout(self):
         if self.options.grpc_support:
             self._download_grpc(self.source_folder)
-
-    def layout(self):
         cmake_layout(self)
 
     def generate(self):
