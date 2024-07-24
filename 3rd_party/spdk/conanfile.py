@@ -38,7 +38,7 @@ class LibSPDKConan(ConanFile):
         self.requires("dpdk/nbi.21.05", transitive_headers=True)
         self.requires("liburing/2.4", transitive_headers=True)
         self.requires("openssl/[>=1.1 <4]")
-        self.requires("fio/3.28")
+        self.requires("fio/nbi.3.28")
 
     def configure(self):
         del self.settings.compiler.libcxx

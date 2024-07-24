@@ -7,26 +7,23 @@ required_conan_version = ">=1.60.0"
 
 class LibFIOConan(ConanFile):
     name = "fio"
-    version = "3.28"
     description = "Flexible IO Kit"
     url = "https://github.corp.ebay.com/conan/fio"
     homepage = "https://github.com/axboe/fio"
     license = "GPL-2"
-    exports = ["arch.patch", "rm_raw.patch"]
     settings = "os", "arch", "compiler"
     options = {
-        "native_build": [True, False],
+        "native_build": ['True', 'False'],
         }
     default_options = {
-        "native_build": 'False',
+        "native_build": False,
     }
-    source_subfolder = "source_subfolder"
 
     def configure(self):
         del self.settings.compiler.libcxx
 
     def source(self):
-        get(self, "{0}/archive/fio-{1}.tar.gz".format(self.homepage, self.version), strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = AutotoolsToolchain(self)

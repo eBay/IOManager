@@ -9,7 +9,7 @@ echo -n "Exporting custom recipes..."
 echo -n "dpdk."
 conan export 3rd_party/dpdk dpdk/nbi.21.05@
 echo -n "fio."
-conan export 3rd_party/fio
+conan export 3rd_party/fio fio/nbi.3.28@
 echo -n "spdk."
 conan export 3rd_party/spdk spdk/nbi.21.07.y@
 
