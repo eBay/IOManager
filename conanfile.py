@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.3"
+    version = "11.3.4"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -58,6 +58,8 @@ class IOMgrConan(ConanFile):
             if self.conf.get("tools.build:skip_test", default=False):
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
+        if self.settings.arch != "x86_64":
+            self.options["spdk"].native_build = True
 
     def build_requirements(self):
         self.test_requires("gtest/1.14.0")
