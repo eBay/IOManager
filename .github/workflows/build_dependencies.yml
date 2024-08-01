@@ -142,6 +142,7 @@ jobs:
             -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
             -o testing=off \
             -s build_type=${{ inputs.build-type }} \
+            -c tools.build.skip_test=True \
             --build missing \
             .
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
@@ -182,6 +183,7 @@ jobs:
             -o coverage=True \
             -o testing=epoll_mode \
             -s build_type=${{ inputs.build-type }} \
+            -c tools.build.skip_test=True \
             --build missing \
             .
         conan build .
