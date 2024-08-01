@@ -71,7 +71,7 @@ class IOMgrConan(ConanFile):
         if self.options.spdk:
             self.requires("spdk/nbi.21.07.y", transitive_headers=True)
         self.requires("pistache/nbi.0.0.5", transitive_headers=True)
-        self.requires("openssl/3.1.3", override=True)
+        self.requires("openssl/3.2.2", override=True)
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
         self.requires("zstd/1.5.5", override=True)
