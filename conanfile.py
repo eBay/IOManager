@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.6"
+    version = "11.3.7"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -27,7 +27,6 @@ class IOMgrConan(ConanFile):
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
         "grpc_support": ['True', 'False'],
         "spdk": ['True', 'False'],
-        "fiber_impl" : ['boost', 'folly']
         }
     default_options = {
         'shared':       False,
@@ -37,7 +36,6 @@ class IOMgrConan(ConanFile):
         'sanitize':     False,
         'testing':      'epoll_mode',
         'spdk':         True,
-        'fiber_impl':   'boost',
     }
 
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
@@ -104,8 +102,6 @@ class IOMgrConan(ConanFile):
             self._download_grpc(self.source_folder)
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
-        if not self.conf.get("tools.build:skip_test", default=False):
-            tc.variables["BUILD_TESTING"] = "ON"
         tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
         tc.variables['CMAKE_EXPORT_COMPILE_COMMANDS'] = 'ON'
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
