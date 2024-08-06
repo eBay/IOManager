@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import check_min_cppstd
-from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake, cmake_layout
+from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake
 from conan.tools.files import copy
 from os.path import join, exists
 
@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.8"
+    version = "11.3.9"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -95,11 +95,20 @@ class IOMgrConan(ConanFile):
     def layout(self):
         if self.options.grpc_support:
             self._download_grpc(self.source_folder)
-        cmake_layout(self)
+
+        self.folders.source = "."
+        self.folders.build = join("build", str(self.settings.build_type))
+        self.folders.generators = join(self.folders.build, "generators")
+
+        self.cpp.source.includedirs = ["src/include"]
+
+        self.cpp.build.libdirs = ["src/lib"]
+
+        self.cpp.package.libs = ["iomgr"]
+        self.cpp.package.includedirs = ["include"] # includedirs is already set to 'include' by
+        self.cpp.package.libdirs = ["lib"]
 
     def generate(self):
-        if self.options.grpc_support:
-            self._download_grpc(self.source_folder)
         # This generates "conan_toolchain.cmake" in self.generators_folder
         tc = CMakeToolchain(self)
         tc.variables["CONAN_CMAKE_SILENT_OUTPUT"] = "ON"
@@ -137,13 +146,10 @@ class IOMgrConan(ConanFile):
         copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
-        self.cpp_info.libs = ["iomgr"]
-        self.cpp_info.cxxflags.append("-fconcepts")
-        if self.settings.build_type == "Debug":
-            if  self.options.sanitize:
-                self.cpp_info.sharedlinkflags.append("-fsanitize=address")
-                self.cpp_info.exelinkflags.append("-fsanitize=address")
-                self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
-                self.cpp_info.exelinkflags.append("-fsanitize=undefined")
-            elif self.options.coverage == 'True':
-                self.cpp_info.libs.append('gcov')
+        if  self.options.sanitize:
+            self.cpp_info.sharedlinkflags.append("-fsanitize=address")
+            self.cpp_info.exelinkflags.append("-fsanitize=address")
+            self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
+            self.cpp_info.exelinkflags.append("-fsanitize=undefined")
+        elif self.options.coverage == 'True':
+            self.cpp_info.libs.append('gcov')
