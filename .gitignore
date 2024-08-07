@@ -7,7 +7,6 @@ test_package/build
 nosanitize/**
 
 # Settings generated files and build files
-generated/**
 debug/**
 release/**
 cmake-*/**

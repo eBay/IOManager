@@ -15,7 +15,7 @@
 #pragma once
 #include <sisl/settings/settings.hpp>
 #include <sisl/options/options.h>
-#include "generated/iomgr_config_generated.h"
+#include "iomgr/iomgr_config_generated.h"
 
 SETTINGS_INIT(iomgrcfg::IomgrSettings, iomgr_config);
 

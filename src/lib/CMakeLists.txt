@@ -60,5 +60,5 @@ endif()
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 
 include ("${sisl_INCLUDE_DIRS}/../cmake/settings_gen.cmake")
-settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_CURRENT_BINARY_DIR}/generated iomgr_config iomgr_config.fbs)
+settings_gen_cpp($<TARGET_FILE:flatbuffers::flatc> ${CMAKE_BINARY_DIR}/src/include/iomgr iomgr_config iomgr_config.fbs)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
