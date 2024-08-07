@@ -17,6 +17,7 @@ endif()
 
 include_directories (BEFORE lib/)
 include_directories (BEFORE include/)
+include_directories (BEFORE ${CMAKE_CURRENT_BINARY_DIR}/include)
 include_directories (BEFORE ${CMAKE_CURRENT_BINARY_DIR}/lib)
 
 add_subdirectory (lib)
