@@ -1,0 +1,8 @@
+sources:
+  "nbi.21.05":
+    url: "https://github.com/spdk/dpdk/archive/bad3c0e51d7a34e3188d75d94f15a36c8f5e8301.zip"
+    sha256: "a0db10b41ab8cbfbc19acca517ee6ebb574885b964a02e649b16d084747ce2a6"
+patches:
+  "nbi.21.05":
+    - patch_file: "numa.patch"
+      patch_type: "conan"

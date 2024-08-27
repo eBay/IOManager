@@ -119,10 +119,10 @@ jobs:
         sudo apt-get install -y python3-pyelftools libaio-dev
         python -m pip install pyelftools
         conan export import/sisl
-        conan export 3rd_party/dpdk
-        conan export 3rd_party/fio
+        conan export 3rd_party/dpdk dpdk/nbi.21.05@
+        conan export 3rd_party/fio fio/nbi.3.28@
         conan export 3rd_party/grpc_internal
-        conan export 3rd_party/spdk
+        conan export 3rd_party/spdk spdk/nbi/21.07.y@
         cached_pkgs=$(ls -1d ~/.conan/data/*/*/*/*/package | sed 's,.*data/,,' | cut -d'/' -f1,2 | paste -sd',' - -)
         echo "::info:: Pre-cached: ${cached_pkgs}"
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
