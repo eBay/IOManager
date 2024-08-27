@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.9"
+    version = "11.3.10"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -67,7 +67,6 @@ class IOMgrConan(ConanFile):
         self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
         if self.options.grpc_support:
             self.requires("grpc/[>=1.50]")
-        self.requires("liburing/2.6", transitive_headers=True, override=True)
         if self.options.spdk:
             self.requires("spdk/nbi.21.07.y", transitive_headers=True)
         self.requires("pistache/nbi.0.0.5", transitive_headers=True)
