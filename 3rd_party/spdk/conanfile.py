@@ -1,12 +1,15 @@
-#https://github.com/SPDK/spdk"!/usr/bin/env python
-# -*- coding: utf-8 -*-
+from conan import ConanFile
+from conan.tools.gnu import Autotools, AutotoolsToolchain, AutotoolsDeps
+from conan.tools.files import apply_conandata_patches
+from conan.tools.files import patch, get, replace_in_file
+from conan.tools.env import Environment, VirtualBuildEnv
+from conan.tools.files import copy
+from os.path import join
 
-from conans import ConanFile, AutoToolsBuildEnvironment, tools
-from conan.tools.files import patch, copy, get
+required_conan_version = ">=1.60.0"
 
 class LibSPDKConan(ConanFile):
     name = "spdk"
-    version = "21.07.y"
     description = "Data Plane Development Kit"
     url = "https://github.corp.ebay.com/conan/spdk"
     homepage = "https://github.com/SPDK/spdk"
@@ -14,75 +17,91 @@ class LibSPDKConan(ConanFile):
     exports = ["LICENSE.md", "install.diff"]
     settings = "os", "compiler", "build_type", "arch"
     options = {
-        "native_build": [True, False],
-        "shared": [True, False],
-        "fPIC": [True, False]
+        "native_build": ['True', 'False'],
+        "shared": ['True', 'False'],
+        "fPIC": ['True', 'False']
     }
-    default_options = (
-        "native_build=False",
-        "shared=False",
-        "fPIC=True",
-    )
+    default_options = {
+        "native_build":True,
+        "shared":False,
+        "fPIC":True,
+    }
 
     requires = (
-        "dpdk/21.05",
-        "liburing/2.1",
-        "openssl/1.1.1q",
         )
     build_requires = (
-        "fio/3.28"
         )
 
     exports_sources = "patches/*"
+
+    def requirements(self):
+        self.requires("dpdk/nbi.21.05", transitive_headers=True)
+        self.requires("liburing/2.4", transitive_headers=True)
+        self.requires("openssl/[>=1.1 <4]")
+        self.requires("fio/nbi.3.28")
 
     def configure(self):
         del self.settings.compiler.libcxx
 
     def source(self):
-        get(self, "https://github.com/SPDK/spdk/archive/96a91684d39bb0f18729f132a24b778876d3e8fc.tar.gz", strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
+        apply_conandata_patches(self)
 
-    def build(self):
-        patch(self, patch_file="patches/patch.diff", strip=1)
-        autotools = AutoToolsBuildEnvironment(self)
-        autotools.flags.append("-I{}/include".format(self.deps_cpp_info["openssl"].rootpath))
-        cargs = ["--with-dpdk={}".format(self.deps_cpp_info["dpdk"].rootpath),
+    def generate(self):
+        tc = AutotoolsToolchain(self)
+        e = tc.environment()
+        e.append("CFLAGS", "-I{}/include".format(self.dependencies['openssl'].package_folder))
+        e.append("CFLAGS", "-I{}/include".format(self.dependencies['liburing'].package_folder))
+        e.append("LDFLAGS", "-L{}/lib".format(self.dependencies['openssl'].package_folder))
+        e.append("LDFLAGS", "-L{}/lib".format(self.dependencies['liburing'].package_folder))
+        e.append("LD_TYPE", "bfd")
+
+        #autotools.flags.append("-I{}/include".format(self.deps_cpp_info["openssl"].rootpath))
+        tc.configure_args = ["--with-dpdk={}".format(self.dependencies['dpdk'].package_folder),
                 "--without-vhost",
                 "--without-virtio",
-                "--with-fio={}/include/fio".format(self.deps_cpp_info["fio"].rootpath),
-                "--with-uring={}/include".format(self.deps_cpp_info["liburing"].rootpath),
+                "--with-fio={}/include/fio".format(self.dependencies['fio'].package_folder),
+                "--with-uring={}/include".format(self.dependencies['liburing'].package_folder),
+                "--without-isal",
                 "--disable-tests",
-                "--disable-unit-tests"]
+                "--disable-unit-tests",
+                "--prefix=/"]
         if not self.options.native_build:
-            cargs.append("--target-arch=corei7")
-            tools.replace_in_file("configure", "x86_64", "corei7")
-            tools.replace_in_file("configure", "march=native", "march=corei7")
+            tc.configure_args.append("--target-arch=corei7")
+            replace_in_file(self, "configure", "x86_64", "corei7")
+            replace_in_file(self, "configure", "march=native", "march=corei7")
         if self.settings.build_type == "Debug":
-            cargs.append("--enable-debug")
-        autotools.configure(args=cargs)
-        autotools.make(vars={
-                                "LD_TYPE":"bfd",
-                                "LDFLAGS": "-L{0}/lib -L{1}/lib".format(self.deps_cpp_info["openssl"].rootpath,
-                                                                        self.deps_cpp_info["liburing"].rootpath)
-                            })
+            tc.configure_args.append("--enable-debug")
+        tc.generate(e)
+
+        td = AutotoolsDeps(self)
+        td.generate()
+
+    def build(self):
+        autotools = Autotools(self)
+        autotools.configure()
+        autotools.make()
 
     def package(self):
-        self.copy("common.sh", dst="scripts", src="scripts", keep_path=True)
-        self.copy("setup.sh", dst="scripts", src="scripts", keep_path=True)
-        self.copy("spdkcli*", dst="scripts", src="scripts", keep_path=True)
-        self.copy("rpc*", dst="scripts", src="scripts", keep_path=True)
-        self.copy("*.h", dst="include/spdk/lib", src="lib", keep_path=True)
-        self.copy("*.h", dst="include/spdk/module", src="module", keep_path=True)
-        autotools = AutoToolsBuildEnvironment(self)
-        autotools.install()
+        copy(self,"common.sh", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"setup.sh", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"spdkcli*", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+        copy(self,"rpc*", dst=join(self.package_folder,"scripts"), src="scripts", keep_path=True)
+
+        autotools = Autotools(self)
+        autotools.install(args=["DESTDIR={}".format(self.package_folder)])
+
+        copy(self,"*.h", dst=join(self.package_folder,"include/spdk/lib"), src="lib", keep_path=True)
+        copy(self,"*.h", dst=join(self.package_folder,"include/spdk/module"), src="module", keep_path=True)
 
     def deploy(self):
-        self.copy("*", dst="/usr/local/bin/spdk", src="bin")
-        self.copy("*", dst="/var/lib/spdk/scripts", src="scripts")
-        self.copy("*pci_ids.h", dst="/var/lib/spdk/include", src="include")
+        copy(self,"*", dst="/usr/local/bin/spdk", src="bin")
+        copy(self,"*", dst="/var/lib/spdk/scripts", src="scripts")
+        copy(self,"*pci_ids.h", dst="/var/lib/spdk/include", src="include")
 
     def package_info(self):
         self.cpp_info.libs = [
-                              "-Wl,--whole-archive -lspdk_accel_ioat",
+                              "spdk_accel_ioat",
                               "spdk_blobfs",
                               "spdk_blob_bdev",
                               "spdk_bdev_uring",
@@ -122,6 +141,7 @@ class LibSPDKConan(ConanFile):
                               "spdk_env_dpdk",
                               "spdk_util",
                               "spdk_jsonrpc",
-                              "-lspdk_json -Wl,--no-whole-archive",
-                              "aio", "rt", "pthread", "uuid", "m"]
+                              "spdk_json"]
+
+        self.cpp_info.system_libs = ["aio", "rt", "pthread", "uuid", "m"]
         self.env_info.RTE_SDK = self.package_folder
