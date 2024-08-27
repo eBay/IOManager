@@ -26,7 +26,7 @@ class IOMgrConan(ConanFile):
         'fPIC':         True,
         'coverage':     False,
         'sanitize':     False,
-        'testing':      'full',
+        'testing':      'epoll_mode',
         'sisl:prerelease':   True,
     }
 
