@@ -8,6 +8,10 @@
 
 #include <sisl/utility/enum.hpp>
 
+namespace sisl {
+class GrpcTokenVerifier;
+}
+
 namespace iomgr {
 
 ENUM(url_type, uint8_t,
@@ -35,6 +39,7 @@ public:
     bool is_localaddr_url(std::string const& url) const;
     bool is_safe_url(std::string const& url) const;
     bool is_secure_zone() const;
+    bool auth_verify(Pistache::Http::Request& request, Pistache::Http::ResponseWriter& response) const;
 
 private:
     void get_local_ips();

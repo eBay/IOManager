@@ -1,10 +1,25 @@
 #include "iomgr/http_server.hpp"
 #include "iomgr_config.hpp"
+#include "iomgr/io_environment.hpp"
 #include <sisl/logging/logging.h>
 #include <ifaddrs.h>
 #include <arpa/inet.h>
 
 namespace iomgr {
+
+static Pistache::Http::Code to_pistache_code(sisl::token_state_ptr const status) {
+    switch (status->code) {
+    case sisl::VerifyCode::OK:
+        return Pistache::Http::Code::Ok;
+    case sisl::VerifyCode::UNAUTH:
+        return Pistache::Http::Code::Unauthorized;
+    case sisl::VerifyCode::FORBIDDEN:
+        return Pistache::Http::Code::Forbidden;
+    default:
+        break;
+    }
+    return Pistache::Http::Code::Precondition_Failed;
+}
 
 HttpServer::HttpServer(std::string const& ssl_cert, std::string const& ssl_key) :
         m_secure_zone(!ssl_cert.empty() && !ssl_key.empty()) {
@@ -57,9 +72,10 @@ void HttpServer::setup_route(Pistache::Http::Method method, std::string resource
 
 bool HttpServer::do_auth(Pistache::Http::Request& request, Pistache::Http::ResponseWriter& response) {
     if (is_safe_url(request.resource())) { return true; }
-    if (is_localaddr_url(request.resource()) || m_secure_zone) { return is_local_addr(request.address().host()); }
+    if (is_localaddr_url(request.resource())) { return is_local_addr(request.address().host()); }
 
     // add additional auth rules here
+    if (ioenvironment.get_token_verifier()) { return auth_verify(request, response); }
     return true;
 }
 
@@ -105,5 +121,25 @@ bool HttpServer::is_localaddr_url(std::string const& url) const { return m_local
 bool HttpServer::is_safe_url(std::string const& url) const { return m_safelist.count(url) > 0; }
 
 bool HttpServer::is_local_addr(std::string const& addr) const { return m_local_ips.count(addr) > 0; }
+
+bool HttpServer::auth_verify(Pistache::Http::Request& request, Pistache::Http::ResponseWriter& response) const {
+    // tryGet never throws
+    auto opt_token = request.headers().tryGet< Pistache::Http::Header::Authorization >();
+    if (!opt_token) {
+        response.send(Pistache::Http::Code::Unauthorized, "missing auth token in request header");
+        return false;
+    }
+
+    if (!opt_token->hasMethod< Pistache::Http::Header::Authorization::Method::Bearer >()) {
+        response.send(Pistache::Http::Code::Unauthorized, "require bearer token in request header");
+        return false;
+    }
+
+    auto const prefix_len = std::string{"Bearer "}.length();
+    auto ret_state = ioenvironment.get_token_verifier()->verify(opt_token->value().substr(prefix_len));
+    if (ret_state->code == sisl::VerifyCode::OK) { return true; }
+    response.send(to_pistache_code(ret_state), ret_state->msg);
+    return false;
+}
 
 } // namespace iomgr
