@@ -25,18 +25,15 @@ public:
 
     virtual void SetUp() override {
         m_server = std::make_unique< iomgr::HttpServer >();
-        // s_is_shutdown = false;
-        m_server->setup_route(Http::Method::Get, "/api/v1/sayHello", Routes::bind(&HTTPServerTest::say_hello, this));
-        m_server->setup_route(Http::Method::Get, "/api/v1/yourNamePlease",
-                              Routes::bind(&HTTPServerTest::say_name, this));
-        m_server->setup_route(Http::Method::Post, "/api/v1/postResource/",
-                              Routes::bind(&HTTPServerTest::post_resource, this));
-        m_server->setup_route(Http::Method::Get, "/api/v1/getResource",
-                              Routes::bind(&HTTPServerTest::get_resource, this));
-        m_server->setup_route(Http::Method::Put, "/api/v1/putResource",
-                              Routes::bind(&HTTPServerTest::put_resource, this));
-        m_server->setup_route(Http::Method::Delete, "/api/v1/deleteResource",
-                              Routes::bind(&HTTPServerTest::delete_resource, this));
+        std::vector< iomgr::http_route > routes = {
+            {Http::Method::Get, "/api/v1/sayHello", Routes::bind(&HTTPServerTest::say_hello, this)},
+            {Http::Method::Get, "/api/v1/yourNamePlease", Routes::bind(&HTTPServerTest::say_name, this)},
+            {Http::Method::Post, "/api/v1/postResource/", Routes::bind(&HTTPServerTest::post_resource, this)},
+            {Http::Method::Get, "/api/v1/getResource", Routes::bind(&HTTPServerTest::get_resource, this)},
+            {Http::Method::Put, "/api/v1/putResource", Routes::bind(&HTTPServerTest::put_resource, this)},
+            {Http::Method::Delete, "/api/v1/deleteResource", Routes::bind(&HTTPServerTest::delete_resource, this)},
+        };
+        m_server->setup_routes(routes);
         m_server->start();
     }
 
@@ -139,6 +136,34 @@ TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
     }
 
     // exit while server processing
+}
+
+TEST_F(HTTPServerTest, RestartTest) {
+    m_server->restart("", "");
+    const cpr::Url url{"http://127.0.0.1:5000/api/v1/sayHello"};
+    auto resp{cpr::Get(url)};
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "Hello client from async_http server\n");
+
+    static const cpr::Url url1{"http://127.0.0.1:5000/api/v1/getResource"};
+    resp = cpr::Get(url1);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "get");
+
+    const cpr::Url url2{"http://127.0.0.1:5000/api/v1/postResource"};
+    resp = cpr::Post(url2);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "post");
+
+    const cpr::Url url3{"http://127.0.0.1:5000/api/v1/putResource"};
+    resp = cpr::Put(url3);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "put");
+
+    const cpr::Url url4{"http://127.0.0.1:5000/api/v1/deleteResource"};
+    resp = cpr::Delete(url4);
+    EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
+    EXPECT_EQ(resp.text, "delete");
 }
 
 class HTTPServerParamsTest : public HTTPServerTest {
