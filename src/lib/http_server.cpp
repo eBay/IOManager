@@ -28,6 +28,14 @@ HttpServer::HttpServer(std::string const& ssl_cert, std::string const& ssl_key) 
         LOGERROR("one of ssl cert {}, ssl_ky: {} is empty!", ssl_cert, ssl_key);
         return;
     }
+    init(ssl_cert, ssl_key);
+    get_local_ips();
+}
+
+HttpServer::HttpServer() : HttpServer("", "") {}
+
+void HttpServer::init(std::string const& ssl_cert, std::string const& ssl_key) {
+    m_http_endpoint.reset();
     Pistache::Address addr(Pistache::Ipv4::any(), Pistache::Port(IM_DYNAMIC_CONFIG(io_env.http_port)));
     m_http_endpoint = std::make_unique< Pistache::Http::Endpoint >(addr);
     auto flags = Pistache::Tcp::Options::ReuseAddr;
@@ -38,10 +46,7 @@ HttpServer::HttpServer(std::string const& ssl_cert, std::string const& ssl_key) 
                     .flags(flags);
     m_http_endpoint->init(opts);
     setup_ssl(ssl_cert, ssl_key);
-    get_local_ips();
 }
-
-HttpServer::HttpServer() : HttpServer("", "") {}
 
 void HttpServer::start() {
     // setup auth middleware
@@ -51,6 +56,19 @@ void HttpServer::start() {
     m_http_endpoint->setHandler(m_router.handler());
     m_http_endpoint->serveThreaded();
     m_server_running = true;
+}
+
+void HttpServer::restart(std::string const& ssl_cert, std::string const& ssl_key) {
+    std::unique_lock< std::mutex > lock(m_mutex);
+    m_server_running = false;
+    init(ssl_cert, ssl_key);
+    m_localhost_list.clear();
+    m_safelist.clear();
+    m_router = Pistache::Rest::Router();
+    for (auto& route : m_http_routes) {
+        setup_route(route, true);
+    }
+    start();
 }
 
 void HttpServer::setup_route(Pistache::Http::Method method, std::string resource,
@@ -67,6 +85,17 @@ void HttpServer::setup_route(Pistache::Http::Method method, std::string resource
         m_localhost_list.emplace(std::move(resource));
     } else if (type == url_type::safe) {
         m_safelist.emplace(std::move(resource));
+    }
+}
+
+void HttpServer::setup_route(http_route const& route, bool restart) {
+    if (!restart) { m_http_routes.push_back(route); }
+    setup_route(route.method, std::move(route.resource), std::move(route.handler), route.type);
+}
+
+void HttpServer::setup_routes(std::vector< http_route > const& routes) {
+    for (auto& route : routes) {
+        setup_route(route, false);
     }
 }
 

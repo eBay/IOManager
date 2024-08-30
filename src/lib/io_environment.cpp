@@ -33,14 +33,10 @@ IOEnvironment::~IOEnvironment() {
 }
 
 void IOEnvironment::restart_http_server(std::string const& ssl_cert, std::string const& ssl_key) {
-    m_http_server.reset();
-    with_http_server(ssl_cert, ssl_key);
+    m_http_server->restart(ssl_cert, ssl_key);
 }
 
-void IOEnvironment::restart_http_server() {
-    m_http_server.reset();
-    with_http_server();
-}
+void IOEnvironment::restart_http_server() { restart_http_server("", ""); }
 
 IOEnvironment& IOEnvironment::with_http_server() { return with_http_server("", ""); }
 

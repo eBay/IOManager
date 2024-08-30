@@ -8,16 +8,19 @@
 
 #include <sisl/utility/enum.hpp>
 
-namespace sisl {
-class GrpcTokenVerifier;
-}
-
 namespace iomgr {
 
 ENUM(url_type, uint8_t,
      localhost, // url can only be called from localhost
      safe,      // Can be called from any host
      regular);
+
+struct http_route {
+    Pistache::Http::Method method;
+    std::string resource;
+    Pistache::Rest::Route::Handler handler;
+    iomgr::url_type type{iomgr::url_type::regular};
+};
 
 class HttpServer {
 public:
@@ -26,9 +29,11 @@ public:
 
     // All the routes should be setup before calling start()
     void start();
+    void restart(std::string const& ssl_cert, std::string const& ssl_key);
 
     void setup_route(Pistache::Http::Method method, std::string resource, Pistache::Rest::Route::Handler handler,
                      url_type const& type = url_type::regular);
+    void setup_routes(std::vector< http_route > const& routes);
 
     void stop();
 
@@ -44,6 +49,8 @@ public:
 private:
     void get_local_ips();
     bool is_local_addr(std::string const& addr) const;
+    void init(std::string const& ssl_cert, std::string const& ssl_key);
+    void setup_route(http_route const& route, bool restart);
 
 private:
     std::unique_ptr< Pistache::Http::Endpoint > m_http_endpoint;
@@ -53,6 +60,8 @@ private:
     std::unordered_set< std::string > m_safelist;
     std::unordered_set< std::string > m_localhost_list;
     std::unordered_set< std::string > m_local_ips;
+    std::vector< http_route > m_http_routes;
+    std::mutex m_mutex;
 };
 
 using url_t = iomgr::url_type;
