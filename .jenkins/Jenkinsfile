@@ -66,7 +66,7 @@ pipeline {
                 axes {
                     axis {
                         name 'BUILD_TYPE'
-                        values 'sanitize', 'release', 'debug', 'test'
+                        values 'sanitize', 'release', 'debug'
                     }
                     axis {
                         name 'COVERAGE'
@@ -77,7 +77,7 @@ pipeline {
                     exclude {
                         axis {
                             name 'BUILD_TYPE'
-                            values 'sanitize', 'test', 'release'
+                            values 'sanitize', 'release'
                         }
                         axis {
                             name 'COVERAGE'
