@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.12"
+    version = "11.3.13"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -73,6 +73,7 @@ class IOMgrConan(ConanFile):
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
         self.requires("zstd/1.5.5", override=True)
+        self.requires("ninja/1.12.1", override=True)
 
         # ARM needs unreleased versionof libunwind
         if not self.settings.arch in ['x86', 'x86_64']:
