@@ -28,6 +28,7 @@ class IOMgrConan(ConanFile):
         'sanitize':     False,
         'testing':      'epoll_mode',
         'sisl:prerelease':   True,
+        "pistache:with_ssl": True,
     }
 
     generators = "cmake", "cmake_find_package"

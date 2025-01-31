@@ -317,6 +317,7 @@
     "ref": "pistache/nbi.0.0.5.1#4df0203beb68dada3f63f5c5214de7f1",
     "requires": [
      "49",
+     "10",
      "50"
     ],
     "context": "host"
