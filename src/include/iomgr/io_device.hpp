@@ -20,9 +20,35 @@ struct IODeviceThreadContext {
     virtual ~IODeviceThreadContext() = default;
 };
 
+class IODeviceMetrics : public sisl::MetricsGroup {
+public:
+    IODeviceMetrics(std::string devname) : sisl::MetricsGroup("IODeviceMetrics", devname) {
+
+        REGISTER_HISTOGRAM(read_size, "Read IO Size", "io_size", {"op", "read"}, HistogramBucketsType(OpSizeBuckets));
+        REGISTER_HISTOGRAM(write_size, "Write IO size", "io_size", {"op", "write"},
+                           HistogramBucketsType(OpSizeBuckets));
+        REGISTER_HISTOGRAM(fsync_size, "Fsync IO size", "io_size", {"op", "fsync"},
+                           HistogramBucketsType(OpSizeBuckets));
+        // FixMe: The OpLatecyBuckets might not friendly for HDD
+        REGISTER_HISTOGRAM(read_lat, "Read IO Lat", "io_lat_us", {"op", "read"}, HistogramBucketsType(OpLatecyBuckets));
+        REGISTER_HISTOGRAM(write_lat, "Write IO Lat", "io_lat_us", {"op", "write"},
+                           HistogramBucketsType(OpLatecyBuckets));
+        REGISTER_HISTOGRAM(fsync_lat, "Fsync IO Lat", "io_lat_us", {"op", "fsync"},
+                           HistogramBucketsType(OpLatecyBuckets));
+        register_me_to_farm();
+    }
+    IODeviceMetrics(const IODeviceMetrics&) = delete;
+    IODeviceMetrics(IODeviceMetrics&&) noexcept = delete;
+    IODeviceMetrics& operator=(const IODeviceMetrics&) = delete;
+    IODeviceMetrics& operator=(IODeviceMetrics&&) noexcept = delete;
+    ~IODeviceMetrics() {
+        deregister_me_from_farm();
+    }
+};
+
 class IODevice {
 public:
-    IODevice(const int pri, const thread_specifier scope);
+    IODevice(std::string devname, const int pri, const thread_specifier scope);
     virtual ~IODevice() = default;
 
 public:
@@ -49,6 +75,7 @@ public:
 private:
     thread_specifier thread_scope{reactor_regex::all_io};
     int pri{1};
+    IODeviceMetrics m_metrics;
 
 public:
     int fd() const { return std::get< int >(dev); }
@@ -69,6 +96,28 @@ public:
     std::string dev_id() const;
     void clear();
     DriveInterface* drive_interface();
+
+    void observe_metrics(drive_iocb* iocb) {
+        switch (iocb->op_type) {
+        case DriveOpType::WRITE:
+            HISTOGRAM_OBSERVE(m_metrics, write_lat, get_elapsed_time_us(iocb->op_start_time));
+            HISTOGRAM_OBSERVE(m_metrics, write_size, iocb->size);
+            break;
+
+        case DriveOpType::READ:
+            HISTOGRAM_OBSERVE(m_metrics, read_lat, get_elapsed_time_us(iocb->op_start_time));
+            HISTOGRAM_OBSERVE(m_metrics, read_size, iocb->size);
+            break;
+
+        case DriveOpType::FSYNC:
+            HISTOGRAM_OBSERVE(m_metrics, fsync_lat, get_elapsed_time_us(iocb->op_start_time));
+            HISTOGRAM_OBSERVE(m_metrics, fsync_size, iocb->size);
+            break;
+
+        default:
+            break;
+        }
+    }
 
     void decrement_pending(int32_t count = 1) {
         if ((post_add_remove_cb != nullptr) && thread_op_pending_count.decrement_testz(count)) {

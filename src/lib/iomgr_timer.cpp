@@ -179,7 +179,7 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
     LOGINFO("Creating {} {} timer fd {} and adding it into fd poll list",
             (is_recurring ? "recurring" : "non-recurring"), (is_thread_local() ? "per-thread" : "global"), fd);
     auto iodev =
-        iomanager.generic_interface()->alloc_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr, m_scope, nullptr);
+        iomanager.generic_interface()->alloc_io_device(fmt::format("timer_{}", fd), backing_dev_t(fd), EPOLLIN, 1, nullptr, m_scope, nullptr);
     iomanager.generic_interface()->add_io_device(iodev, wait_to_setup);
     if (iodev == nullptr) {
         close(fd);

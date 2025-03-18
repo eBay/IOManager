@@ -61,7 +61,7 @@ GrpcInterface::GrpcInterface() : IOInterface() {
 
 grpc_fd* GrpcInterface::fd_create(int fd, const char* name, bool track_err) {
     grpc_fd* gfd = new grpc_fd(fd, name, track_err);
-    gfd->m_iodev = alloc_io_device(fd, EPOLLIN | EPOLLOUT, 9, (void*)this, reactor_regex::all_io, nullptr);
+    gfd->m_iodev = alloc_io_device(string(name), fd, EPOLLIN | EPOLLOUT, 9, (void*)this, reactor_regex::all_io, nullptr);
     gfd->m_iodev->devname = fmt::format("{}, fd=", name, fd);
 
     {
@@ -96,7 +96,7 @@ void GrpcInterface::pollset_init(grpc_pollset* pollset, gpr_mu** mu) {
     }
 
     // Create a wrapper iodevice to add it to reactor later
-    pollset->m_ep_iodev = alloc_io_device(
+    pollset->m_ep_iodev = alloc_io_device(fmt::format("pullset_{}", pollset->m_epfd),
         pollset->m_epfd, EPOLLIN | EPOLLOUT, 9, (void*)pollset, reactor_regex::all_io,
         [this](IODevice* iodev, void* cookie, int events) { process_pollset_events((grpc_pollset*)cookie, events); });
 

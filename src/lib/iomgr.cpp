@@ -69,7 +69,7 @@ SISL_OPTION_GROUP(iomgr,
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
                    ::cxxopts::value< uint32_t >()->default_value("64"), "count"))
 
-//SISL v11 change
+// SISL v11 change
 SISL_LOGGING_DEF(iomgr)
 
 namespace iomgr {
@@ -614,7 +614,8 @@ void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag ta
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
 /////////////////// IODevice class implementation ///////////////////////////////////
-IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} {
+IODevice::IODevice(std::string devName, int p, thread_specifier scope) :
+        devname(devName), thread_scope{scope}, pri{p},  m_metrics(devName) {
     m_iodev_fiber_ctx.reserve(IOManager::max_io_fibers);
     creator = iomanager.am_i_io_reactor() ? iomanager.iofiber_self() : nullptr;
 }

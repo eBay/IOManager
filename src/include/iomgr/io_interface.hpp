@@ -38,10 +38,10 @@ public:
     void on_reactor_start(IOReactor* reactor);
     void on_reactor_stop(IOReactor* reactor);
 
-    io_device_ptr alloc_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+    io_device_ptr alloc_io_device(std::string dev_name, backing_dev_t dev, int events_interested, int pri, void* cookie,
                                   const thread_specifier& scope, const ev_callback& cb);
-    inline io_device_ptr alloc_io_device(backing_dev_t dev, int pri, const thread_specifier& scope) {
-        return alloc_io_device(dev, 0, pri, nullptr, scope, nullptr);
+    inline io_device_ptr alloc_io_device(std::string dev_name, backing_dev_t dev, int pri, const thread_specifier& scope) {
+        return alloc_io_device(dev_name, dev, 0, pri, nullptr, scope, nullptr);
     }
 
     reactor_regex scope() const { return m_thread_scope; }

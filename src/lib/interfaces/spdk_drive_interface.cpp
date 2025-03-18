@@ -243,7 +243,7 @@ io_device_ptr SpdkDriveInterface::create_open_dev_internal(const std::string& de
     create_dev_internal(ctx);
 
     if (!ctx->bdev_name.empty() && !ctx->err) {
-        iodev = alloc_io_device(null_backing_dev(), 9 /* pri*/, reactor_regex::all_io);
+        iodev = alloc_io_device(devname, null_backing_dev(), 9 /* pri*/, reactor_regex::all_io);
         iodev->devname = devname;
         iodev->alias_name = ctx->bdev_name;
         iodev->creator = ctx->creator;

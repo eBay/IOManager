@@ -134,7 +134,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
         return nullptr;
     }
 
-    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
+    auto iodev = alloc_io_device(devname, backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
     iodev->creator =
         iomanager.am_i_io_reactor() ? iomanager.this_reactor()->pick_fiber(fiber_regex::main_only) : nullptr;

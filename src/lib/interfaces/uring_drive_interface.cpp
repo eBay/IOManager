@@ -174,7 +174,7 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_ty
         return nullptr;
     }
 
-    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
+    auto iodev = alloc_io_device(devname, backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
     iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iofiber_self() : nullptr;
     iodev->dtype = dev_type;
@@ -236,7 +236,10 @@ folly::Future< std::error_code > UringDriveInterface::async_writev(IODevice* iod
     auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
     iocb->set_iovs(iov, iovcnt);
     iocb->completion = std::move(folly::Promise< std::error_code >{});
-    auto ret = iocb->folly_comp_promise().getFuture();
+    auto ret = iocb->folly_comp_promise().getFuture().thenValue([iocb](std::error_code ec) {
+        iocb->iodev->observe_metrics(iocb);
+        return ec;
+    });
 
     auto submit_in_this_thread = [this](drive_iocb* iocb, bool part_of_batch) {
         DriveInterface::increment_outstanding_counter(iocb);

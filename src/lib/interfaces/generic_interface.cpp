@@ -154,9 +154,9 @@ void IOInterface::on_reactor_stop(IOReactor* reactor) {
     }
 }
 
-io_device_ptr IOInterface::alloc_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+io_device_ptr IOInterface::alloc_io_device(std::string dev_name, backing_dev_t dev, int events_interested, int pri, void* cookie,
                                            const thread_specifier& scope, const ev_callback& cb) {
-    auto iodev = std::make_shared< IODevice >(pri, scope);
+    auto iodev = std::make_shared< IODevice >(dev_name, pri, scope);
     iodev->dev = dev;
     iodev->cb = cb;
     iodev->cookie = cookie;
@@ -178,7 +178,7 @@ io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_i
 
 io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                                  const thread_specifier& scope, const ev_callback& cb) {
-    auto iodev = alloc_io_device(dev, events_interested, pri, cookie, scope, cb);
+    auto iodev = alloc_io_device("generic_dev", dev, events_interested, pri, cookie, scope, cb);
     add_io_device(iodev, true /* wait_to_add */);
     return iodev;
 }
