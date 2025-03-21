@@ -17,8 +17,6 @@
 using namespace iomgr;
 using namespace std::chrono_literals;
 
-SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
-
 SISL_OPTION_GROUP(test_timer,
                   (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
                    ::cxxopts::value< uint32_t >()->default_value("4"), "number"),

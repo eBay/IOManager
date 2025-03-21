@@ -27,8 +27,6 @@
 
 using log_level = spdlog::level::level_enum;
 
-SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
-
 SISL_OPTION_GROUP(test_drive_interface,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("2"), "number"),

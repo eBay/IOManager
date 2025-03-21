@@ -25,8 +25,6 @@
 #include <iomgr/io_environment.hpp>
 #include <iomgr/fiber_lib.hpp>
 
-SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
-
 SISL_OPTION_GROUP(test_fiber_shared_mutex,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("10"), "number"),

@@ -93,13 +93,13 @@ jobs:
     - name: Retrieve Recipe
       uses: actions/checkout@main
       with:
-        repository: eBay/IOManager
+        repository: hkadayam/IOManager
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'False' }}
 
     - name: Load IOMgr Cache
       id: restore-cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: hkadayam/sisl/.github/actions/load_conan@master
       with:
         testing: ${{ inputs.testing }}
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
@@ -107,22 +107,22 @@ jobs:
     - name: Retrieve Dependencies
       uses: actions/checkout@main
       with:
-        repository: eBay/sisl
+        repository: hkadayam/sisl
         path: import/sisl
         ref: master
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: hkadayam/sisl/.github/actions/load_conan@master
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislForkDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Setup Conan
-      uses: eBay/sisl/.github/actions/setup_conan@master
+      uses: hkadayam/sisl/.github/actions/setup_conan@master
       with:
         platform: ${{ inputs.platform }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
@@ -148,17 +148,17 @@ jobs:
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: eBay/sisl/.github/actions/store_conan@master
+      uses: hkadayam/sisl/.github/actions/store_conan@master
       with:
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: hkadayam/sisl/.github/actions/load_conan@master
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislForkDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 

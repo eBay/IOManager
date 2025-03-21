@@ -107,5 +107,4 @@ ENUM(drive_type, uint8_t,
 )
 
 #define IOMGR_LOG_MODS iomgr, spdk, io_wd
-SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 } // namespace iomgr

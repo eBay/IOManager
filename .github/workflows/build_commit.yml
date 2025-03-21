@@ -20,8 +20,8 @@ on:
         type: string
 
 jobs:
-  SislDeps:
-    uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
+  SislForkDeps:
+    uses: hkadayam/sisl/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
       platform: ${{ inputs.platform }}
@@ -32,7 +32,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' }}
 
   IOMgrDeps:
-    needs: SislDeps
+    needs: SislForkDeps
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}

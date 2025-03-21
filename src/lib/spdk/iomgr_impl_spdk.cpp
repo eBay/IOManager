@@ -25,9 +25,6 @@ extern "C" {
 #include <rte_malloc.h>
 }
 
-// SISL v11 change
-SISL_LOGGING_DEF(spdk)
-
 namespace iomgr {
 bool IOManagerSpdkImpl::g_spdk_env_prepared{false};
 

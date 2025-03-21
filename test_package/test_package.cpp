@@ -18,7 +18,6 @@ SISL_OPTION_GROUP(test_hs_vol,
 #define SPDK_LOG_MODS IOMGR_LOG_MODS, flip
 
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
-SISL_LOGGING_INIT(SPDK_LOG_MODS)
 
 constexpr size_t Ki = 1024;
 constexpr size_t Mi = Ki * Ki;

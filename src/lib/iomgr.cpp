@@ -69,12 +69,10 @@ SISL_OPTION_GROUP(iomgr,
                   (hdd_streams, "", "hdd_streams", "Number of streams for hdd - overridden value",
                    ::cxxopts::value< uint32_t >()->default_value("64"), "count"))
 
-//SISL v11 change
-SISL_LOGGING_DEF(iomgr)
-
 namespace iomgr {
 
 IOManager::IOManager() : m_fiber_ordinal_reserver(IOManager::max_io_fibers) {
+    REGISTER_LOG_MODS(IOMGR_LOG_MODS)
     m_iface_list.reserve(inbuilt_interface_count + 5);
 }
 

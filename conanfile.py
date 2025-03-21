@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.3.12"
+    version = "12.1.1"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -64,7 +64,7 @@ class IOMgrConan(ConanFile):
         self.test_requires("cpr/1.10.4")
 
     def requirements(self):
-        self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
+        self.requires("sisl/[^13.1]@oss/master", transitive_headers=True)
         if self.options.grpc_support:
             self.requires("grpc/[>=1.50]")
         if self.options.spdk:

@@ -8,7 +8,6 @@
 #include "iomgr/io_environment.hpp"
 #include "iomgr/http_server.hpp"
 
-SISL_LOGGING_INIT()
 SISL_OPTIONS_ENABLE(logging)
 
 using namespace Pistache;

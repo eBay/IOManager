@@ -26,8 +26,6 @@
 
 using log_level = spdlog::level::level_enum;
 
-SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
-
 SISL_OPTION_GROUP(test_iomgr,
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
 

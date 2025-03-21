@@ -17,8 +17,6 @@
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;
-SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
-
 SISL_OPTION_GROUP(test_io,
                   (run_time, "", "run_time", "run time for io", ::cxxopts::value< uint32_t >()->default_value("60"),
                    "seconds"),
