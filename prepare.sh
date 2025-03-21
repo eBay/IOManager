@@ -13,6 +13,6 @@ conan export --version nbi.3.28 3rd_party/fio
 echo -n "spdk."
 conan export --version nbi.21.07.y 3rd_party/spdk
 echo -n "pistache."
-conan export 3rd_party/pistache pistache/nbi.0.0.5.1@
+conan export --version nbi.0.0.5 3rd_party/pistache
 
 echo "done."
