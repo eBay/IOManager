@@ -118,7 +118,7 @@ jobs:
         testing: 'False'
         path: import/sisl
         key_prefix: SislForkDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
-        fail_on_cache_miss: true
+        fail_on_cache_miss: false
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Setup Conan
