@@ -101,18 +101,18 @@ public:
         switch (iocb->op_type) {
         case DriveOpType::WRITE:
             HISTOGRAM_OBSERVE(*m_metrics, write_lat, dur);
-            HISTOGRAM_OBSERVE(*m_metrics.get(), write_size, iocb->size);
-            LOGINFOMOD(iomgr, "fsync, size {}, lat {}", iocb->size, dur);
+            HISTOGRAM_OBSERVE(*m_metrics, write_size, iocb->size);
+            LOGINFO("write, size {}, lat {}", iocb->size, dur);
             break;
         case DriveOpType::READ:
             HISTOGRAM_OBSERVE(*m_metrics, read_lat, dur);
             HISTOGRAM_OBSERVE(*m_metrics, read_size, iocb->size);
-            LOGINFOMOD(iomgr, "fsync, size {}, lat {}", iocb->size, dur);
+            LOGINFO("read, size {}, lat {}", iocb->size, dur);
             break;
         case DriveOpType::FSYNC:
             HISTOGRAM_OBSERVE(*m_metrics, fsync_lat, dur);
             HISTOGRAM_OBSERVE(*m_metrics, fsync_size, iocb->size);
-            LOGINFOMOD(iomgr, "fsync, size {}, lat {}", iocb->size, dur);
+            LOGINFO("fsync, size {}, lat {}", iocb->size, dur);
             break;
 
         default:
