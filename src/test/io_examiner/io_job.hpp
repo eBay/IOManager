@@ -269,6 +269,10 @@ private:
         std::uniform_int_distribution< uint64_t > lba_random{0, vinfo->m_max_vol_blks - max_blks - 1};
         // nlbas: [1, max_blks]
         std::uniform_int_distribution< uint32_t > nlbas_random{1, max_blks};
+        if (m_cfg.io_blk_size && *m_cfg.io_blk_size !=0 ) {
+	    auto nblks = *m_cfg.io_blk_size / vinfo->m_page_size;
+            nlbas_random = std::uniform_int_distribution< uint32_t >(nblks, nblks);
+        }
 
         // we won't be writing more then 128 blocks in one io
         uint32_t attempt{1};
