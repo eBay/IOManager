@@ -102,17 +102,17 @@ public:
         case DriveOpType::WRITE:
             HISTOGRAM_OBSERVE(*m_metrics, write_lat, dur);
             HISTOGRAM_OBSERVE(*m_metrics, write_size, iocb->size);
-            LOGINFO("write, size {}, lat {}", iocb->size, dur);
+            LOGTRACE("write, size {}, lat {}", iocb->size, dur);
             break;
         case DriveOpType::READ:
             HISTOGRAM_OBSERVE(*m_metrics, read_lat, dur);
             HISTOGRAM_OBSERVE(*m_metrics, read_size, iocb->size);
-            LOGINFO("read, size {}, lat {}", iocb->size, dur);
+            LOGTRACE("read, size {}, lat {}", iocb->size, dur);
             break;
         case DriveOpType::FSYNC:
             HISTOGRAM_OBSERVE(*m_metrics, fsync_lat, dur);
             HISTOGRAM_OBSERVE(*m_metrics, fsync_size, iocb->size);
-            LOGINFO("fsync, size {}, lat {}", iocb->size, dur);
+            LOGTRACE("fsync, size {}, lat {}", iocb->size, dur);
             break;
 
         default:
