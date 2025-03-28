@@ -51,7 +51,7 @@ public:
     bool pre_init_verify{true};
 
     verify_type_t verify_type{verify_type_t::csum}; // What type of verification on every reads
-    load_type_t load_type{load_type_t::random};     // IO type (random, sequential, same)
+    load_type_t load_type{load_type_t::sequential};     // IO type (random, sequential, same)
     buf_pattern_t buf_pattern{buf_pattern_t::lbas}; // Buffer pattern to read/write verify (fill with lba, random)
     std::optional< uint32_t > io_blk_size;          // If not provided, use random blk_size, else use this blksize
 
@@ -164,7 +164,7 @@ public:
     IOJob& operator=(IOJob&&) noexcept = delete;
 
     void run_one_iteration() override {
-        RELEASE_ASSERT_GE(m_cfg.qdepth, iomanager.num_workers());
+        //RELEASE_ASSERT_GE(m_cfg.qdepth, iomanager.num_workers());
 
         while (m_outstanding_ios.load(std::memory_order_acquire) < (int64_t)m_cfg.qdepth) {
             switch (pick_io_type()) {
@@ -269,6 +269,10 @@ private:
         std::uniform_int_distribution< uint64_t > lba_random{0, vinfo->m_max_vol_blks - max_blks - 1};
         // nlbas: [1, max_blks]
         std::uniform_int_distribution< uint32_t > nlbas_random{1, max_blks};
+        if (m_cfg.io_blk_size && *m_cfg.io_blk_size !=0 ) {
+	    auto nblks = *m_cfg.io_blk_size / vinfo->m_page_size;
+            nlbas_random = std::uniform_int_distribution< uint32_t >(nblks, nblks);
+        }
 
         // we won't be writing more then 128 blocks in one io
         uint32_t attempt{1};
