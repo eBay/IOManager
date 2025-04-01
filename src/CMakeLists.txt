@@ -9,6 +9,8 @@ find_package(spdk)
 
 if (${spdk_FOUND})
     set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWITH_SPDK")
+else ()
+    find_package(liburing REQUIRED)
 endif()
 
 if ("${FIBER_IMPL}" STREQUAL "folly") 

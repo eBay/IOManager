@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.4.0"
+    version = "11.4.1"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -35,7 +35,7 @@ class IOMgrConan(ConanFile):
         'grpc_support': False,
         'sanitize':     False,
         'testing':      'epoll_mode',
-        'spdk':         True,
+        'spdk':         False,
     }
 
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
@@ -69,6 +69,8 @@ class IOMgrConan(ConanFile):
             self.requires("grpc/[>=1.50]")
         if self.options.spdk:
             self.requires("spdk/nbi.21.07.y", transitive_headers=True)
+        else:
+            self.requires("liburing/[>=2.1]", transitive_headers=True)
         self.requires("pistache/nbi.0.0.5.1", transitive_headers=True)
         self.requires("libcurl/8.4.0", override=True)
         self.requires("lz4/1.9.4", override=True)
@@ -145,6 +147,7 @@ class IOMgrConan(ConanFile):
         copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
+        self.cpp_info.system_libs.extend(["aio"])
         if  self.options.sanitize:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")

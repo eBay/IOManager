@@ -22,6 +22,18 @@
 #include <mutex>
 
 #include <fcntl.h>
+
+/// NOTE: These are defined here to prevent inclusion of liburing/compat.h which conflicts
+/// with system header /usr/include/futex.h
+#define LIBURING_COMPAT_H
+#define BLOCK_URING_CMD_DISCARD                        _IO(0x12, 0)
+struct open_how {
+        uint64_t        flags;
+        uint64_t        mode;
+        uint64_t        resolve;
+};
+///
+
 #include <liburing.h>
 #include <sys/eventfd.h>
 

@@ -120,9 +120,13 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     m_common_thread_state_notifier = notifier;
 
     // Initialize the impl module
+#if WITH_SPDK
     if (m_is_spdk) {
         m_impl = std::make_unique< IOManagerSpdkImpl >(m_hugepage_limit);
     } else {
+#else
+    {
+#endif
         m_impl = std::make_unique< IOManagerEpollImpl >();
     }
 
@@ -149,9 +153,11 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
         }
 
+#if WITH_SPDK
         if (m_is_spdk) {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< SpdkDriveInterface >()));
         }
+#endif
     }
 
     // Start all reactor threads
@@ -163,8 +169,12 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Start the global timer
     m_global_user_timer = std::make_unique< timer_epoll >(reactor_regex::all_user);
-    m_global_worker_timer = m_is_spdk ? std::unique_ptr< timer >(new timer_spdk(reactor_regex::all_worker))
-                                      : std::unique_ptr< timer >(new timer_epoll(reactor_regex::all_worker));
+    m_global_worker_timer =
+#if WITH_SPDK
+            m_is_spdk ? std::unique_ptr< timer >(new timer_spdk(reactor_regex::all_worker))
+                                      :
+#endif
+                                      std::unique_ptr< timer >(new timer_epoll(reactor_regex::all_worker));
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     m_impl->post_interface_init();
@@ -323,10 +333,14 @@ void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t
     loop_type_t ltype = loop_type;
 
     shared< IOReactor > reactor;
+#ifdef WITH_SPDK
     if (m_is_spdk && (loop_type & TIGHT_LOOP)) {
         ltype = (loop_type & ~INTERRUPT_LOOP);
         reactor = std::make_shared< IOReactorSPDK >();
     } else {
+#else
+    {
+#endif
         ltype = (loop_type & ~TIGHT_LOOP) | INTERRUPT_LOOP;
         reactor = std::make_shared< IOReactorEPoll >();
     }
@@ -374,7 +388,9 @@ static bool match_regex(reactor_regex r, const IOReactor* reactor) {
 
 int IOManager::run_on_forget(io_fiber_t fiber, spdk_msg_signature_t fn, void* context) {
     assert(fiber->reactor->is_tight_loop_reactor());
+#ifdef WITH_SPDK
     spdk_thread_send_msg(fiber->spdk_thr, fn, context);
+#endif
     return 1;
 }
 
@@ -622,16 +638,20 @@ IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} 
 std::string IODevice::dev_id() const {
     if (std::holds_alternative< int >(dev)) {
         return std::to_string(fd());
+#ifdef WITH_SPDK
     } else if (std::holds_alternative< spdk_bdev_desc* >(dev)) {
         return spdk_bdev_get_name(bdev());
+#endif
     } else {
         return "";
     }
 }
 
+#ifdef WITH_SPDK
 spdk_bdev_desc* IODevice::bdev_desc() const { return std::get< spdk_bdev_desc* >(dev); }
 spdk_bdev* IODevice::bdev() const { return spdk_bdev_desc_get_bdev(bdev_desc()); }
 spdk_nvmf_qpair* IODevice::nvmf_qp() const { return std::get< spdk_nvmf_qpair* >(dev); }
+#endif
 
 bool IODevice::is_global() const { return (!std::holds_alternative< io_fiber_t >(thread_scope)); }
 bool IODevice::is_my_thread_scope() const { return (!is_global() && (reactor_scope() == iomanager.this_reactor())); }

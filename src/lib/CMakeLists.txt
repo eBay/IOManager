@@ -19,6 +19,7 @@ list(APPEND COMMON_DEPS
       liburing::liburing
       Pistache::Pistache
       sisl::sisl
+      aio
     )
 if (${spdk_FOUND})
     link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
@@ -56,6 +57,7 @@ list(APPEND IOMGR_LIB_DEPS
 if (${grpc_internal_FOUND})
     list (APPEND IOMGR_LIB_DEPS grpc_internal::grpc_internal)
 endif()
+message(STATUS "IOMGR Deps: ${IOMGR_LIB_DEPS}")
 
 target_link_libraries(iomgr ${IOMGR_LIB_DEPS})
 
