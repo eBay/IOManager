@@ -106,6 +106,7 @@ class IOMgrConan(ConanFile):
         self.cpp.build.includedirs = ["src/include"]
 
         self.cpp.package.libs = ["iomgr"]
+        self.cpp.package.system_libs.extend(["aio"])
         self.cpp.package.includedirs = ["include"] # includedirs is already set to 'include' by
         self.cpp.package.libdirs = ["lib"]
 
