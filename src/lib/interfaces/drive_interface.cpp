@@ -215,6 +215,7 @@ drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
         return SpdkDriveInterface::detect_drive_type(dev_name);
 #else
         LOGMSG_ASSERT(false, "Could not detect drive type!");
+        return drive_type::unknown;
 #endif
     }
 }
