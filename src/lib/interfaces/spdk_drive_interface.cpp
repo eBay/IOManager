@@ -61,10 +61,6 @@ using namespace std::chrono_literals;
 
 namespace iomgr {
 
-#ifndef NDEBUG
-std::atomic< uint64_t > drive_iocb::_iocb_id_counter{0};
-#endif
-
 SpdkDriveInterface::SpdkDriveInterface(const io_interface_comp_cb_t& cb) : DriveInterface(cb) {}
 
 static void bdev_event_cb(enum spdk_bdev_event_type type, spdk_bdev* bdev, void* event_ctx) {}

@@ -188,6 +188,7 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
     return iodev;
 }
 
+#ifdef WITH_SPDK
 /************************ Timer Spdk *****************************/
 timer_spdk::timer_spdk(const thread_specifier& scope) : timer(scope) {}
 timer_spdk::~timer_spdk() = default;
@@ -332,6 +333,7 @@ bool spdk_thread_timer_info::call_timer_cb_once() {
 }
 
 bool spdk_thread_timer_info::is_recurring_timer() const { return st_info->is_recurring; }
+#endif
 
 #if 0
 void timer_spdk::check_and_call_expired_timers() {

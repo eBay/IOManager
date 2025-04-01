@@ -36,7 +36,9 @@
 #include <iomgr/iomgr_flip.hpp>
 #include <iomgr/drive_interface.hpp>
 #include "interfaces/kernel_drive_interface.hpp"
+#ifdef WITH_SPDK
 #include "interfaces/spdk_drive_interface.hpp"
+#endif
 #include "iomgr_config.hpp"
 #include "reactor/reactor.hpp"
 
@@ -46,6 +48,10 @@ std::mutex DriveInterface::s_dev_type_lookup_mtx;
 
 std::unordered_map< std::string, drive_attributes > DriveInterface::s_dev_attrs;
 std::mutex DriveInterface::s_dev_attrs_lookup_mtx;
+
+#ifndef NDEBUG
+std::atomic< uint64_t > drive_iocb::_iocb_id_counter{0};
+#endif
 
 static std::string get_mounted_device(const std::string& filename) {
     struct stat s;
@@ -205,7 +211,11 @@ drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
     } else if (std::filesystem::is_block_file(std::filesystem::status(dev_name))) {
         return is_rotational_device(dev_name) ? drive_type::block_hdd : drive_type::block_nvme;
     } else {
+#ifdef WITH_SPDK
         return SpdkDriveInterface::detect_drive_type(dev_name);
+#else
+        LOGMSG_ASSERT(false, "Could not detect drive type!");
+#endif
     }
 }
 
