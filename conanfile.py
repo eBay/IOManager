@@ -106,7 +106,6 @@ class IOMgrConan(ConanFile):
         self.cpp.build.includedirs = ["src/include"]
 
         self.cpp.package.libs = ["iomgr"]
-        self.cpp.package.system_libs.extend(["aio"])
         self.cpp.package.includedirs = ["include"] # includedirs is already set to 'include' by
         self.cpp.package.libdirs = ["lib"]
 
@@ -148,6 +147,7 @@ class IOMgrConan(ConanFile):
         copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
+        self.cpp_info.system_libs.extend(["aio"])
         if  self.options.sanitize:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")
