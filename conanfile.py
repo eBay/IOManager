@@ -97,7 +97,12 @@ class IOMgrConan(ConanFile):
             self._download_grpc(self.source_folder)
 
         self.folders.source = "."
-        self.folders.build = join("build", str(self.settings.build_type))
+        if self.options.get_safe("sanitize"):
+            self.folders.build = join("build", "Sanitized")
+        elif self.options.get_safe("coverage"):
+            self.folders.build = join("build", "Coverage")
+        else:
+            self.folders.build = join("build", str(self.settings.build_type))
         self.folders.generators = join(self.folders.build, "generators")
 
         self.cpp.source.includedirs = ["src/include"]
