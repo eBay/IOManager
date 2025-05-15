@@ -509,7 +509,6 @@ void UringDriveInterface::handle_completions() {
                 iocb->update_iovs_on_partial_result();
                 // retry I/O with remaining unset data;
                 t_uring_ch->m_iocb_waitq.push(iocb);
-                --(t_uring_ch->m_in_flight_ios);
             }
         } else {
             LOGERRORMOD(iomgr, "Error in completion of io, iocb={}, result={}, retry={}", (void*)iocb, iocb->result,
@@ -525,13 +524,12 @@ void UringDriveInterface::handle_completions() {
                 t_uring_ch->m_iocb_waitq.push(iocb);
             }
         }
+        --(t_uring_ch->m_in_flight_ios);
         t_uring_ch->drain_waitq();
     } while (true);
 }
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
-    --(t_uring_ch->m_in_flight_ios);
-
 #ifdef _PRERELEASE
     if (DriveInterface::inject_delay_if_needed(iocb, [this](drive_iocb* iocb) { complete_io(iocb); })) { return; }
 #endif
