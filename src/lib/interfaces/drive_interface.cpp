@@ -93,7 +93,15 @@ static bool is_rotational_device(const std::string& device) {
     int is_rotational = 0;
     const auto maj_min{get_major_minor(device)};
     if (!maj_min.empty()) {
-        std::string sys_path = fmt::format("/sys/dev/block/{}/queue/rotational", maj_min);
+        std::string sys_path = fmt::format("/sys/dev/block/{}/partition", maj_min);
+        int is_partition = 0;
+        if (auto part_file = std::ifstream(sys_path); part_file.is_open()) { part_file >> is_partition; }
+        if (is_partition == 1) {
+            LOGINFO("{} is a partition, checking parent disk", device);
+            sys_path = fmt::format("/sys/dev/block/{}/../queue/rotational", maj_min);
+        } else {
+            sys_path = fmt::format("/sys/dev/block/{}/queue/rotational", maj_min);
+        }
         if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
     }
     return (is_rotational == 1);
