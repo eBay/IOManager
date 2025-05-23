@@ -92,11 +92,28 @@ static std::string get_major_minor(const std::string& devname) {
 static bool is_rotational_device(const std::string& device) {
     int is_rotational = 0;
     const auto maj_min{get_major_minor(device)};
-    if (!maj_min.empty()) {
-        std::string sys_path = fmt::format("/sys/dev/block/{}/queue/rotational", maj_min);
-        if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
+    if (maj_min.empty()) {
+        LOGERROR("Failed to retrieve major:minor for device {}", device);
+        return false;
     }
-    return (is_rotational == 1);
+    try {
+        std::filesystem::path symlinkPath = fmt::format("/sys/dev/block/{}", maj_min);
+        std::filesystem::path base_path =
+            std::filesystem::canonical(symlinkPath.replace_filename(std::filesystem::read_symlink(symlinkPath)));
+
+        if (std::filesystem::exists(base_path / "partition")) {
+            LOGINFO("{} is a partition, checking parent disk", device);
+            base_path = base_path.parent_path();
+        }
+        std::filesystem::path sys_path = base_path / "queue/rotational";
+        LOGINFO("Checking {}", sys_path.string());
+        if (auto rot_file = std::ifstream(sys_path); rot_file.is_open()) { rot_file >> is_rotational; }
+
+        return is_rotational == 1;
+    } catch (const std::filesystem::filesystem_error& e) {
+        LOGERROR("Filesystem error: {}", e.what());
+        return false;
+    }
 }
 
 static uint64_t get_max_write_zeros(const std::string& devname) {
