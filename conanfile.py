@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.4.3"
+    version = "11.4.4"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -60,8 +60,8 @@ class IOMgrConan(ConanFile):
             self.options["spdk"].native_build = True
 
     def build_requirements(self):
-        self.test_requires("gtest/1.14.0")
-        self.test_requires("cpr/1.10.4")
+        self.test_requires("gtest/1.15.0")
+        self.test_requires("cpr/1.12.0")
 
     def requirements(self):
         self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
@@ -72,9 +72,6 @@ class IOMgrConan(ConanFile):
         else:
             self.requires("liburing/[>=2.1]", transitive_headers=True)
         self.requires("pistache/nbi.0.0.5.1", transitive_headers=True)
-        self.requires("libcurl/8.4.0", override=True)
-        self.requires("lz4/1.9.4", override=True)
-        self.requires("zstd/1.5.5", override=True)
 
         # ARM needs unreleased versionof libunwind
         if not self.settings.arch in ['x86', 'x86_64']:
