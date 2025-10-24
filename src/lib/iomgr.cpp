@@ -23,7 +23,6 @@
 #include <pthread_np.h>
 #endif
 
-#include <sisl/fds/obj_allocator.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
@@ -233,7 +232,6 @@ void IOManager::stop() {
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
         m_default_general_iface.reset();
-        // m_default_grpc_iface.reset();
         m_drive_ifaces.clear();
         m_iface_list.clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }

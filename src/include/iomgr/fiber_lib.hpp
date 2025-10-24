@@ -2,8 +2,12 @@
 
 #ifdef USE_FOLLY_FIBER
 #include <folly/fibers/FiberManager.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/futures/Future.h>
 #include <folly/fibers/Promise.h>
+#pragma GCC diagnostic pop
 #else
 #include <boost/fiber/all.hpp>
 #include <boost/fiber/context.hpp>

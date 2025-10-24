@@ -24,7 +24,11 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wuninitialized"
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include <folly/futures/Future.h>
+#pragma GCC diagnostic pop
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/fiber_lib.hpp>

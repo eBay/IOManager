@@ -35,9 +35,10 @@ namespace iomgr {
         LOG##level##MOD_FMT(                                                                                           \
             iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                            \
                 fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[{}:{}] "},                                      \
-                                fmt::make_format_args(file_name(__FILE__), __LINE__));                                 \
-                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                             \
-                                fmt::make_format_args(m_reactor_num, m_fiber_mgr_lib->iofiber_self_ordinal()));        \
+                                fmt::make_format_args(unmove(file_name(__FILE__)), unmove(__LINE__)));                 \
+                fmt::vformat_to(                                                                                       \
+                    fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                                         \
+                    fmt::make_format_args(m_reactor_num, unmove(m_fiber_mgr_lib->iofiber_self_ordinal())));            \
                 fmt::vformat_to(fmt::appender(buf), fmt::string_view{__m}, fmt::make_format_args(args...));            \
                 return true;                                                                                           \
             }),                                                                                                        \
@@ -242,7 +243,7 @@ struct formatter< iomgr::IOFiber > {
 
     template < typename FormatContext >
     auto format(const iomgr::IOFiber& f, FormatContext& ctx) {
-        return format_to(fmt::appender(ctx.out()), "[reactor={}]", f.reactor->reactor_idx());
+        return fmt::format_to(fmt::appender(ctx.out()), "[reactor={}]", f.reactor->reactor_idx());
     }
 };
 

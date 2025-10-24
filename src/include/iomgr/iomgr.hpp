@@ -52,7 +52,6 @@ struct timer_info;
 static constexpr int inbuilt_interface_count = 1;
 
 class DriveInterface;
-class GrpcInterface;
 class IOManagerImpl;
 class IOThreadMetrics;
 class GenericIOInterface;
@@ -255,7 +254,6 @@ public:
 
     ///////////////////////////// Access related methods /////////////////////////////
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
-    GrpcInterface* grpc_interface() { return m_default_grpc_iface.get(); }
     uint32_t num_workers() const { return m_num_workers; }
     bool is_spdk_mode() const { return m_is_spdk; }
     bool is_uring_capable() const { return m_is_uring_capable; }
@@ -374,7 +372,6 @@ private:
     std::vector< std::shared_ptr< DriveInterface > > m_drive_ifaces;
 
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
-    std::shared_ptr< GrpcInterface > m_default_grpc_iface;
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 

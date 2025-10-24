@@ -15,7 +15,6 @@
 #include <cstring>
 
 #include <sisl/logging/logging.h>
-#include <sisl/fds/obj_allocator.hpp>
 #include <spdk/log.h>
 #include <spdk/env.h>
 #include <spdk/thread.h>

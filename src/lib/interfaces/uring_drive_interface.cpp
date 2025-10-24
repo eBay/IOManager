@@ -21,7 +21,6 @@
 #endif
 #include <folly/Exception.h>
 #include "iomgr_config.hpp"
-#include <sisl/fds/obj_allocator.hpp>
 #if defined __clang__ or defined __GNUC__
 #pragma GCC diagnostic pop
 #endif

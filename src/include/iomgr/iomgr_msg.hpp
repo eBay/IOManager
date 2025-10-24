@@ -19,7 +19,6 @@
 #include <folly/Traits.h>
 #include <boost/fiber/all.hpp>
 #include <sisl/fds/buffer.hpp>
-#include <sisl/fds/obj_allocator.hpp>
 #include <sisl/utility/enum.hpp>
 #include <sisl/utility/atomic_counter.hpp>
 #include <sisl/utility/obj_life_counter.hpp>
@@ -31,7 +30,6 @@ using run_func_t = std::function< void(void) >;
 
 struct iomgr_waitable_msg;
 struct iomgr_msg : public sisl::ObjLifeCounter< iomgr_msg > {
-    friend class sisl::ObjectAllocator< iomgr_msg >;
 
     io_fiber_t m_dest_fiber{nullptr}; // Is this message heading to a specific fiber within reactor, defaults main fiber
     run_func_t m_method;

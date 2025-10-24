@@ -16,7 +16,6 @@
 #include <thread>
 
 #include <sisl/fds/buffer.hpp>
-#include <sisl/fds/obj_allocator.hpp>
 #include <sisl/logging/logging.h>
 
 // TODO: Remove this once the problem is fixed in folly

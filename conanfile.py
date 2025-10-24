@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "11.4.3"
+    version = "12.0.0"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -24,16 +24,16 @@ class IOMgrConan(ConanFile):
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
         "sanitize": ['True', 'False'],
+        'prerelease' : ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
-        "grpc_support": ['True', 'False'],
         "spdk": ['True', 'False'],
         }
     default_options = {
         'shared':       False,
         'fPIC':         True,
         'coverage':     False,
-        'grpc_support': False,
         'sanitize':     False,
+        'prerelease':   False,
         'testing':      'epoll_mode',
         'spdk':         False,
     }
@@ -51,6 +51,7 @@ class IOMgrConan(ConanFile):
         if self.options.shared:
             self.options.rm_safe("fPIC")
         if self.settings.build_type == "Debug":
+            self.options.rm_safe("prerelease")
             if self.options.coverage and self.options.sanitize:
                 raise ConanInvalidConfiguration("Sanitizer does not work with Code Coverage!")
             if self.conf.get("tools.build:skip_test", default=False):
@@ -60,42 +61,23 @@ class IOMgrConan(ConanFile):
             self.options["spdk"].native_build = True
 
     def build_requirements(self):
-        self.test_requires("gtest/1.14.0")
-        self.test_requires("cpr/1.10.4")
+        self.test_requires("gtest/1.17.0")
+        self.test_requires("cpr/1.12.0")
 
     def requirements(self):
-        self.requires("sisl/[^12.2]@oss/master", transitive_headers=True)
-        if self.options.grpc_support:
-            self.requires("grpc/[>=1.50]")
+        self.requires("sisl/[^13]@oss/master", transitive_headers=True)
         if self.options.spdk:
             self.requires("spdk/nbi.21.07.y", transitive_headers=True)
         else:
             self.requires("liburing/[>=2.1]", transitive_headers=True)
         self.requires("pistache/nbi.0.0.5.1", transitive_headers=True)
-        self.requires("libcurl/8.4.0", override=True)
-        self.requires("lz4/1.9.4", override=True)
-        self.requires("zstd/1.5.5", override=True)
+        self.requires("libcurl/[^8.4]", override=True)
 
         # ARM needs unreleased versionof libunwind
         if not self.settings.arch in ['x86', 'x86_64']:
             self.requires("libunwind/1.8.2@baydb/develop", override=True)
 
-    def _download_grpc(self, folder):
-        ref = self.dependencies['grpc'].ref.version
-        source_info = self.dependencies['grpc'].conan_data["sources"][f"{ref}"]
-        current_info_str = json.dumps(source_info, sort_keys=True)
-
-        touch_file_path = join(folder, "grpc_download")
-
-        if exists(touch_file_path) == False or load(self, touch_file_path) != current_info_str:
-            print("-------------- downloading grpc sources ---------")
-            get(self, **source_info, destination=join(folder, "grpc_internal"), strip_root=True)
-            save(self, touch_file_path, current_info_str)
-
     def layout(self):
-        if self.options.grpc_support:
-            self._download_grpc(self.source_folder)
-
         self.folders.source = "."
         if self.options.get_safe("sanitize"):
             self.folders.build = join("build", "Sanitized")
@@ -122,7 +104,10 @@ class IOMgrConan(ConanFile):
         tc.variables["CTEST_OUTPUT_ON_FAILURE"] = "ON"
         tc.variables["MEMORY_SANITIZER_ON"] = "OFF"
         tc.variables["BUILD_COVERAGE"] = "OFF"
+        tc.variables["PRERELEASE_ON"] = "OFF"
         tc.variables["CMAKE_TEST_TARGET"] = self.options.testing
+        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
+            tc.variables["PRERELEASE_ON"] = "ON"
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
                 tc.variables['BUILD_COVERAGE'] = 'ON'
@@ -153,6 +138,8 @@ class IOMgrConan(ConanFile):
 
     def package_info(self):
         self.cpp_info.system_libs.extend(["aio"])
+        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
+            self.cpp_info.defines.append("_PRERELEASE=1")
         if  self.options.sanitize:
             self.cpp_info.sharedlinkflags.append("-fsanitize=address")
             self.cpp_info.exelinkflags.append("-fsanitize=address")

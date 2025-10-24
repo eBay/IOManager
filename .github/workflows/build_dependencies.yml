@@ -5,7 +5,7 @@ on:
     inputs:
       platform:
         required: false
-        default: 'ubuntu-22.04'
+        default: 'ubuntu-24.04'
         type: string
       branch:
         required: true
@@ -33,11 +33,8 @@ on:
         required: true
         type: choice
         options:
-          - ubuntu-22.04
-          - ubuntu-20.04
-          - macos-13
-          - macos-12
-        default: 'ubuntu-22.04'
+          - ubuntu-24.04
+        default: 'ubuntu-24.04'
       branch:
         required: true
         type: string
@@ -97,9 +94,15 @@ jobs:
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'False' }}
 
+    - name: Setup Conan
+      uses: ebay/sisl/.github/actions/setup_conan2@master
+      with:
+        platform: ${{ inputs.platform }}
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
     - name: Load IOMgr Cache
       id: restore-cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: eBay/sisl/.github/actions/load_conan2@master
       with:
         testing: ${{ inputs.testing }}
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
@@ -113,52 +116,45 @@ jobs:
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: eBay/sisl/.github/actions/load_conan2@master
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
         fail_on_cache_miss: true
-      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
-
-    - name: Setup Conan
-      uses: eBay/sisl/.github/actions/setup_conan@master
-      with:
-        platform: ${{ inputs.platform }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Prepare Recipes
       run: |
-        ./prepare.sh
-        conan export import/sisl oss/master
-        cached_pkgs=$(ls -1d ~/.conan/data/*/*/*/*/package | sed 's,.*data/,,' | cut -d'/' -f1,2 | paste -sd',' - -)
-        echo "::info:: Pre-cached: ${cached_pkgs}"
+        conan export --user oss --channel master import/sisl
+        ./prepare_v2.sh
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Build Cache
       run: |
         conan install \
-            -o sisl:prerelease=${{ inputs.prerelease }} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o testing=off \
-            -s build_type=${{ inputs.build-type }} \
-            -c tools.build.skip_test=True \
+            -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
+            -o iomgr/*:testing=off \
+            -s:h build_type=${{ inputs.build-type }} \
+            -c tools.build:skip_test=True \
+            --format=json \
             --build missing \
-            .
+            . > ~/build.json
+        conan list --graph ~/build.json --graph-binaries=build --format=json > ~/pkglist.json
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: eBay/sisl/.github/actions/store_conan@master
+      uses: eBay/sisl/.github/actions/store_conan2@master
       with:
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
       if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Reload Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan@master
+      uses: eBay/sisl/.github/actions/load_conan2@master
       with:
         testing: 'False'
         path: import/sisl
-        key_prefix: SislDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
         fail_on_cache_miss: true
       if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
 
@@ -166,32 +162,28 @@ jobs:
       run: |
         sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
         conan create \
-            -o sisl:prerelease=${{ inputs.prerelease }} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o iomgr:sanitize=${sanitize} \
-            -o iomgr:testing='epoll_mode' \
-            -s build_type=${{ inputs.build-type }} \
+            -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
+            -o iomgr/*:testing='epoll_mode' \
+            -o iomgr/*:sanitize=${sanitize} \
+            -s:h build_type=${{ inputs.build-type }} \
             --build missing \
             .
       if: ${{ inputs.testing == 'True' && inputs.tooling != 'Coverage' }}
 
     - name: Code Coverage Run
       run: |
-        conan install \
-            -o sisl:prerelease=${{ inputs.prerelease }} \
-            -o sisl:malloc_impl=${{ inputs.malloc-impl }} \
-            -o coverage=True \
-            -o testing=epoll_mode \
-            -s build_type=${{ inputs.build-type }} \
-            -c tools.build.skip_test=True \
+        conan build \
+            -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
+            -o iomgr/*:coverage=True \
+            -o iomgr/*:testing=epoll_mode \
+            -s:h build_type=${{ inputs.build-type }} \
             --build missing \
             .
-        conan build .
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        gcov: true
+        verbose: true
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}

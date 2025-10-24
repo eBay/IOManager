@@ -21,13 +21,12 @@ on:
 
 jobs:
   SislDeps:
-    uses: eBay/sisl/.github/workflows/build_dependencies.yml@master
+    uses: ebay/sisl/.github/workflows/build_dependencies.yml@master
     with:
       branch: master
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 

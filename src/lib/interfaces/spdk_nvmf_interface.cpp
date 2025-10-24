@@ -24,7 +24,6 @@ extern "C" {
 #include <spdk/nvmf_transport.h>
 }
 #include <folly/Exception.h>
-#include <sisl/fds/obj_allocator.hpp>
 #include <sisl/fds/buffer.hpp>
 #include "spdk/reactor_spdk.hpp"
 

@@ -5,13 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 
 include (cmake/Flags.cmake)
 
-if(EXISTS ${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup(TARGETS)
-else()
-    message(WARNING "Conan Build file does not exist, trying to build without!")
-endif()
-
 if (DEFINED BUILD_COVERAGE)
   if (${BUILD_COVERAGE})
     include (cmake/CodeCoverage.cmake)
@@ -25,6 +18,10 @@ if (DEFINED MEMORY_SANITIZER_ON AND ${MEMORY_SANITIZER_ON})
 else ()
     message(STATUS "Build with Memory Sanitizer OFF")
 endif()
+
+if (DEFINED PRERELEASE_ON AND ${PRERELEASE_ON})
+    add_flags(-D_PRERELEASE)
+endif ()
 
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)

@@ -138,7 +138,8 @@ void IOReactorEPoll::listen() {
 
             // It is possible for io thread status by the msg processor. Catch at the exit and return
             if (!is_io_reactor()) {
-                REACTOR_LOG(INFO, "listen will exit because this is no longer an io reactor");
+                // Do not use REACTOR_LOG here, execution thread may not exist anymore
+                LOGINFOMOD(iomgr, "listen will exit because this is no longer an io reactor");
                 return;
             }
         } else {

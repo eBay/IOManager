@@ -20,7 +20,6 @@ extern "C" {
 }
 
 #include <sisl/logging/logging.h>
-#include <sisl/fds/obj_allocator.hpp>
 #include <iomgr/iomgr.hpp>
 #include "reactor/reactor.hpp"
 #include "iomgr_config.hpp"
