@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "12.0.0"
+    version = "12.0.1"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -113,6 +113,8 @@ class IOMgrConan(ConanFile):
                 tc.variables['BUILD_COVERAGE'] = 'ON'
             elif self.options.get_safe("sanitize"):
                 tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
+        tc.variables["CONAN_PACKAGE_NAME"] = self.name
+        tc.variables["CONAN_PACKAGE_VERSION"] = self.version
         tc.generate()
 
         # This generates "boost-config.cmake" and "grpc-config.cmake" etc in self.generators_folder
