@@ -1,10 +1,10 @@
-name: IOManager Merge Build
+name: IOManager11 Merge Build
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
+      - stable/v11.x
 
 jobs:
   Build:
@@ -47,5 +47,5 @@ jobs:
           -H "Authorization: Bearer ${{ secrets.CHAIN_BUILD_TOKEN }}"\
           -H "X-GitHub-Api-Version: 2022-11-28" \
           https://api.github.com/repos/eBay/homestore/actions/workflows/merge_build.yml/dispatches \
-          -d '{"ref":"master","inputs":{}}'
-      if: ${{ github.ref == 'refs/heads/master' }}
+          -d '{"ref":"stable/v6.x","inputs":{}}'
+      if: ${{ github.ref == 'refs/heads/stable/v6.x' }}
