@@ -1,12 +1,10 @@
-name: IOManager Build
+name: IOManager PR
 
 on:
   workflow_dispatch:
   pull_request:
     branches:
       - master
-      - stable/v11.x
-      - stable/v8.x
 
 jobs:
   Build:

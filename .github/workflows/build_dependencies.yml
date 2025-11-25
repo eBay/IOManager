@@ -134,7 +134,6 @@ jobs:
       run: |
         conan install \
             -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
-            -o iomgr/*:testing=off \
             -s:h build_type=${{ inputs.build-type }} \
             -c tools.build:skip_test=True \
             --format=json \
@@ -172,18 +171,19 @@ jobs:
 
     - name: Code Coverage Run
       run: |
+        python -m pip install gcovr
         conan build \
             -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
             -o iomgr/*:coverage=True \
-            -o iomgr/*:testing=epoll_mode \
             -s:h build_type=${{ inputs.build-type }} \
             --build missing \
             .
+        gcovr --cobertura ./coverage.xml
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
       with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        verbose: true
+        files: ./coverage.xml
+        disable_search: true
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
