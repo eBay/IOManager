@@ -24,37 +24,34 @@ static bool check_uring_capability(bool& new_interface_supported) {
     new_interface_supported = true;
     if (syscall(__NR_io_uring_register, 0, IORING_UNREGISTER_BUFFERS, NULL, 0) && errno == ENOSYS) {
         // No io_uring
-        new_interface_supported = false;
+        new_interface_supported = false; // LCOV_EXCL_START
         uring_supported = false;
-    } else {
+    } else { // LCOV_EXCL_STOP
         // io_uring
         uring_supported = true;
     }
 
-    if (uring_supported) {
-        // do futher check if new interfaces are supported (starting available with kernel 5.6);
-        std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
-                                  IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
+    if (!uring_supported) return uring_supported;
+    // do futher check if new interfaces are supported (starting available with kernel 5.6);
+    std::vector< int > ops = {IORING_OP_NOP,   IORING_OP_READV, IORING_OP_WRITEV,
+                              IORING_OP_FSYNC, IORING_OP_READ,  IORING_OP_WRITE};
 
-        struct io_uring_probe* probe = io_uring_get_probe();
-        if (probe == nullptr) {
+    struct io_uring_probe* probe = io_uring_get_probe();
+    if (probe == nullptr) {
+        new_interface_supported = false; // LCOV_EXCL_START
+
+        return uring_supported;
+    } // LCOV_EXCL_STOP
+
+    for (auto& op : ops) {
+        if (!io_uring_opcode_supported(probe, op)) { // LCOV_EXCL_START
             new_interface_supported = false;
-            goto exit;
-        }
-
-        for (auto& op : ops) {
-            if (!io_uring_opcode_supported(probe, op)) {
-                new_interface_supported = false;
-                break;
-            }
-        }
-
-        io_uring_free_probe(probe);
+            break;
+        } // LCOV_EXCL_STOP
     }
 
-exit:
+    io_uring_free_probe(probe);
     return uring_supported;
-
 #else
     return false;
 #endif
