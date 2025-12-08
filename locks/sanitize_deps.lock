@@ -218,10 +218,10 @@
     "context": "host"
    },
    "20": {
-    "ref": "lz4/1.9.4#1217a03c990b79aa34ed0faede18f534",
+    "ref": "lz4/1.9.4#432ec925e1af7d6e9aa35173c6504dc7",
     "options": "fPIC=True\nshared=False",
     "package_id": "be27726f9885116da1158027505be62e913cd585",
-    "prev": "688a10147076432372c1802fe09dacb1",
+    "prev": "5980a260bd0a98b6f085b7f411ccea6d",
     "context": "host"
    },
    "21": {
@@ -250,24 +250,24 @@
     "context": "host"
    },
    "24": {
-    "ref": "libelf/0.8.13#4f70a3555809ae50cc8add44f0f84288",
+    "ref": "libelf/0.8.13#c51dff906f36bdd55dc84ef9bb5de13e",
     "options": "fPIC=True\nshared=False",
     "package_id": "be27726f9885116da1158027505be62e913cd585",
-    "prev": "fd0a569f3bf625868e566abaded00dfd",
+    "prev": "4ebb354a5d72fef862ad3172591e07df",
     "context": "host"
    },
    "25": {
-    "ref": "libsodium/1.0.18#9e310e52ed60084484c5f640ab88883a",
+    "ref": "libsodium/1.0.18#7429a9e5351cc67bea3537229921714d",
     "options": "PIE=False\nfPIC=True\nshared=False\nuse_soname=True",
     "package_id": "ac0019f3242e6ccfa230aabf2d817ad265cb0081",
-    "prev": "df6b544a631cdbd9dca864f53f67e88f",
+    "prev": "231a8b71368815a785ae467e41a0a270",
     "context": "host"
    },
    "26": {
-    "ref": "libiberty/9.1.0#a6a0b042484db9cefa233a8aa31a33c5",
+    "ref": "libiberty/9.1.0#3060045a116b0fff6d4937b0fc9cfc0e",
     "options": "fPIC=True",
     "package_id": "be27726f9885116da1158027505be62e913cd585",
-    "prev": "6c7417a9d22a61ce4cb1bb4ddea39874",
+    "prev": "abbbc7266a73612b600dfc99f6f6e3eb",
     "context": "host"
    },
    "27": {
@@ -314,10 +314,10 @@
     "context": "host"
    },
    "32": {
-    "ref": "protobuf/3.21.12#ed2404ae366627005beb2173eab68174",
+    "ref": "protobuf/3.21.12#bc8a9a4aba4080d1e204a6fc7cac3a11",
     "options": "debug_suffix=True\nfPIC=True\nlite=False\nshared=False\nwith_rtti=True\nwith_zlib=True\nzlib:fPIC=True\nzlib:shared=False",
     "package_id": "d0dc15bd1c53d3bfb809f9d49d6162baddf534f4",
-    "prev": "a0e7945e131b7dd56ac9e95a1405143f",
+    "prev": "881d54e68774f9a4e09040bdfa693281",
     "requires": [
      "3"
     ],
@@ -485,10 +485,9 @@
     "context": "host"
    },
    "51": {
-    "ref": "gtest/1.12.1#a110ad735ec3df8d21666bcbc06161ed",
+    "ref": "gtest/1.12.1#016a2ec368fbaf1a3fc1cc4d6a2a21c7",
     "options": "build_gmock=True\ndisable_pthreads=False\nfPIC=True\nhide_symbols=False\nno_main=False\nshared=False",
     "package_id": "e54178ffb73389748e7bf45e64441da62db44ded",
-    "prev": "213d5e2bbb9ca81dd9a1399e49c31e3e",
     "context": "host"
    }
   },
