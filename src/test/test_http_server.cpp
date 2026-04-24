@@ -67,29 +67,31 @@ protected:
     std::unique_ptr< iomgr::HttpServer > m_server;
 };
 
+static const cpr::Header k_close_hdr{{"Connection", "close"}};
+
 TEST_F(HTTPServerTest, BasicTest) {
     const cpr::Url url{"http://127.0.0.1:5000/api/v1/sayHello"};
-    auto resp{cpr::Get(url)};
+    auto resp{cpr::Get(url, k_close_hdr)};
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Hello client from async_http server\n");
 
     static const cpr::Url url1{"http://127.0.0.1:5000/api/v1/getResource"};
-    resp = cpr::Get(url1);
+    resp = cpr::Get(url1, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "get");
 
     const cpr::Url url2{"http://127.0.0.1:5000/api/v1/postResource"};
-    resp = cpr::Post(url2);
+    resp = cpr::Post(url2, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "post");
 
     const cpr::Url url3{"http://127.0.0.1:5000/api/v1/putResource"};
-    resp = cpr::Put(url3);
+    resp = cpr::Put(url3, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "put");
 
     const cpr::Url url4{"http://127.0.0.1:5000/api/v1/deleteResource"};
-    resp = cpr::Delete(url4);
+    resp = cpr::Delete(url4, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "delete");
 }
@@ -98,7 +100,7 @@ TEST_F(HTTPServerTest, ParallelTestWithWait) {
     const auto thread_func{[](const size_t iterations) {
         const cpr::Url url{"http://127.0.0.1:5000/api/v1/yourNamePlease"};
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
-            const auto resp{cpr::Get(url)};
+            const auto resp{cpr::Get(url, k_close_hdr)};
             ASSERT_EQ(resp.status_code, cpr::status::HTTP_OK);
             ASSERT_EQ(resp.text, "I am the iomgr (sizzling) http server \n");
         }
@@ -117,10 +119,16 @@ TEST_F(HTTPServerTest, ParallelTestWithWait) {
 }
 
 TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
+    // Fire many async requests at the live server, then let TearDown call stop()
+    // while some may still be in-flight.  Collect futures so libcurl's thread
+    // pool is drained before the process exits; otherwise ASAN's slower cleanup
+    // path stalls teardown waiting on futures to complete.
     const auto thread_func{[](const size_t iterations) {
-        const cpr::Url url{"http://127.0.0.1:5051/api/v1/yourNamePlease"};
+        const cpr::Url url{"http://127.0.0.1:5000/api/v1/yourNamePlease"};
+        std::vector< cpr::AsyncResponse > responses;
+        responses.reserve(iterations);
         for (size_t iteration{0}; iteration < iterations; ++iteration) {
-            [[maybe_unused]] auto response{cpr::PostAsync(url)};
+            responses.push_back(cpr::GetAsync(url, k_close_hdr));
         }
     }};
 
@@ -134,34 +142,32 @@ TEST_F(HTTPServerTest, ParallelTestWithoutWait) {
     for (auto& worker : workers) {
         if (worker.joinable()) worker.join();
     }
-
-    // exit while server processing
 }
 
 TEST_F(HTTPServerTest, RestartTest) {
     m_server->restart("", "");
     const cpr::Url url{"http://127.0.0.1:5000/api/v1/sayHello"};
-    auto resp{cpr::Get(url)};
+    auto resp{cpr::Get(url, k_close_hdr)};
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Hello client from async_http server\n");
 
     static const cpr::Url url1{"http://127.0.0.1:5000/api/v1/getResource"};
-    resp = cpr::Get(url1);
+    resp = cpr::Get(url1, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "get");
 
     const cpr::Url url2{"http://127.0.0.1:5000/api/v1/postResource"};
-    resp = cpr::Post(url2);
+    resp = cpr::Post(url2, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "post");
 
     const cpr::Url url3{"http://127.0.0.1:5000/api/v1/putResource"};
-    resp = cpr::Put(url3);
+    resp = cpr::Put(url3, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "put");
 
     const cpr::Url url4{"http://127.0.0.1:5000/api/v1/deleteResource"};
-    resp = cpr::Delete(url4);
+    resp = cpr::Delete(url4, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "delete");
 }
@@ -203,27 +209,27 @@ protected:
 
 TEST_F(HTTPServerParamsTest, BasicTest) {
     cpr::Url url{"http://127.0.0.1:5000/api/v1/level1"};
-    cpr::Response resp = cpr::Post(url);
+    cpr::Response resp = cpr::Post(url, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level1");
 
     cpr::Url url1{"http://127.0.0.1:5000/api/v1/level1/Level1/level2"};
-    resp = cpr::Post(url1);
+    resp = cpr::Post(url1, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2");
 
     cpr::Url url2 = {"http://127.0.0.1:5000/api/v1/level1/"};
-    resp = cpr::Get(url2);
+    resp = cpr::Get(url2, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level1");
 
     cpr::Url url3 = {"http://127.0.0.1:5000/api/v1/level1/Level1"};
-    resp = cpr::Get(url3);
+    resp = cpr::Get(url3, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2");
 
     cpr::Url url4 = {"http://127.0.0.1:5000/api/v1/level1/Level1?query=dummy"};
-    resp = cpr::Get(url4);
+    resp = cpr::Get(url4, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
     EXPECT_EQ(resp.text, "Level2dummy");
 }
@@ -257,11 +263,11 @@ protected:
 
 TEST_F(HTTPServerAuthTest, BasicTest) {
     cpr::Url url{"http://127.0.0.1:5000/api/v1/localapi"};
-    cpr::Response resp = cpr::Post(url);
+    cpr::Response resp = cpr::Post(url, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
 
     cpr::Url url2 = {"http://127.0.0.1:5000/api/v1/safeapi"};
-    resp = cpr::Get(url2);
+    resp = cpr::Get(url2, k_close_hdr);
     EXPECT_EQ(resp.status_code, cpr::status::HTTP_OK);
 }
 
