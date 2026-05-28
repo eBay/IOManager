@@ -16,9 +16,14 @@ on:
       malloc-impl:
         required: true
         type: string
-      prerelease:
-        required: true
+      compiler:
+        required: false
         type: string
+        default: 'gcc'
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
       tooling:
         required: false
         type: string
@@ -53,18 +58,23 @@ on:
           - libc
           - tcmalloc
           - jemalloc
-      prerelease:
-        description: 'Fault Instrumentation'
+      compiler:
         required: false
         type: choice
         options:
-          - 'True'
-          - 'False'
-        default: 'False'
+          - gcc
+          - clang
+        default: 'gcc'
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
       tooling:
         required: false
         type: choice
-          - 'Sanitize'
+        options:
+          - 'AddressSanitize'
+          - 'ThreadSanitize'
           - 'Coverage'
           - 'None'
         default: 'None'
@@ -87,6 +97,37 @@ jobs:
         ref: ${{ inputs.branch }}
       if: ${{ inputs.testing == 'True' }}
 
+    - name: Check Code Formatting
+      run: |
+        # GitHub PR merge commit has shallow history, so fetch the base branch
+        git fetch --depth=50 origin ${{ github.base_ref }}
+
+        echo "Comparing HEAD against origin/${{ github.base_ref }}"
+
+        # Get C/C++ files changed in this PR
+        CHANGED_FILES=$(git diff --name-only --diff-filter=d origin/${{ github.base_ref }} | grep -E '\.(c|cpp|cc|cxx|h|hpp|hxx|ipp)$' || true)
+
+        if [[ -z "$CHANGED_FILES" ]]; then
+          echo "No C/C++ files modified in this PR"
+          exit 0
+        fi
+
+        echo "Checking formatting for PR-modified C/C++ files:"
+        echo "$CHANGED_FILES"
+
+        # Format only the changed files
+        echo "$CHANGED_FILES" | xargs clang-format -style=file -i -fallback-style=none
+
+        # Check if formatting changed anything
+        if ! git diff --exit-code -- $CHANGED_FILES; then
+          echo "::error::Code formatting check failed. PR-modified files have formatting issues."
+          echo "::error::Run './apply-clang-format.sh' locally and commit the changes."
+          exit 1
+        fi
+
+        echo "✓ All PR-modified files are properly formatted"
+      if: ${{ github.event_name == 'pull_request' && inputs.testing == 'True' }}
+
     - name: Retrieve Recipe
       uses: actions/checkout@v4
       with:
@@ -95,38 +136,42 @@ jobs:
       if: ${{ inputs.testing == 'False' }}
 
     - name: Setup Conan
-      uses: ebay/sisl/.github/actions/setup_conan2@stable/v13.x
+      uses: ebay/sisl/.github/actions/setup_conan2@dev/v14.x
       with:
         platform: ${{ inputs.platform }}
+        compiler: ${{ inputs.compiler }}
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Load IOMgr Cache
       id: restore-cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
+      uses: ebay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
         testing: ${{ inputs.testing }}
-        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
+        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
+
+    - name: Load Sisl Cache
+      uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
+      with:
+        testing: 'False'
+        path: import/sisl
+        key_prefix: SislDeps14-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+        fail_on_cache_miss: true
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Retrieve Dependencies
       uses: actions/checkout@v4
       with:
         repository: eBay/sisl
         path: import/sisl
-        ref: stable/v13.x
-      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
-
-    - name: Load Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
-      with:
-        testing: 'False'
-        path: import/sisl
-        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
-        fail_on_cache_miss: true
+        ref: dev/v14.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Prepare Recipes
       run: |
-        conan export import/sisl
+        pushd import/sisl
+        ./prepare_v2.sh
+        conan export --user oss --channel ${{ inputs.conan-channel }} .
+        popd
         ./prepare_v2.sh
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
@@ -139,33 +184,26 @@ jobs:
             --format=json \
             --build missing \
             . > ~/build.json
-        conan list --graph ~/build.json --graph-binaries=build --format=json > ~/pkglist.json
+        conan list --graph ~/build.json --graph-binaries=build,cache --format=json > ~/pkglist.json
       if: ${{ steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Save Conan Cache
-      uses: eBay/sisl/.github/actions/store_conan2@stable/v13.x
+      uses: ebay/sisl/.github/actions/store_conan2@dev/v14.x
       with:
-        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.prerelease }}
-      if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
-
-    - name: Reload Sisl Cache
-      uses: eBay/sisl/.github/actions/load_conan2@stable/v13.x
-      with:
-        testing: 'False'
-        path: import/sisl
-        key_prefix: SislDeps13-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
-        fail_on_cache_miss: true
-      if: ${{ inputs.testing == 'True' && github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' }}
+        key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
+      if: ${{ github.event_name != 'pull_request' && steps.restore-cache.outputs.cache-hit != 'true' && inputs.tooling != 'Coverage'}}
 
     - name: Create and Test Package
       run: |
-        sanitize=$([[ "${{ inputs.tooling }}" == "Sanitize" ]] && echo "True" || echo "False")
-        conan create \
+        if [[ "${{ inputs.tooling }}" == "AddressSanitize" ]]; then sanitize="address"
+        elif [[ "${{ inputs.tooling }}" == "ThreadSanitize" ]]; then sanitize="thread"
+        else sanitize="False"; fi
+        conan build \
             -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
             -o iomgr/*:testing='epoll_mode' \
             -o iomgr/*:sanitize=${sanitize} \
             -s:h build_type=${{ inputs.build-type }} \
-            --build missing \
+            ${{ inputs.conan-channel != '' && format('--user oss --channel {0}', inputs.conan-channel) || '' }} \
             .
       if: ${{ inputs.testing == 'True' && inputs.tooling != 'Coverage' }}
 
@@ -176,7 +214,7 @@ jobs:
             -o sisl/*:malloc_impl=${{ inputs.malloc-impl }} \
             -o iomgr/*:coverage=True \
             -s:h build_type=${{ inputs.build-type }} \
-            --build missing \
+            ${{ inputs.conan-channel != '' && format('--user oss --channel {0}', inputs.conan-channel) || '' }} \
             .
         gcovr --cobertura ./coverage.xml
       if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
@@ -186,4 +224,4 @@ jobs:
       with:
         files: ./coverage.xml
         disable_search: true
-      if: ${{ inputs.testing == 'True' && inputs.tooling == 'Coverage' }}
+      if: ${{ inputs.tooling == 'Coverage' }}

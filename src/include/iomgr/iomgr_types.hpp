@@ -87,6 +87,11 @@ using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
 using poll_cb_idx_t = uint32_t;
 using can_backoff_cb_t = std::function< bool(IOReactor*) >;
 
+template < typename T, typename U >
+inline T r_cast(U v) {
+    return reinterpret_cast< T >(v);
+}
+
 /////////////////// Types for all IOInterfaces ////////////////////////
 class IOInterface;
 using io_interface_comp_cb_t = std::function< void(int64_t res) >;
@@ -106,6 +111,6 @@ ENUM(drive_type, uint8_t,
      unknown       // Try to deduce it while loading
 )
 
-#define IOMGR_LOG_MODS iomgr, spdk, io_wd
+#define IOMGR_LOG_MODS iomgr, io_wd
 SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 } // namespace iomgr

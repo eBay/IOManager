@@ -386,7 +386,8 @@ size_t KernelDriveInterface::get_dev_size(IODevice* iodev) {
         if (ioctl(iodev->fd(), BLKGETSIZE64, &devsize) >= 0) { return devsize; }
     }
 
-    folly::throwSystemError(fmt::format("device stat failed for dev {} errno = {}", iodev->fd(), errno));
+    throw std::system_error{errno, std::system_category(),
+                            fmt::format("device stat failed for dev {} errno = {}", iodev->fd(), errno)};
     return 0;
 }
 

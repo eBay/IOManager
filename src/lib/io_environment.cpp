@@ -13,7 +13,6 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #include <iomgr/io_environment.hpp>
-#include <iomgr/http_server.hpp>
 #include "iomgr_config.hpp"
 
 #include <sisl/sobject/sobject.hpp>
@@ -39,8 +38,17 @@ void IOEnvironment::restart_http_server() { restart_http_server("", ""); }
 IOEnvironment& IOEnvironment::with_http_server() { return with_http_server("", ""); }
 
 IOEnvironment& IOEnvironment::with_http_server(std::string const& ssl_cert, std::string const& ssl_key) {
-    if (!m_http_server) { m_http_server = std::make_shared< iomgr::HttpServer >(ssl_cert, ssl_key); }
-
+    if (!m_http_server) {
+        const auto port = static_cast< uint16_t >(IM_DYNAMIC_CONFIG(io_env.http_port));
+        const auto threads = IM_DYNAMIC_CONFIG(io_env.http_num_threads);
+        const auto max_size = IM_DYNAMIC_CONFIG(io_env.http_max_request_size);
+        if (ssl_cert.empty()) {
+            m_http_server = std::make_shared< iomgr::HttpServer >(port, threads, max_size, m_token_verifier.get());
+        } else {
+            m_http_server = std::make_shared< iomgr::HttpServer >(ssl_cert, ssl_key, port, threads, max_size,
+                                                                  m_token_verifier.get());
+        }
+    }
     return get_instance();
 }
 

@@ -16,7 +16,6 @@
 #define IOMGR_IOMGR_MSG_HPP
 
 #include <iostream>
-#include <folly/Traits.h>
 #include <boost/fiber/all.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/utility/enum.hpp>

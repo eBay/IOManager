@@ -6,6 +6,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <future>
 #include <mutex>
 #include <random>
 #include <sstream>
@@ -57,8 +59,8 @@ struct Workload {
     std::atomic< size_t > next_io_offset{0};
     size_t max_ios{10000};
     std::atomic< int64_t > available_qs{8};
-    folly::Promise< folly::Unit > preload_completion;
-    folly::Promise< folly::Unit > rw_completion;
+    std::function< void() > preload_cb;
+    std::promise< void > rw_promise;
 
     Workload() = default;
     Workload(Workload&& other) {
@@ -69,8 +71,8 @@ struct Workload {
         next_io_offset.store(other.next_io_offset.load());
         max_ios = other.max_ios;
         available_qs.store(other.available_qs.load());
-        preload_completion = std::move(other.preload_completion);
-        rw_completion = std::move(other.rw_completion);
+        preload_cb = std::move(other.preload_cb);
+        rw_promise = std::move(other.rw_promise);
     }
 
     void reuse_ready() {
@@ -151,9 +153,8 @@ public:
             req->buf_arr->fill(offset);
 
             LOGTRACE("Preload offset={}", offset);
-            m_iodev->drive_interface()
-                ->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset)
-                .thenValue([work, this, req](auto&&) {
+            m_iodev->drive_interface()->async_write(
+                m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset, [work, this, req](int64_t) {
                     ++work->available_qs;
                     ++work->nios_completed;
                     delete req;
@@ -163,7 +164,7 @@ public:
                     } else if (work->nios_completed.load() == work->nios_issued.load()) {
                         LOGINFO("We are done with the preload of size={} with num_ios={}",
                                 s_io_size * work->nios_completed.load(), work->nios_completed.load());
-                        work->preload_completion.setValue();
+                        work->preload_cb();
                     }
                 });
 
@@ -189,18 +190,7 @@ public:
             std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
             auto* req = new io_req();
-            folly::Future< std::error_code > f = folly::Future< std::error_code >::makeEmpty();
-            if (io_pct(re) < s_read_pct) {
-                LOGTRACE("Read offset={}", offset);
-                f = m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset);
-            } else {
-                req->buf_arr->fill(offset);
-                LOGTRACE("Write offset={}", offset);
-                f = m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
-                                                            offset);
-            }
-
-            std::move(f).thenValue([work, this, req](auto&&) mutable {
+            auto cb = [work, this, req](int64_t) {
                 ++work->available_qs;
                 ++work->nios_completed;
                 delete req;
@@ -209,9 +199,19 @@ public:
                     issue_rw_io(work);
                 } else if (work->nios_completed.load() == work->nios_issued.load()) {
                     LOGINFO("IOs completed (total_excluding_preload={}) for this thread", work->nios_completed.load());
-                    work->rw_completion.setValue();
+                    work->rw_promise.set_value();
                 }
-            });
+            };
+            if (io_pct(re) < s_read_pct) {
+                LOGTRACE("Read offset={}", offset);
+                m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset,
+                                                       std::move(cb));
+            } else {
+                req->buf_arr->fill(offset);
+                LOGTRACE("Write offset={}", offset);
+                m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
+                                                        offset, std::move(cb));
+            }
         }
     }
 
@@ -247,14 +247,13 @@ public:
                 --work->available_qs;
 
                 LOGTRACE("Preload offset={}", offset);
-                m_iodev->drive_interface()
-                    ->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset)
-                    .thenValue([work, this, req, &q_cv](auto&&) {
-                        ++work->available_qs;
-                        ++work->nios_completed;
-                        delete req;
-                        q_cv.notify_one();
-                    });
+                m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
+                                                        offset, [work, this, req, &q_cv](int64_t) {
+                                                            ++work->available_qs;
+                                                            ++work->nios_completed;
+                                                            delete req;
+                                                            q_cv.notify_one();
+                                                        });
                 work->next_io_offset += s_io_size;
                 ++work->nios_issued;
             }
@@ -289,24 +288,22 @@ public:
                 std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
                 auto* req = new io_req();
-                folly::Future< std::error_code > f = folly::Future< std::error_code >::makeEmpty();
-                if (io_pct(re) < s_read_pct) {
-                    LOGTRACE("Read offset={}", offset);
-                    f = m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size,
-                                                               offset);
-                } else {
-                    req->buf_arr->fill(offset);
-                    LOGTRACE("Write offset={}", offset);
-                    f = m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
-                                                                s_io_size, offset);
-                }
-
-                std::move(f).thenValue([work, this, req, &q_cv](auto&&) mutable {
+                auto cb = [work, this, req, &q_cv](int64_t) {
                     ++work->available_qs;
                     ++work->nios_completed;
                     delete req;
                     q_cv.notify_one();
-                });
+                };
+                if (io_pct(re) < s_read_pct) {
+                    LOGTRACE("Read offset={}", offset);
+                    m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset,
+                                                           std::move(cb));
+                } else {
+                    req->buf_arr->fill(offset);
+                    LOGTRACE("Write offset={}", offset);
+                    m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
+                                                            offset, std::move(cb));
+                }
                 ++work->nios_issued;
             }
         } while ((work->nios_issued.load() < work->max_ios) ||
@@ -330,6 +327,12 @@ public:
             work_list.emplace_back(std::move(work));
         }
 
+        // Obtain futures before run_on_wait so there's no race with set_value()
+        std::vector< std::future< void > > rw_futures;
+        for (auto& w : work_list) {
+            rw_futures.emplace_back(w.rw_promise.get_future());
+        }
+
         iomanager.run_on_wait(reactor_regex::all_worker, [this, &mtx, &next_pick, &work_list]() {
             Workload* my_work;
             {
@@ -337,17 +340,16 @@ public:
                 my_work = &work_list[next_pick++];
             }
 
-            issue_preload(my_work);
-
-            my_work->preload_completion.getFuture().thenValue([my_work, this](auto&&) {
+            my_work->preload_cb = [my_work, this]() {
                 my_work->reuse_ready();
                 issue_rw_io(my_work);
-            });
+            };
+            issue_preload(my_work);
         });
 
         // Wait for all thread rw completion
-        for (uint32_t i{0}; i < m_nthreads; ++i) {
-            work_list[i].rw_completion.getFuture().wait();
+        for (auto& f : rw_futures) {
+            f.wait();
         }
 
         // We will do sync read to do the verification
@@ -378,6 +380,12 @@ public:
             work_list.emplace_back(std::move(work));
         }
 
+        // Obtain futures before creating reactors so there's no race with set_value()
+        std::vector< std::future< void > > rw_futures;
+        for (auto& w : work_list) {
+            rw_futures.emplace_back(w.rw_promise.get_future());
+        }
+
         for (uint32_t i{0}; i < m_nthreads; ++i) {
             iomanager.create_reactor("user" + std::to_string(i + 1),
                                      SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP,
@@ -389,19 +397,18 @@ public:
                                                  my_work = &work_list[next_pick++];
                                              }
 
-                                             issue_preload(my_work);
-
-                                             my_work->preload_completion.getFuture().thenValue([my_work, this](auto&&) {
+                                             my_work->preload_cb = [my_work, this]() {
                                                  my_work->reuse_ready();
                                                  issue_rw_io(my_work);
-                                             });
+                                             };
+                                             issue_preload(my_work);
                                          }
                                      });
         }
 
         // Wait for all thread rw completion
-        for (uint32_t i{0}; i < m_nthreads; ++i) {
-            work_list[i].rw_completion.getFuture().wait();
+        for (auto& f : rw_futures) {
+            f.wait();
         }
 
         // We will do sync read to do the verification

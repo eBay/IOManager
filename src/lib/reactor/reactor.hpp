@@ -140,7 +140,7 @@ public:
 public:
     IOReactor();
     virtual ~IOReactor();
-    void run(int worker_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name = nullptr,
+    void run(int worker_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name = "",
              const iodev_selector_t& iodev_selector = nullptr,
              thread_state_notifier_t&& thread_state_notifier = nullptr);
     void stop();

@@ -19,6 +19,7 @@
 #include <sisl/file_watcher/file_watcher.hpp>
 #include <sisl/auth_manager/token_verifier.hpp>
 #include <sisl/auth_manager/token_client.hpp>
+#include <iomgr/http_server.hpp>
 
 namespace sisl {
 class sobject_manager;
@@ -26,8 +27,6 @@ class sobject_manager;
 
 #include <iomgr/iomgr.hpp>
 namespace iomgr {
-
-class HttpServer;
 
 class IOEnvironment {
 public:

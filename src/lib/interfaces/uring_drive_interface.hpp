@@ -26,11 +26,11 @@
 /// NOTE: These are defined here to prevent inclusion of liburing/compat.h which conflicts
 /// with system header /usr/include/futex.h
 #define LIBURING_COMPAT_H
-#define BLOCK_URING_CMD_DISCARD                        _IO(0x12, 0)
+#define BLOCK_URING_CMD_DISCARD _IO(0x12, 0)
 struct open_how {
-        uint64_t        flags;
-        uint64_t        mode;
-        uint64_t        resolve;
+    uint64_t flags;
+    uint64_t mode;
+    uint64_t resolve;
 };
 ///
 
@@ -97,18 +97,18 @@ public:
 
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
-    folly::Future< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                                 bool part_of_batch = false) override;
-    folly::Future< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                  uint64_t offset, bool part_of_batch = false) override;
-    folly::Future< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                                bool part_of_batch = false) override;
-    folly::Future< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                 uint64_t offset, bool part_of_batch = false) override;
-    folly::Future< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                 bool part_of_batch = false) override;
-    folly::Future< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
-    folly::Future< std::error_code > queue_fsync(IODevice* iodev) override;
+    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                     bool part_of_batch = false) override;
+    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                      io_interface_comp_cb_t cb, bool part_of_batch = false) override;
+    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                    bool part_of_batch = false) override;
+    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                     io_interface_comp_cb_t cb, bool part_of_batch = false) override;
+    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                     bool part_of_batch = false) override;
+    void async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) override;
+    void queue_fsync(IODevice* iodev, io_interface_comp_cb_t cb) override;
 
     std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;

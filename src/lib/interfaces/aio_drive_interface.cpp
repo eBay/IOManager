@@ -31,15 +31,8 @@
 #include <sys/sysmacros.h>
 #endif
 
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wattributes"
-#endif
-#include <folly/Exception.h>
+#include <system_error>
 #include "iomgr_config.hpp"
-#if defined __clang__ or defined __GNUC__
-#pragma GCC diagnostic pop
-#endif
 
 #include <sisl/logging/logging.h>
 
@@ -129,8 +122,9 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
 
     auto fd = ::open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
-        folly::throwSystemError(fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
-                                            dev_type, errno, strerror(errno)));
+        throw std::system_error{errno, std::system_category(),
+                                fmt::format("Unable to open the device={} dev_type={}, errno={} strerror={}", devname,
+                                            dev_type, errno, strerror(errno))};
         return nullptr;
     }
 
@@ -306,22 +300,14 @@ bool AioDriveInterface::handle_io_failure(drive_aio_iocb* diocb, int error) {
 }
 
 void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
-    if (diocb->result == 0) {
-        static std::error_code success;
-        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) { p.setValue(success); },
-                              [&](FiberManagerLib::Promise< std::error_code >& p) { p.setValue(success); },
-                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
-                   diocb->completion);
-    } else {
-        std::visit(overloaded{[&](folly::Promise< std::error_code >& p) {
-                                  p.setValue(std::error_code{int_cast(diocb->result), std::system_category()});
-                              },
-                              [&](FiberManagerLib::Promise< std::error_code >& p) {
-                                  p.setValue(std::error_code{int_cast(diocb->result), std::system_category()});
-                              },
-                              [&](io_interface_comp_cb_t& cb) { cb(diocb->result); }},
-                   diocb->completion);
-    }
+    std::visit(overloaded{[&](io_interface_comp_cb_t& cb) { cb(diocb->result); },
+                          [&](FiberManagerLib::Promise< std::error_code >& p) {
+                              const auto ec = (diocb->result >= 0)
+                                  ? std::error_code{}
+                                  : std::error_code{static_cast< int >(-diocb->result), std::system_category()};
+                              p.setValue(ec);
+                          }},
+               diocb->completion);
     delete diocb;
 }
 
@@ -337,76 +323,63 @@ void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_ai
     }
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size,
-                                                                uint64_t offset, bool part_of_batch) {
+void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                    io_interface_comp_cb_t cb, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
-    diocb->completion = std::move(folly::Promise< std::error_code >{});
-    auto ret = diocb->folly_comp_promise().getFuture();
-
+    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
-
-    return ret;
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
-                                                               uint64_t offset, bool part_of_batch) {
+void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                   io_interface_comp_cb_t cb, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
-    diocb->completion = std::move(folly::Promise< std::error_code >{});
-    auto ret = diocb->folly_comp_promise().getFuture();
-
+    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
-    return ret;
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                                 uint32_t size, uint64_t offset, bool part_of_batch) {
+void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                     io_interface_comp_cb_t cb, bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
-    diocb->completion = std::move(folly::Promise< std::error_code >{});
-    auto ret = diocb->folly_comp_promise().getFuture();
-
+    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
-    return ret;
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                                uint32_t size, uint64_t offset, bool part_of_batch) {
+void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                                    io_interface_comp_cb_t cb, bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
-    diocb->completion = std::move(folly::Promise< std::error_code >{});
-    auto ret = diocb->folly_comp_promise().getFuture();
-
+    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
-    return ret;
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                                bool part_of_batch) {
+void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                                    bool part_of_batch) {
     RELEASE_ASSERT(0, "async_unmap is not supported for aio yet");
-    return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
+    cb(-ENOTSUP);
 }
 
-folly::Future< std::error_code > AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) {
+void AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) {
     RELEASE_ASSERT(0, "async_write_zero is not supported for aio yet");
-    return folly::makeFuture< std::error_code >(std::error_code(ENOTSUP, std::system_category()));
+    cb(-ENOTSUP);
 }
 
 void AioDriveInterface::init_poll_interval_table() {
@@ -431,7 +404,8 @@ aio_thread_context::aio_thread_context() {
     int err = io_setup(MAX_OUTSTANDING_IO, &m_ioctx);
     if (err) {
         LOGCRITICAL("io_setup failed with ret status {} errno {}", err, errno);
-        folly::throwSystemError(fmt::format("io_setup failed with ret status {} errno {}", err, errno));
+        throw std::system_error{errno, std::system_category(),
+                                fmt::format("io_setup failed with ret status {} errno {}", err, errno)};
     }
 #elif defined(__APPLE__)
 #endif

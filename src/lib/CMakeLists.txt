@@ -12,41 +12,29 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\""
 find_package(flatbuffers REQUIRED)
 find_package(sisl REQUIRED)
 find_package(liburing REQUIRED)
-find_package(Pistache REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
 list(APPEND COMMON_DEPS
       liburing::liburing
-      Pistache::Pistache
       sisl::sisl
+      sisl::http
       aio
     )
-if (${spdk_FOUND})
-    link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
-    list (APPEND COMMON_DEPS spdk::spdk)
-endif ()
 
 add_subdirectory(interfaces)
 add_subdirectory(epoll)
-if (${spdk_FOUND})
-    add_subdirectory(spdk)
-endif ()
 add_subdirectory(reactor)
 
 set(IOMGR_OBJECTS
-    $<TARGET_OBJECTS:iomgr_config> 
-    $<TARGET_OBJECTS:iomgr_interfaces> 
+    $<TARGET_OBJECTS:iomgr_config>
+    $<TARGET_OBJECTS:iomgr_interfaces>
     $<TARGET_OBJECTS:iomgr_epoll>
     $<TARGET_OBJECTS:iomgr_reactor>
     io_environment.cpp
     iomgr.cpp
     iomgr_timer.cpp
     watchdog.cpp
-    http_server.cpp
 )
-if (${spdk_FOUND})
-    list (APPEND IOMGR_OBJECTS $<TARGET_OBJECTS:iomgr_spdk> )
-endif()
 add_library(iomgr_config OBJECT)
 
 add_library(iomgr ${IOMGR_OBJECTS})

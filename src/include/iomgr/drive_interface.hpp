@@ -16,6 +16,7 @@
 #define IOMGR_DRIVE_INTERFACE_HPP
 
 #include <fcntl.h>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -24,16 +25,13 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <folly/futures/Future.h>
-#pragma GCC diagnostic pop
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/fiber_lib.hpp>
 
 namespace iomgr {
+using Clock = std::chrono::steady_clock;
+
 ENUM(drive_interface_type, uint8_t, aio, spdk, uring)
 ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO, FSYNC)
 
@@ -98,9 +96,7 @@ struct drive_iocb {
     uint64_t unique_id{0}; // used by io watchdog
     int iovcnt = 0;
     int64_t result{-1};
-    std::variant< io_interface_comp_cb_t, folly::Promise< std::error_code >,
-                  FiberManagerLib::Promise< std::error_code > >
-        completion{nullptr};
+    std::variant< io_interface_comp_cb_t, FiberManagerLib::Promise< std::error_code > > completion{nullptr};
     uint32_t resubmit_cnt{0};
     uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
     IOReactor* initiating_reactor;
@@ -128,9 +124,6 @@ public:
     bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
 
     io_interface_comp_cb_t& cb_comp_promise() { return std::get< io_interface_comp_cb_t >(completion); }
-    folly::Promise< std::error_code >& folly_comp_promise() {
-        return std::get< folly::Promise< std::error_code > >(completion);
-    }
     FiberManagerLib::Promise< std::error_code >& fiber_comp_promise() {
         return std::get< FiberManagerLib::Promise< std::error_code > >(completion);
     }
@@ -146,18 +139,18 @@ public:
     virtual drive_interface_type interface_type() const = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
 
-    virtual folly::Future< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
-                                                         uint64_t offset, bool part_of_batch = false) = 0;
-    virtual folly::Future< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                          uint64_t offset, bool part_of_batch = false) = 0;
-    virtual folly::Future< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                                        bool part_of_batch = false) = 0;
-    virtual folly::Future< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                         uint64_t offset, bool part_of_batch = false) = 0;
-    virtual folly::Future< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                         bool part_of_batch = false) = 0;
-    virtual folly::Future< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) = 0;
-    virtual folly::Future< std::error_code > queue_fsync(IODevice* iodev) = 0;
+    virtual void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                             io_interface_comp_cb_t cb, bool part_of_batch = false) = 0;
+    virtual void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                              io_interface_comp_cb_t cb, bool part_of_batch = false) = 0;
+    virtual void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                            bool part_of_batch = false) = 0;
+    virtual void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
+                             io_interface_comp_cb_t cb, bool part_of_batch = false) = 0;
+    virtual void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
+                             bool part_of_batch = false) = 0;
+    virtual void async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) = 0;
+    virtual void queue_fsync(IODevice* iodev, io_interface_comp_cb_t cb) = 0;
     virtual void submit_batch() = 0;
 
     virtual std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) = 0;

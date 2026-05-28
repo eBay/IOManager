@@ -9,7 +9,7 @@ required_conan_version = ">=1.60.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "12.0.2"
+    version = "13.0.0"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -23,10 +23,10 @@ class IOMgrConan(ConanFile):
         "shared": ['True', 'False'],
         "fPIC": ['True', 'False'],
         "coverage": ['True', 'False'],
-        "sanitize": ['True', 'False'],
+        "sanitize": ['address', 'thread', 'False'],
         'prerelease' : ['True', 'False'],
-        "testing" : ['full', 'off', 'epoll_mode', 'spdk_mode'],
-        "spdk": ['True', 'False'],
+        "testing" : ['full', 'off', 'epoll_mode'],
+        "spdk": ['False'],
         }
     default_options = {
         'shared':       False,
@@ -41,7 +41,7 @@ class IOMgrConan(ConanFile):
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
 
     def _min_cppstd(self):
-        return 20
+        return 23
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
@@ -65,22 +65,13 @@ class IOMgrConan(ConanFile):
         self.test_requires("cpr/[^1.12]")
 
     def requirements(self):
-        self.requires("sisl/[^13.2]", transitive_headers=True)
-        if self.options.spdk:
-            self.requires("spdk/nbi.21.07.y", transitive_headers=True)
-        else:
-            self.requires("liburing/[^2.1]", transitive_headers=True)
-        self.requires("pistache/nbi.0.0.5.1", transitive_headers=True)
-        self.requires("libcurl/[^8.4]", override=True)
-
-        # ARM needs unreleased versionof libunwind
-        if not self.settings.arch in ['x86', 'x86_64']:
-            self.requires("libunwind/1.8.2@baydb/develop", override=True)
+        self.requires("sisl/[^14.2]@oss/dev", transitive_headers=True)
+        self.requires("liburing/[^2.1]", transitive_headers=True)
 
     def layout(self):
         self.folders.source = "."
-        if self.options.get_safe("sanitize"):
-            self.folders.build = join("build", "Sanitized")
+        if self.options.get_safe("sanitize") and self.options.sanitize != "False":
+            self.folders.build = join("build", f"Sanitized-{self.options.sanitize}")
         elif self.options.get_safe("coverage"):
             self.folders.build = join("build", "Coverage")
         else:
@@ -111,13 +102,15 @@ class IOMgrConan(ConanFile):
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
                 tc.variables['BUILD_COVERAGE'] = 'ON'
-            elif self.options.get_safe("sanitize"):
-                tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
+            elif self.options.get_safe("sanitize") and self.options.sanitize != "False":
+                if self.options.sanitize == "thread":
+                    tc.variables['THREAD_SANITIZER_ON'] = 'ON'
+                else:  # address
+                    tc.variables['ADDRESS_SANITIZER_ON'] = 'ON'
         tc.variables["CONAN_PACKAGE_NAME"] = self.name
         tc.variables["CONAN_PACKAGE_VERSION"] = self.version
         tc.generate()
 
-        # This generates "boost-config.cmake" and "grpc-config.cmake" etc in self.generators_folder
         deps = CMakeDeps(self)
         deps.generate()
 
@@ -126,7 +119,7 @@ class IOMgrConan(ConanFile):
         cmake.configure()
         cmake.build()
         if not self.conf.get("tools.build:skip_test", default=False):
-            cmake.test()
+            self.run(f"ctest --test-dir '{self.build_folder}' --output-on-failure")
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, join(self.package_folder, "licenses"), keep_path=False)
@@ -142,10 +135,12 @@ class IOMgrConan(ConanFile):
         self.cpp_info.system_libs.extend(["aio"])
         if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
             self.cpp_info.defines.append("_PRERELEASE=1")
-        if  self.options.sanitize:
-            self.cpp_info.sharedlinkflags.append("-fsanitize=address")
-            self.cpp_info.exelinkflags.append("-fsanitize=address")
-            self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
-            self.cpp_info.exelinkflags.append("-fsanitize=undefined")
-        elif self.options.coverage == 'True':
-            self.cpp_info.libs.append('gcov')
+        if self.options.get_safe("sanitize") and self.options.sanitize != "False":
+            if self.options.sanitize == "thread":
+                self.cpp_info.sharedlinkflags.append("-fsanitize=thread")
+                self.cpp_info.exelinkflags.append("-fsanitize=thread")
+            else:
+                self.cpp_info.sharedlinkflags.append("-fsanitize=address")
+                self.cpp_info.exelinkflags.append("-fsanitize=address")
+                self.cpp_info.sharedlinkflags.append("-fsanitize=undefined")
+                self.cpp_info.exelinkflags.append("-fsanitize=undefined")

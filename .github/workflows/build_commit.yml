@@ -12,45 +12,41 @@ on:
       malloc-impl:
         required: true
         type: string
-      prerelease:
-        required: true
+      compiler:
+        required: false
         type: string
+        default: 'gcc'
+      conan-channel:
+        required: false
+        type: string
+        default: 'dev'
       tooling:
         required: true
         type: string
 
 jobs:
   SislDeps:
-    uses: ebay/sisl/.github/workflows/build_dependencies.yml@stable/v13.x
+    uses: ebay/sisl/.github/workflows/build_dependencies.yml@dev/v14.x
     with:
-      branch: stable/v13.x
+      branch: dev/v14.x
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: None
     if: ${{ github.event_name != 'pull_request' }}
 
   IOMgrDeps:
     needs: SislDeps
+    if: ${{ always() && (needs.SislDeps.result == 'success' || needs.SislDeps.result == 'skipped') }}
     uses: ./.github/workflows/build_dependencies.yml
     with:
       branch: ${{ github.ref }}
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type }}
       malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
+      compiler: ${{ inputs.compiler }}
+      conan-channel: ${{ inputs.conan-channel }}
       tooling: ${{ inputs.tooling }}
       testing: 'True'
-    if: ${{ github.event_name != 'pull_request' }}
-
-  IOMgrBuild:
-    uses: ./.github/workflows/build_dependencies.yml
-    with:
-      branch: ${{ github.ref }}
-      platform: ${{ inputs.platform }}
-      build-type: ${{ inputs.build-type }}
-      malloc-impl: ${{ inputs.malloc-impl }}
-      prerelease: ${{ inputs.prerelease }}
-      tooling: ${{ inputs.tooling }}
-      testing: 'True'
-    if: ${{ github.event_name == 'pull_request' }}

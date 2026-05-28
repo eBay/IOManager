@@ -4,48 +4,47 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - stable/v12.x
-
+      - dev/v13.x
+  pull_request:
+    branches:
+      - dev/v13.x
 jobs:
-  Build:
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ["ubuntu-24.04"]
-        build-type: ["Debug", "Release"]
-        malloc-impl: ["libc", "tcmalloc"]
-        prerelease: ["True", "False"]
-        tooling: ["Sanitize", "Coverage", "None"]
-        exclude:
-          - build-type: Debug
-            prerelease: "False"
-          - build-type: Debug
-            tooling: None
-          - build-type: Debug
-            malloc-impl: tcmalloc
-          - build-type: Release
-            malloc-impl: libc
-          - build-type: Release
-            tooling: Sanitize
-          - build-type: Release
-            tooling: Coverage
+  GccAddressSanitize:
     uses: ./.github/workflows/build_commit.yml
     with:
-      platform: ${{ matrix.platform }}
-      build-type: ${{ matrix.build-type }}
-      malloc-impl: ${{ matrix.malloc-impl }}
-      prerelease: ${{ matrix.prerelease }}
-      tooling: ${{ matrix.tooling }}
-  ChainBuild:
-    runs-on: "ubuntu-24.04"
-    steps:
-    - name: Start Homestore Build
-      run: |
-        curl -L \
-          -X POST \
-          -H "Accept: application/vnd.github+json" \
-          -H "Authorization: Bearer ${{ secrets.CHAIN_BUILD_TOKEN }}"\
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          https://api.github.com/repos/eBay/homestore/actions/workflows/merge_build.yml/dispatches \
-          -d '{"ref":"stable/v7.x","inputs":{}}'
-      if: ${{ github.ref == 'refs/heads/stable/v12.x' }}
+      platform: "ubuntu-24.04"
+      build-type: "Debug"
+      malloc-impl: "libc"
+      compiler: "gcc"
+      conan-channel: "dev"
+      tooling: "AddressSanitize"
+
+  GccThreadSanitize:
+    uses: ./.github/workflows/build_commit.yml
+    with:
+      platform: "ubuntu-24.04"
+      build-type: "Debug"
+      malloc-impl: "libc"
+      compiler: "gcc"
+      conan-channel: "dev"
+      tooling: "ThreadSanitize"
+
+  GccCoverage:
+    uses: ./.github/workflows/build_commit.yml
+    with:
+      platform: "ubuntu-24.04"
+      build-type: "Debug"
+      malloc-impl: "libc"
+      compiler: "gcc"
+      conan-channel: "dev"
+      tooling: "Coverage"
+
+  GccRelease:
+    uses: ./.github/workflows/build_commit.yml
+    with:
+      platform: "ubuntu-24.04"
+      build-type: "Release"
+      malloc-impl: "tcmalloc"
+      compiler: "gcc"
+      conan-channel: "dev"
+      tooling: "None"

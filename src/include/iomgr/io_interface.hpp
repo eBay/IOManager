@@ -48,8 +48,8 @@ public:
     void set_scope(reactor_regex t) { m_thread_scope = t; }
     virtual bool is_spdk_interface() const { return false; }
 
-    virtual void init_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor){};
-    virtual void clear_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor){};
+    virtual void init_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor) {};
+    virtual void clear_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor) {};
 
 protected:
     virtual void init_iface_reactor_context(IOReactor* reactor) = 0;

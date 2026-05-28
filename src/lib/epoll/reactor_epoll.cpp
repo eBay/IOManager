@@ -45,7 +45,7 @@ static bool compare_priority(const epoll_event& ev1, const epoll_event& ev2) {
     return (iodev1->priority() > iodev2->priority());
 }
 
-IOReactorEPoll::IOReactorEPoll() : m_msg_q() {}
+IOReactorEPoll::IOReactorEPoll() {}
 
 void IOReactorEPoll::init_impl() {
     int evfd{-1};
@@ -98,8 +98,8 @@ void IOReactorEPoll::stop_impl() {
 
     // Drain the message q and drop the message.
     auto dropped = 0u;
-    iomgr_msg* msg;
-    while (m_msg_q.try_dequeue(msg)) {
+    iomgr_msg* msg{nullptr};
+    while (m_msg_q.pop(msg)) {
         iomgr_msg::free(msg);
     }
     if (dropped) { LOGINFO("Exiting the reactor with {} messages yet to handle, dropping them", dropped); }
@@ -202,7 +202,7 @@ void IOReactorEPoll::put_msg(iomgr_msg* msg) {
 
     REACTOR_LOG(DEBUG, "Put msg to its msg fd = {}, ptr = {}", m_msg_iodev->fd(), (void*)m_msg_iodev.get());
 
-    m_msg_q.enqueue(msg);
+    m_msg_q.push(msg);
 
     // Raise an event only in case msg handler is not currently running
     if (!m_msg_handler_on.load(std::memory_order_acquire)) {
@@ -231,13 +231,13 @@ void IOReactorEPoll::process_messages() {
     while (true) {
         // Start pulling all the messages and handle them.
         while (msg_count < max_msg_batch_size) {
-            iomgr_msg* msg;
-            if (!m_msg_q.try_dequeue(msg)) { break; }
+            iomgr_msg* msg{nullptr};
+            if (!m_msg_q.pop(msg)) { break; }
             handle_msg(msg);
             ++msg_count;
         }
 
-        if ((msg_count == max_msg_batch_size) && (!m_msg_q.empty())) {
+        if ((msg_count == max_msg_batch_size) && !m_msg_q.empty()) {
             REACTOR_LOG(DEBUG, "Reached max msg_count batch {}, yielding and will process again", msg_count);
             const uint64_t temp{1};
             while ((write(m_msg_iodev->fd(), &temp, sizeof(uint64_t)) < 0) && (errno == EAGAIN)) {

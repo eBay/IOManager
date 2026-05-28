@@ -5,17 +5,8 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -
 find_package (Threads REQUIRED)
 find_library(LIB_AIO aio)
 find_package(sisl REQUIRED)
-find_package(spdk)
+find_package(liburing REQUIRED)
 
-if (${spdk_FOUND})
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWITH_SPDK")
-else ()
-    find_package(liburing REQUIRED)
-endif()
-
-if ("${FIBER_IMPL}" STREQUAL "folly") 
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_FOLLY_FIBER")
-endif()
 
 include_directories (BEFORE lib/)
 include_directories (BEFORE include/)

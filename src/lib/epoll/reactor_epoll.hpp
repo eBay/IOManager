@@ -14,7 +14,7 @@
  **************************************************************************/
 #pragma once
 #include "reactor/reactor.hpp"
-#include <folly/concurrency/UnboundedQueue.h>
+#include <boost/lockfree/queue.hpp>
 
 namespace iomgr {
 class IOReactorEPoll : public IOReactor {
@@ -44,7 +44,7 @@ private:
     std::atomic< bool > m_msg_handler_on;                                 // Is Message handling ongoing now
     int m_epollfd = -1;                                                   // Parent epoll context for this thread
     io_device_ptr m_msg_iodev;                                            // iodev for the messages
-    folly::UMPSCQueue< iomgr_msg*, false > m_msg_q;                       // Q of message for this thread
+    boost::lockfree::queue< iomgr_msg* > m_msg_q{4096};                   // Q of message for this thread
     std::unordered_map< IODevice*, shared< IODevice > > m_removed_iodevs; // Pending IODevices to be removed from epoll
     bool m_event_processing_phase{false};                                 // Are epoll events are being processed now
 };

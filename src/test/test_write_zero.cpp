@@ -115,9 +115,9 @@ public:
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz = std::min(max_io_size, remain_size);
-            m_iodev->drive_interface()
-                ->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset)
-                .thenValue([this, this_sz, buf](auto) { on_write_completion(buf, this_sz); });
+            m_iodev->drive_interface()->async_write(
+                m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset,
+                [this, this_sz, buf](int64_t) { on_write_completion(buf, this_sz); });
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
@@ -149,9 +149,9 @@ public:
             const auto this_sz = std::min(max_io_size, read_remain_size);
 
             auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-            m_iodev->drive_interface()
-                ->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz, cur_offset)
-                .thenValue([read_buf, this, this_sz](auto) { validate_zeros(read_buf, this_sz); });
+            m_iodev->drive_interface()->async_read(
+                m_iodev.get(), (char*)read_buf, (uint32_t)this_sz, cur_offset,
+                [read_buf, this, this_sz](int64_t) { validate_zeros(read_buf, this_sz); });
             cur_offset += this_sz;
             read_remain_size -= this_sz;
         }

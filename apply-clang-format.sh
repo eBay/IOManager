@@ -34,7 +34,6 @@ if [ $VALIDATE ]; then
     then
         echo "Code is not according to clang-format-8. Run ./apply-clang-format.sh before committing"
         clang-format --version
-        echo "How to install clang-format-8: https://jirap.corp.ebay.com/browse/MONSTOR-10256"
         echo "#### Format Issue:"
         cat $PATCH_FILE
         EXIT_CODE=1

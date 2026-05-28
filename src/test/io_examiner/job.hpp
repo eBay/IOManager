@@ -72,7 +72,7 @@ public:
     virtual void try_run_one_iteration() {
         if (!time_to_stop() && m_status_threads_executing.increment_if_status(job_status_t::running)) {
             run_one_iteration();
-            m_status_threads_executing.decrement_testz_and_test_status(job_status_t::stopped);
+            (void)m_status_threads_executing.decrement_testz_and_test_status(job_status_t::stopped);
         }
         if (time_to_stop()) { notify_completions(); }
     }

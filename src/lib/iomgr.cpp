@@ -170,10 +170,9 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     m_global_user_timer = std::make_unique< timer_epoll >(reactor_regex::all_user);
     m_global_worker_timer =
 #if WITH_SPDK
-            m_is_spdk ? std::unique_ptr< timer >(new timer_spdk(reactor_regex::all_worker))
-                                      :
+        m_is_spdk ? std::unique_ptr< timer >(new timer_spdk(reactor_regex::all_worker)) :
 #endif
-                                      std::unique_ptr< timer >(new timer_epoll(reactor_regex::all_worker));
+                  std::unique_ptr< timer >(new timer_epoll(reactor_regex::all_worker));
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     m_impl->post_interface_init();
