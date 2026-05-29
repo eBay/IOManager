@@ -26,7 +26,7 @@ static constexpr uint32_t max_zero_write_size = max_buf_size * IOV_MAX; // 1 GB
 
 class KernelDriveInterface : public DriveInterface {
 public:
-    KernelDriveInterface(const io_interface_comp_cb_t& cb) : DriveInterface(cb) {}
+    KernelDriveInterface() = default;
     virtual std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     virtual std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                         uint64_t offset) override;

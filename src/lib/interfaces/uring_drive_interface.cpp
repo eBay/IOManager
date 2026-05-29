@@ -147,8 +147,8 @@ void uring_drive_channel::drain_waitq() {
 }
 
 ///////////////////////////// UringDriveInterface /////////////////////////////////////////
-UringDriveInterface::UringDriveInterface(const bool new_interface_supported, const io_interface_comp_cb_t& cb) :
-        KernelDriveInterface(cb), m_new_intfc(new_interface_supported) {}
+UringDriveInterface::UringDriveInterface(const bool new_interface_supported) :
+        KernelDriveInterface(), m_new_intfc(new_interface_supported) {}
 
 void UringDriveInterface::init_iface_reactor_context(IOReactor*) {
     if (t_uring_ch == nullptr) { t_uring_ch = new uring_drive_channel(this); }
@@ -198,236 +198,175 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
     iodev->clear();
 }
 
-void UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                      io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_write(IODevice* iodev, const char* data,
+                                                                           uint32_t size, uint64_t offset,
+                                                                           bool part_of_batch) {
+    auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
     if (!m_new_intfc) {
         std::array< iovec, 1 > iov;
         iov[0].iov_base = (void*)data;
         iov[0].iov_len = size;
-
-        return async_writev(iodev, iov.data(), 1, size, offset, std::move(cb), part_of_batch);
+        iocb->set_iovs(iov.data(), 1);
     } else {
-        // io_uring_prep_write available starts from kernel 5.6
-        auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
         iocb->set_data((char*)data);
-        iocb->completion = std::move(cb);
-
-        auto submit_in_this_thread = [this](drive_iocb* iocb, bool part_of_batch) {
-            DriveInterface::increment_outstanding_counter(iocb);
-            auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-            if (sqe == nullptr) { return; }
-
-            io_uring_prep_write(sqe, iocb->iodev->fd(), (const void*)iocb->get_data(), iocb->size, iocb->offset);
-            t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
-        };
-
-        if (iomanager.this_reactor() != nullptr) {
-            submit_in_this_thread(iocb, part_of_batch);
-        } else {
-            iomanager.run_on_forget(reactor_regex::random_worker,
-                                    [=]() { submit_in_this_thread(iocb, part_of_batch); });
-        }
     }
-}
 
-void UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                       io_interface_comp_cb_t cb, bool part_of_batch) {
-    auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
-    iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(cb);
-
-    auto submit_in_this_thread = [this](drive_iocb* iocb, bool part_of_batch) {
+    auto submit_fn = [this, iocb, part_of_batch, new_intfc = m_new_intfc]() {
         DriveInterface::increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
+        if (new_intfc) {
+            io_uring_prep_write(sqe, iocb->iodev->fd(), iocb->get_data(), iocb->size, iocb->offset);
+        } else {
+            io_uring_prep_writev(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
+        }
+        t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
+    };
+    if (iomanager.this_reactor() != nullptr) {
+        submit_fn();
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
+    }
 
+    const int res = co_await iocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete iocb;
+    co_return ec;
+}
+
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov,
+                                                                            int iovcnt, uint32_t size, uint64_t offset,
+                                                                            bool part_of_batch) {
+    auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
+    iocb->set_iovs(iov, iovcnt);
+
+    auto submit_fn = [this, iocb, part_of_batch]() {
+        DriveInterface::increment_outstanding_counter(iocb);
+        auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+        if (sqe == nullptr) { return; }
         io_uring_prep_writev(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
         t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
     };
-
     if (iomanager.this_reactor() != nullptr) {
-        submit_in_this_thread(iocb, part_of_batch);
+        submit_fn();
     } else {
-        iomanager.run_on_forget(reactor_regex::random_worker, [=]() { submit_in_this_thread(iocb, part_of_batch); });
+        iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
     }
+
+    const int res = co_await iocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete iocb;
+    co_return ec;
 }
 
-void UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                     io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
+                                                                          uint64_t offset, bool part_of_batch) {
+    auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
     if (!m_new_intfc) {
         std::array< iovec, 1 > iov;
         iov[0].iov_base = data;
         iov[0].iov_len = size;
-
-        return async_readv(iodev, iov.data(), 1, size, offset, std::move(cb), part_of_batch);
+        iocb->set_iovs(iov.data(), 1);
     } else {
-        auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
         iocb->set_data(data);
-        iocb->completion = std::move(cb);
-
-        auto submit_in_this_thread = [this](drive_iocb* iocb, bool part_of_batch) {
-            DriveInterface::increment_outstanding_counter(iocb);
-            auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-            if (sqe == nullptr) { return; }
-
-            io_uring_prep_read(sqe, iocb->iodev->fd(), (void*)iocb->get_data(), iocb->size, iocb->offset);
-            t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
-        };
-
-        if (iomanager.this_reactor() != nullptr) {
-            submit_in_this_thread(iocb, part_of_batch);
-        } else {
-            iomanager.run_on_forget(reactor_regex::random_worker,
-                                    [=]() { submit_in_this_thread(iocb, part_of_batch); });
-        }
     }
-}
 
-void UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                      io_interface_comp_cb_t cb, bool part_of_batch) {
-    auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
-    iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(cb);
-
-    auto submit_in_this_thread = [this](drive_iocb* iocb, bool part_of_batch) {
+    auto submit_fn = [this, iocb, part_of_batch, new_intfc = m_new_intfc]() {
         DriveInterface::increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
+        if (new_intfc) {
+            io_uring_prep_read(sqe, iocb->iodev->fd(), iocb->get_data(), iocb->size, iocb->offset);
+        } else {
+            io_uring_prep_readv(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
+        }
+        t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
+    };
+    if (iomanager.this_reactor() != nullptr) {
+        submit_fn();
+    } else {
+        iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
+    }
 
+    const int res = co_await iocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete iocb;
+    co_return ec;
+}
+
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov,
+                                                                           int iovcnt, uint32_t size, uint64_t offset,
+                                                                           bool part_of_batch) {
+    auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
+    iocb->set_iovs(iov, iovcnt);
+
+    auto submit_fn = [this, iocb, part_of_batch]() {
+        DriveInterface::increment_outstanding_counter(iocb);
+        auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+        if (sqe == nullptr) { return; }
         io_uring_prep_readv(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
         t_uring_ch->submit_if_needed(iocb, sqe, part_of_batch);
     };
-
     if (iomanager.this_reactor() != nullptr) {
-        submit_in_this_thread(iocb, part_of_batch);
+        submit_fn();
     } else {
-        iomanager.run_on_forget(reactor_regex::random_worker, [=]() { submit_in_this_thread(iocb, part_of_batch); });
+        iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
     }
+
+    const int res = co_await iocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete iocb;
+    co_return ec;
 }
 
-void UringDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                                      bool part_of_batch) {
-    RELEASE_ASSERT(0, "async_unmap is not supported for uring yet");
-    cb(-ENOTSUP);
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_unmap(IODevice*, uint32_t, uint64_t, bool) {
+    co_return std::error_code{ENOTSUP, std::system_category()};
 }
 
-void UringDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) {
+sisl::async::disk_task< std::error_code > UringDriveInterface::async_write_zero(IODevice* iodev, uint64_t size,
+                                                                                uint64_t offset) {
     LOGWARN("Uring async_write_zero is implemented as sync write, need to have more intelligent implementation");
-    const auto ec = sync_write_zero(iodev, size, offset);
-    cb(ec ? -static_cast< int64_t >(ec.value()) : 0LL);
+    co_return sync_write_zero(iodev, size, offset);
 }
 
-void UringDriveInterface::queue_fsync(IODevice* iodev, io_interface_comp_cb_t cb) {
+sisl::async::disk_task< std::error_code > UringDriveInterface::queue_fsync(IODevice* iodev) {
     auto iocb = new drive_iocb(this, iodev, DriveOpType::FSYNC, 0, 0);
-    iocb->completion = std::move(cb);
 
-    auto submit_in_this_thread = [this](drive_iocb* iocb) {
+    auto submit_fn = [this, iocb]() {
         DriveInterface::increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
-
         io_uring_prep_fsync(sqe, iocb->iodev->fd(), IORING_FSYNC_DATASYNC);
-        t_uring_ch->submit_if_needed(iocb, sqe, false /* batching */);
+        t_uring_ch->submit_if_needed(iocb, sqe, false);
     };
-
     if (iomanager.this_reactor() != nullptr) {
-        submit_in_this_thread(iocb);
+        submit_fn();
     } else {
-        iomanager.run_on_forget(reactor_regex::random_worker, [=]() { submit_in_this_thread(iocb); });
+        iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
     }
+
+    const int res = co_await iocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete iocb;
+    co_return ec;
 }
 
 std::error_code UringDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
-        return KernelDriveInterface::sync_write(iodev, data, size, offset);
-    }
-
-    if (!m_new_intfc) {
-        std::array< iovec, 1 > iov;
-        iov[0].iov_base = (void*)data;
-        iov[0].iov_len = size;
-
-        return sync_writev(iodev, iov.data(), 1, size, offset);
-    } else {
-        auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
-        iocb->set_data((char*)data);
-        iocb->completion = std::move(FiberManagerLib::Promise< std::error_code >{});
-        auto f = iocb->fiber_comp_promise().getFuture();
-
-        DriveInterface::increment_outstanding_counter(iocb);
-        auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-        assert(sqe);
-
-        io_uring_prep_write(sqe, iodev->fd(), (const void*)iocb->get_data(), iocb->size, offset);
-        t_uring_ch->submit_if_needed(iocb, sqe, false);
-        return f.get();
-    }
+    return KernelDriveInterface::sync_write(iodev, data, size, offset);
 }
 
 std::error_code UringDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                                  uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
-        return KernelDriveInterface::sync_writev(iodev, iov, iovcnt, size, offset);
-    }
-
-    auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, size, offset);
-    iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(FiberManagerLib::Promise< std::error_code >{});
-    auto f = iocb->fiber_comp_promise().getFuture();
-
-    DriveInterface::increment_outstanding_counter(iocb);
-    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-    assert(sqe);
-
-    io_uring_prep_writev(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
-    t_uring_ch->submit_if_needed(iocb, sqe, false);
-    return f.get();
+    return KernelDriveInterface::sync_writev(iodev, iov, iovcnt, size, offset);
 }
 
 std::error_code UringDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
-        return KernelDriveInterface::sync_read(iodev, data, size, offset);
-    }
-
-    if (!m_new_intfc) {
-        std::array< iovec, 1 > iov;
-        iov[0].iov_base = data;
-        iov[0].iov_len = size;
-
-        return sync_readv(iodev, iov.data(), 1, size, offset);
-    } else {
-        auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
-        iocb->set_data(data);
-        iocb->completion = std::move(FiberManagerLib::Promise< std::error_code >{});
-        auto f = iocb->fiber_comp_promise().getFuture();
-
-        DriveInterface::increment_outstanding_counter(iocb);
-        auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-        assert(sqe);
-
-        io_uring_prep_read(sqe, iodev->fd(), (void*)iocb->get_data(), iocb->size, offset);
-        t_uring_ch->submit_if_needed(iocb, sqe, false);
-        return f.get();
-    }
+    return KernelDriveInterface::sync_read(iodev, data, size, offset);
 }
 
 std::error_code UringDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
                                                 uint64_t offset) {
-    if (!iomanager.am_i_sync_io_capable() || (t_uring_ch == nullptr) || !t_uring_ch->can_submit()) {
-        return KernelDriveInterface::sync_readv(iodev, iov, iovcnt, size, offset);
-    }
-    auto iocb = new drive_iocb(this, iodev, DriveOpType::READ, size, offset);
-    iocb->set_iovs(iov, iovcnt);
-    iocb->completion = std::move(FiberManagerLib::Promise< std::error_code >{});
-    auto f = iocb->fiber_comp_promise().getFuture();
-
-    DriveInterface::increment_outstanding_counter(iocb);
-    auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
-    assert(sqe);
-
-    io_uring_prep_readv(sqe, iodev->fd(), iocb->get_iovs(), iocb->iovcnt, offset);
-    t_uring_ch->submit_if_needed(iocb, sqe, false);
-    return f.get();
+    return KernelDriveInterface::sync_readv(iodev, iov, iovcnt, size, offset);
 }
 
 void UringDriveInterface::submit_batch() { t_uring_ch->submit_ios(); }
@@ -513,15 +452,8 @@ void UringDriveInterface::complete_io(drive_iocb* iocb) {
     if (DriveInterface::inject_delay_if_needed(iocb, [this](drive_iocb* iocb) { complete_io(iocb); })) { return; }
 #endif
     iocb->iodev->observe_metrics(iocb);
-    std::visit(overloaded{[&](io_interface_comp_cb_t& cb) { cb(iocb->result); },
-                          [&](FiberManagerLib::Promise< std::error_code >& p) {
-                              const auto ec = (iocb->result >= 0)
-                                  ? std::error_code{}
-                                  : std::error_code{static_cast< int >(-iocb->result), std::system_category()};
-                              p.setValue(ec);
-                          }},
-               iocb->completion);
     DriveInterface::decrement_outstanding_counter(iocb);
-    delete iocb;
+    sisl::async::complete_cqe_state(iocb->completion, static_cast< int >(iocb->result));
+    // iocb is deleted by the coroutine after co_await resumes
 }
 } // namespace iomgr

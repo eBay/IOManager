@@ -107,9 +107,7 @@ static drive_aio_iocb* prep_iocb_v(DriveInterface* iface, IODevice* iodev, Drive
     return diocb;
 }
 
-AioDriveInterface::AioDriveInterface(const io_interface_comp_cb_t& cb) : KernelDriveInterface(cb) {
-    init_poll_interval_table();
-}
+AioDriveInterface::AioDriveInterface() : KernelDriveInterface() { init_poll_interval_table(); }
 
 AioDriveInterface::~AioDriveInterface() {}
 
@@ -300,15 +298,8 @@ bool AioDriveInterface::handle_io_failure(drive_aio_iocb* diocb, int error) {
 }
 
 void AioDriveInterface::complete_io(drive_aio_iocb* diocb) {
-    std::visit(overloaded{[&](io_interface_comp_cb_t& cb) { cb(diocb->result); },
-                          [&](FiberManagerLib::Promise< std::error_code >& p) {
-                              const auto ec = (diocb->result >= 0)
-                                  ? std::error_code{}
-                                  : std::error_code{static_cast< int >(-diocb->result), std::system_category()};
-                              p.setValue(ec);
-                          }},
-               diocb->completion);
-    delete diocb;
+    sisl::async::complete_cqe_state(diocb->completion, static_cast< int >(diocb->result));
+    // iocb is deleted by the coroutine after co_await diocb->completion returns
 }
 
 void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_aio_iocb* diocb, bool part_of_batch) {
@@ -323,63 +314,74 @@ void AioDriveInterface::submit_in_this_thread(AioDriveInterface* iface, drive_ai
     }
 }
 
-void AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                    io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code >
+AioDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::WRITE, (char*)data, size, offset);
-    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
+    const int res = co_await diocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete diocb;
+    co_return ec;
 }
 
-void AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                   io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code > AioDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
+                                                                        uint64_t offset, bool part_of_batch) {
     auto diocb = prep_iocb(this, iodev, DriveOpType::READ, data, size, offset);
-    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
+    const int res = co_await diocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete diocb;
+    co_return ec;
 }
 
-void AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                     io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code > AioDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                          uint32_t size, uint64_t offset,
+                                                                          bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::WRITE, iov, iovcnt, size, offset);
-    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
+    const int res = co_await diocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete diocb;
+    co_return ec;
 }
 
-void AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                                    io_interface_comp_cb_t cb, bool part_of_batch) {
+sisl::async::disk_task< std::error_code > AioDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
+                                                                         uint32_t size, uint64_t offset,
+                                                                         bool part_of_batch) {
     auto diocb = prep_iocb_v(this, iodev, DriveOpType::READ, iov, iovcnt, size, offset);
-    diocb->completion = std::move(cb);
     if (iomanager.this_reactor() != nullptr) {
         submit_in_this_thread(this, diocb, part_of_batch);
     } else {
         iomanager.run_on_forget(reactor_regex::random_worker,
                                 [this, diocb, part_of_batch]() { submit_in_this_thread(this, diocb, part_of_batch); });
     }
+    const int res = co_await diocb->completion;
+    const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
+    delete diocb;
+    co_return ec;
 }
 
-void AioDriveInterface::async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                                    bool part_of_batch) {
-    RELEASE_ASSERT(0, "async_unmap is not supported for aio yet");
-    cb(-ENOTSUP);
+sisl::async::disk_task< std::error_code > AioDriveInterface::async_unmap(IODevice*, uint32_t, uint64_t, bool) {
+    co_return std::error_code{ENOTSUP, std::system_category()};
 }
 
-void AioDriveInterface::async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) {
-    RELEASE_ASSERT(0, "async_write_zero is not supported for aio yet");
-    cb(-ENOTSUP);
+sisl::async::disk_task< std::error_code > AioDriveInterface::async_write_zero(IODevice*, uint64_t, uint64_t) {
+    co_return std::error_code{ENOTSUP, std::system_category()};
 }
 
 void AioDriveInterface::init_poll_interval_table() {

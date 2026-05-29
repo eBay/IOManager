@@ -90,25 +90,26 @@ struct uring_drive_channel {
 
 class UringDriveInterface : public KernelDriveInterface {
 public:
-    UringDriveInterface(const bool new_interface_supported, const io_interface_comp_cb_t& cb = nullptr);
+    UringDriveInterface(const bool new_interface_supported);
     virtual ~UringDriveInterface() = default;
     drive_interface_type interface_type() const override { return drive_interface_type::uring; }
     std::string name() const override { return "uring_drive_interface"; }
 
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
-    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                     bool part_of_batch = false) override;
-    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                      io_interface_comp_cb_t cb, bool part_of_batch = false) override;
-    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                    bool part_of_batch = false) override;
-    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                     io_interface_comp_cb_t cb, bool part_of_batch = false) override;
-    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                     bool part_of_batch = false) override;
-    void async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) override;
-    void queue_fsync(IODevice* iodev, io_interface_comp_cb_t cb) override;
+    sisl::async::disk_task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
+                                                          uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                           uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                         bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                          uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                          bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size,
+                                                               uint64_t offset) override;
+    sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) override;
 
     std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
     std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;

@@ -27,6 +27,18 @@
 #include <iomgr/io_environment.hpp>
 #include <iomgr/drive_interface.hpp>
 
+// Eager coroutine that auto-destroys its frame on completion. Used to launch
+// disk_task<> coroutines inside run_on_forget lambdas or reactor callbacks.
+struct fire_and_forget_task {
+    struct promise_type {
+        fire_and_forget_task get_return_object() noexcept { return {}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() { std::terminate(); }
+    };
+};
+
 using log_level = spdlog::level::level_enum;
 
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
@@ -153,20 +165,20 @@ public:
             req->buf_arr->fill(offset);
 
             LOGTRACE("Preload offset={}", offset);
-            m_iodev->drive_interface()->async_write(
-                m_iodev.get(), r_cast< const char* >(req->buf), s_io_size, offset, [work, this, req](int64_t) {
-                    ++work->available_qs;
-                    ++work->nios_completed;
-                    delete req;
-
-                    if (work->next_io_offset.load() < work->offset_end) {
-                        issue_preload(work);
-                    } else if (work->nios_completed.load() == work->nios_issued.load()) {
-                        LOGINFO("We are done with the preload of size={} with num_ios={}",
-                                s_io_size * work->nios_completed.load(), work->nios_completed.load());
-                        work->preload_cb();
-                    }
-                });
+            [this, work, req, offset]() -> fire_and_forget_task {
+                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                                                                 s_io_size, offset);
+                ++work->available_qs;
+                ++work->nios_completed;
+                delete req;
+                if (work->next_io_offset.load() < work->offset_end) {
+                    issue_preload(work);
+                } else if (work->nios_completed.load() == work->nios_issued.load()) {
+                    LOGINFO("We are done with the preload of size={} with num_ios={}",
+                            s_io_size * work->nios_completed.load(), work->nios_completed.load());
+                    work->preload_cb();
+                }
+            }();
 
             work->next_io_offset += s_io_size;
             ++work->nios_issued;
@@ -190,11 +202,10 @@ public:
             std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
             auto* req = new io_req();
-            auto cb = [work, this, req](int64_t) {
+            auto do_completion = [work, this, req]() {
                 ++work->available_qs;
                 ++work->nios_completed;
                 delete req;
-
                 if (work->nios_issued.load() < work->max_ios) {
                     issue_rw_io(work);
                 } else if (work->nios_completed.load() == work->nios_issued.load()) {
@@ -204,13 +215,19 @@ public:
             };
             if (io_pct(re) < s_read_pct) {
                 LOGTRACE("Read offset={}", offset);
-                m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset,
-                                                       std::move(cb));
+                [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
+                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size,
+                                                                    offset);
+                    do_completion();
+                }();
             } else {
                 req->buf_arr->fill(offset);
                 LOGTRACE("Write offset={}", offset);
-                m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
-                                                        offset, std::move(cb));
+                [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
+                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                                                                     s_io_size, offset);
+                    do_completion();
+                }();
             }
         }
     }
@@ -247,13 +264,14 @@ public:
                 --work->available_qs;
 
                 LOGTRACE("Preload offset={}", offset);
-                m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
-                                                        offset, [work, this, req, &q_cv](int64_t) {
-                                                            ++work->available_qs;
-                                                            ++work->nios_completed;
-                                                            delete req;
-                                                            q_cv.notify_one();
-                                                        });
+                [this, work, req, offset, &q_cv]() -> fire_and_forget_task {
+                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                                                                     s_io_size, offset);
+                    ++work->available_qs;
+                    ++work->nios_completed;
+                    delete req;
+                    q_cv.notify_one();
+                }();
                 work->next_io_offset += s_io_size;
                 ++work->nios_issued;
             }
@@ -288,7 +306,7 @@ public:
                 std::uniform_int_distribution< uint8_t > io_pct{0, 99};
 
                 auto* req = new io_req();
-                auto cb = [work, this, req, &q_cv](int64_t) {
+                auto do_completion = [work, req, &q_cv]() {
                     ++work->available_qs;
                     ++work->nios_completed;
                     delete req;
@@ -296,13 +314,19 @@ public:
                 };
                 if (io_pct(re) < s_read_pct) {
                     LOGTRACE("Read offset={}", offset);
-                    m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size, offset,
-                                                           std::move(cb));
+                    [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
+                        co_await m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf),
+                                                                        s_io_size, offset);
+                        do_completion();
+                    }();
                 } else {
                     req->buf_arr->fill(offset);
                     LOGTRACE("Write offset={}", offset);
-                    m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf), s_io_size,
-                                                            offset, std::move(cb));
+                    [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
+                        co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                                                                         s_io_size, offset);
+                        do_completion();
+                    }();
                 }
                 ++work->nios_issued;
             }

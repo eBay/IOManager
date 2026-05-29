@@ -25,8 +25,8 @@
 #include <string>
 #include <vector>
 
+#include <future>
 #include <semver200.h>
-#include <boost/fiber/all.hpp>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
@@ -42,7 +42,7 @@
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/io_device.hpp>
-#include <iomgr/fiber_lib.hpp>
+#include <iomgr/fiber_lib.hpp>  // IOFiber stub — retained for io_fiber_t compat
 
 namespace iomgr {
 
@@ -218,7 +218,7 @@ public:
     }
 
     int run_on_forget(reactor_regex rr, fiber_regex fr, const auto& fn) {
-        static thread_local std::vector< FiberManagerLib::Future< bool > > s_future_list;
+        static thread_local std::vector< std::future< bool > > s_future_list;
         return multicast_msg(rr, fr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
                              s_future_list);
     }
@@ -226,17 +226,11 @@ public:
     int run_on_forget(reactor_regex rr, const auto& fn) { return run_on_forget(rr, fiber_regex::main_only, fn); }
 
     int run_on_wait(io_fiber_t fiber, const auto& fn) {
-        DEBUG_ASSERT_EQ(am_i_sync_io_capable(), true,
-                        "It is prohibited to be waiting from a main fiber of io reactor as it can cause deadlock. If "
-                        "wait is needed, message can be executed on sync_io fibers");
         return send_msg_and_wait(
             fiber, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
 
     int run_on_wait(reactor_regex rr, fiber_regex fr, const auto& fn) {
-        DEBUG_ASSERT_EQ(am_i_sync_io_capable(), true,
-                        "It is prohibited to be waiting from a main fiber of io reactor as it can cause deadlock. If "
-                        "wait is needed, message can be executed on sync_io fibers");
         return multicast_msg_and_wait(
             rr, fr, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
@@ -320,7 +314,7 @@ private:
     int send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg);
 
     int multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
-                      std::vector< FiberManagerLib::Future< bool > >& out_msgs_list);
+                      std::vector< std::future< bool > >& out_msgs_list);
     int multicast_msg_and_wait(reactor_regex rr, fiber_regex fr, iomgr_msg* msg);
 
     /********* State Machine Related Operations ********/

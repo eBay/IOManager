@@ -29,8 +29,9 @@ extern "C" {
 
 namespace iomgr {
 thread_local IOReactor* IOReactor::this_reactor{nullptr};
+static thread_local IOFiber* t_this_fiber{nullptr};
 
-IOReactor::IOReactor() { m_fiber_mgr_lib = std::make_unique< FiberManagerLib >(); }
+IOReactor::IOReactor() = default;
 
 IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
@@ -72,22 +73,13 @@ void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t num_fibers,
     }
 }
 
-void IOReactor::init(uint32_t num_fibers) {
+void IOReactor::init(uint32_t /*num_fibers*/) {
     m_metrics = std::make_unique< IOThreadMetrics >(m_reactor_name);
 
-    // boost::fibers::use_scheduling_algorithm< iomgr::io_fiber_picker >();
-
-    // Create all fibers
-    for (uint32_t i{0}; i < num_fibers; ++i) {
-        m_io_fibers.emplace_back(m_fiber_mgr_lib->create_iofiber(this, iomanager.m_fiber_ordinal_reserver.reserve()));
-        // First fiber is always main fiber loop and we don't want to start fiber_loop there
-        if (i == 0) {
-            m_fiber_mgr_lib->set_this_iofiber(m_io_fibers[i].get());
-        } else {
-            m_fiber_mgr_lib->start_iofiber(m_io_fibers.back().get(), bind_this(IOReactor::fiber_loop, 1));
-        }
-    }
-    m_io_fiber_count.increment(num_fibers);
+    // Single main fiber — Boost.Fiber sync-IO pool removed.
+    m_io_fibers.emplace_back(std::make_unique< IOFiber >(this, iomanager.m_fiber_ordinal_reserver.reserve()));
+    t_this_fiber = m_io_fibers[0].get();
+    m_io_fiber_count.increment(1);
 
     // Do reactor specific initializations
     init_impl();
@@ -103,9 +95,6 @@ void IOReactor::init(uint32_t num_fibers) {
         }
     });
     REACTOR_LOG(INFO, "Reactor added {} interfaces", added_iface);
-
-    m_rand_fiber_dist = std::uniform_int_distribution< size_t >(0, m_io_fibers.size() - 1);
-    m_rand_sync_fiber_dist = std::uniform_int_distribution< size_t >(1, m_io_fibers.size() - 1);
 
     // Notify the caller registered to iomanager for it.
     iomanager.reactor_started(shared_from_this());
@@ -126,8 +115,6 @@ bool IOReactor::listen_once() {
             }
         }
 
-        m_fiber_mgr_lib->yield_main(); // Yield to make sure other fibers gets to handle messages/completions
-
         if (need_backoff) {
             m_cur_backoff_delay_us = m_cur_backoff_delay_us * IM_DYNAMIC_CONFIG(poll.backoff_delay_increase_factor);
             auto max_us = IM_DYNAMIC_CONFIG(poll.backoff_delay_max_us);
@@ -142,7 +129,6 @@ bool IOReactor::listen_once() {
 
 void IOReactor::stop() {
     m_keep_running = false;
-    m_fiber_mgr_lib->yield_main(); // Yield to make sure other fibers stop their loop
 
     uint32_t removed_iface{0};
     iomanager.foreach_interface([this, &removed_iface](cshared< IOInterface >& iface) {
@@ -155,16 +141,7 @@ void IOReactor::stop() {
     });
     REACTOR_LOG(INFO, "Reactor stop removed {} interfaces", removed_iface);
 
-    for (size_t i{1}; i < m_io_fibers.size(); ++i) {
-        auto msg = iomgr_msg::create([]() {}); // Send empty message for loop to come out and yield
-        m_io_fibers[i]->push_msg(msg);
-    }
-
-    // Wait for all fiber loops to exit
-    m_io_fiber_count.decrement(1);      // Decrement main fiber
-    while (!m_io_fiber_count.testz()) { // Wait for all fiber loop to exit
-        m_fiber_mgr_lib->yield_main();
-    }
+    m_io_fiber_count.decrement(1); // Decrement the single main fiber
 
     // Clear all the IO carrier specific context (epoll or spdk etc..)
     if (!m_user_controlled_loop) { stop_impl(); }
@@ -192,45 +169,13 @@ int IOReactor::remove_iodev(const io_device_ptr& iodev) {
     return ret;
 }
 
-void IOReactor::fiber_loop(IOFiber* fiber) {
-    iomgr_msg* msg;
-    while (true) {
-        if ((msg = fiber->pop_msg()) != nullptr) {
-            REACTOR_LOG(DEBUG, "Fiber {} picked the msg and handling it", fiber->ordinal);
-            handle_msg(msg);
-        }
-
-        if (!m_keep_running) { break; }
-        m_fiber_mgr_lib->yield();
-    }
-    fiber->close_channel();
-    m_io_fiber_count.decrement(1);
-}
-
-io_fiber_t IOReactor::pick_fiber(fiber_regex r) {
-    static thread_local std::random_device s_rd{};
-    static thread_local std::default_random_engine s_re{s_rd()};
-
-    if (r == fiber_regex::main_only) {
-        return m_io_fibers[0].get();
-    } else if (r == fiber_regex::syncio_only) {
-        return m_io_fibers[m_rand_sync_fiber_dist(s_re)].get();
-    } else if (r == fiber_regex::random) {
-        return m_io_fibers[m_rand_fiber_dist(s_re)].get();
-    } else {
-        static thread_local size_t t_next_slot{0};
-        return m_io_fibers[t_next_slot++ % m_io_fibers.size()].get();
-    }
+io_fiber_t IOReactor::pick_fiber(fiber_regex /*r*/) {
+    return m_io_fibers[0].get(); // Single fiber per reactor; all regex variants resolve to main fiber
 }
 
 io_fiber_t IOReactor::main_fiber() const { return m_io_fibers[0].get(); }
 
-std::vector< io_fiber_t > IOReactor::sync_io_capable_fibers() const {
-    std::vector< io_fiber_t > v;
-    std::transform(m_io_fibers.begin() + 1, m_io_fibers.end(), std::back_inserter(v),
-                   [](const auto& f) { return f.get(); });
-    return v;
-}
+std::vector< io_fiber_t > IOReactor::sync_io_capable_fibers() const { return {}; }
 
 ////////////////////// Message Section ////////////////////////////////////////
 void IOReactor::deliver_msg(io_fiber_t fiber, iomgr_msg* msg) {
@@ -247,16 +192,12 @@ void IOReactor::deliver_msg(io_fiber_t fiber, iomgr_msg* msg) {
 
 void IOReactor::handle_msg(iomgr_msg* msg) {
     ++m_metrics->msg_recvd_count;
-    if ((msg->m_dest_fiber == nullptr) || (msg->m_dest_fiber == iofiber_self())) {
-        (msg->m_method)();
-        if (msg->need_reply()) { msg->completed(); }
-        iomgr_msg::free(msg);
-    } else {
-        msg->m_dest_fiber->push_msg(msg);
-    }
+    (msg->m_method)();
+    if (msg->need_reply()) { msg->completed(); }
+    iomgr_msg::free(msg);
 }
 
-io_fiber_t IOReactor::iofiber_self() const { return m_fiber_mgr_lib->iofiber_self(); }
+io_fiber_t IOReactor::iofiber_self() const { return t_this_fiber; }
 
 //////////////////////////////// Device/Interface Section /////////////////////////////
 bool IOReactor::can_add_iface(cshared< IOInterface >& iface) const {

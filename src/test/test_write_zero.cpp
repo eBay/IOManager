@@ -19,6 +19,16 @@
 #include <iomgr/io_environment.hpp>
 #include <iomgr/iomgr.hpp>
 
+struct fire_and_forget_task {
+    struct promise_type {
+        fire_and_forget_task get_return_object() noexcept { return {}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() { std::terminate(); }
+    };
+};
+
 using namespace iomgr;
 using namespace std::chrono_literals;
 
@@ -115,9 +125,11 @@ public:
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz = std::min(max_io_size, remain_size);
-            m_iodev->drive_interface()->async_write(
-                m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset,
-                [this, this_sz, buf](int64_t) { on_write_completion(buf, this_sz); });
+            [this, buf, this_sz, cur_offset]() -> fire_and_forget_task {
+                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz,
+                                                                 cur_offset);
+                on_write_completion(buf, this_sz);
+            }();
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
@@ -131,8 +143,7 @@ public:
                 m_total_size, m_start_offset, get_elapsed_time_us(m_start_time));
         iomanager.iobuf_free(buf);
 
-        iomanager.run_on_forget(reactor_regex::random_worker, fiber_regex::syncio_only,
-                                [this]() { write_zero_and_read(); });
+        iomanager.run_on_forget(reactor_regex::random_worker, [this]() { write_zero_and_read(); });
     }
 
     void write_zero_and_read() {
@@ -147,11 +158,12 @@ public:
         auto cur_offset = m_start_offset;
         while (read_remain_size > 0) {
             const auto this_sz = std::min(max_io_size, read_remain_size);
-
             auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-            m_iodev->drive_interface()->async_read(
-                m_iodev.get(), (char*)read_buf, (uint32_t)this_sz, cur_offset,
-                [read_buf, this, this_sz](int64_t) { validate_zeros(read_buf, this_sz); });
+            [this, read_buf, this_sz, cur_offset]() -> fire_and_forget_task {
+                co_await m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz,
+                                                                cur_offset);
+                validate_zeros(read_buf, this_sz);
+            }();
             cur_offset += this_sz;
             read_remain_size -= this_sz;
         }

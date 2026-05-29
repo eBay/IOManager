@@ -111,7 +111,7 @@ public:
 
 class AioDriveInterface : public KernelDriveInterface {
 public:
-    AioDriveInterface(const io_interface_comp_cb_t& cb = nullptr);
+    AioDriveInterface();
     ~AioDriveInterface();
     drive_interface_type interface_type() const override { return drive_interface_type::aio; }
     std::string name() const override { return "aio_drive_interface"; }
@@ -119,20 +119,21 @@ public:
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
 
-    void async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                     bool part_of_batch = false) override;
-    void async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                      io_interface_comp_cb_t cb, bool part_of_batch = false) override;
-    void async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                    bool part_of_batch = false) override;
-    void async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset,
-                     io_interface_comp_cb_t cb, bool part_of_batch = false) override;
-    void async_unmap(IODevice* iodev, uint32_t size, uint64_t offset, io_interface_comp_cb_t cb,
-                     bool part_of_batch = false) override;
-    void async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset, io_interface_comp_cb_t cb) override;
-    void queue_fsync(IODevice* iodev, io_interface_comp_cb_t cb) override {
+    sisl::async::disk_task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
+                                                          uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                           uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                         bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                          uint64_t offset, bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                          bool part_of_batch = false) override;
+    sisl::async::disk_task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size,
+                                                               uint64_t offset) override;
+    sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) override {
         LOGWARN("fsync on aio drive interface is not supported");
-        cb(-ENOTSUP);
+        co_return std::error_code{ENOTSUP, std::system_category()};
     }
 
     virtual void submit_batch() override;

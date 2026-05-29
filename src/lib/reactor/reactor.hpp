@@ -32,17 +32,16 @@ struct spdk_bdev;
 namespace iomgr {
 #define REACTOR_LOG(level, __l, ...)                                                                                   \
     {                                                                                                                  \
-        LOG##level##MOD_FMT(                                                                                           \
-            iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {                            \
-                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[{}:{}] "},                                      \
-                                fmt::make_format_args(unmove(file_name(__FILE__)), unmove(__LINE__)));                 \
-                fmt::vformat_to(                                                                                       \
-                    fmt::appender(buf), fmt::string_view{"[IOThread {}.{}] "},                                         \
-                    fmt::make_format_args(m_reactor_num, unmove(m_fiber_mgr_lib->iofiber_self_ordinal())));            \
-                fmt::vformat_to(fmt::appender(buf), fmt::string_view{__m}, fmt::make_format_args(args...));            \
-                return true;                                                                                           \
-            }),                                                                                                        \
-            __l, ##__VA_ARGS__);                                                                                       \
+        LOG##level##MOD_FMT(iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {            \
+                                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[{}:{}] "},                      \
+                                                fmt::make_format_args(unmove(file_name(__FILE__)), unmove(__LINE__))); \
+                                fmt::vformat_to(fmt::appender(buf), fmt::string_view{"[IOThread {}.0] "},              \
+                                                fmt::make_format_args(m_reactor_num));                                 \
+                                fmt::vformat_to(fmt::appender(buf), fmt::string_view{__m},                             \
+                                                fmt::make_format_args(args...));                                       \
+                                return true;                                                                           \
+                            }),                                                                                        \
+                            __l, ##__VA_ARGS__);                                                                       \
     }
 
 class IOThreadMetrics : public sisl::MetricsGroup {
@@ -127,7 +126,6 @@ class DriveInterface;
 struct iomgr_msg;
 struct timer;
 struct IOFiber;
-class FiberManagerLib;
 
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
@@ -196,7 +194,6 @@ protected:
 private:
     void init(uint32_t num_fibers);
     bool listen_once();
-    void fiber_loop(IOFiber* fiber);
     bool can_add_iface(const std::shared_ptr< IOInterface >& iface) const;
 
 protected:
@@ -221,15 +218,12 @@ protected:
     int m_poll_interval{-1};
     uint64_t m_total_op = 0;
 
-    std::vector< std::unique_ptr< IOFiber > > m_io_fibers; // List of io threads within the reactor
+    std::vector< std::unique_ptr< IOFiber > > m_io_fibers; // Single main IOFiber (ordinal 0)
     std::vector< std::function< void(void) > > m_poll_interval_cbs;
     std::vector< can_backoff_cb_t > m_can_backoff_cbs;
     uint64_t m_cur_backoff_delay_us{0};
     uint64_t m_backoff_delay_min_us{0};
     listen_sentinel_cb_t m_iomgr_sentinel_cb;
-    std::uniform_int_distribution< size_t > m_rand_fiber_dist;
-    std::uniform_int_distribution< size_t > m_rand_sync_fiber_dist;
-    std::unique_ptr< FiberManagerLib > m_fiber_mgr_lib;
 };
 } // namespace iomgr
 

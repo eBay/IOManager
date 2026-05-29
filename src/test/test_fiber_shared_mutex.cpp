@@ -15,6 +15,7 @@
  *
  *********************************************************************************/
 #include <iostream>
+#include <shared_mutex>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -23,15 +24,12 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/io_environment.hpp>
-#include <iomgr/fiber_lib.hpp>
 
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_fiber_shared_mutex,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("10"), "number"),
-                  (num_fibers, "", "num_fibers", "number of fibers per thread",
-                   ::cxxopts::value< uint32_t >()->default_value("20"), "number"),
                   (num_iters, "", "num_iters", "number of iterations",
                    ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
                   (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"));
@@ -44,9 +42,8 @@ static uint64_t g_cur_val{1};
 
 class SharedMutexTest : public testing::Test {
 protected:
-    iomgr::FiberManagerLib::shared_mutex m_cb_mtx;
-    std::vector< iomgr::io_fiber_t > m_fibers;
-    uint64_t m_count_per_fiber{0};
+    std::shared_mutex m_cb_mtx;
+    uint64_t m_count_per_thread{0};
     std::mutex m_test_done_mtx;
     std::condition_variable m_test_done_cv;
     uint32_t m_test_count{0};
@@ -54,40 +51,23 @@ protected:
 protected:
     void SetUp() override {
         auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
-        auto nfibers = SISL_OPTIONS["num_fibers"].as< uint32_t >();
         auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
         auto num_iters = sisl::round_up(SISL_OPTIONS["num_iters"].as< uint64_t >(), nthreads);
 
-        if (is_spdk && nthreads > 2) {
-            LOGINFO("Spdk with more than 2 threads will cause overburden test systems, changing nthreads to 2");
-            nthreads = 2;
-        }
-
         LOGINFO("Starting iomgr with {} threads, spdk: {}", nthreads, is_spdk);
-        ioenvironment.with_iomgr(
-            iomgr::iomgr_params{.num_threads = nthreads, .is_spdk = is_spdk, .num_fibers = nfibers + 1});
+        ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = nthreads, .is_spdk = is_spdk});
 
-        // Get all the sync io'able fibers into a single list
-        std::mutex mtx;
-        iomanager.run_on_wait(iomgr::reactor_regex::all_worker, [this, &mtx]() {
-            auto fv = iomanager.sync_io_capable_fibers();
-            std::unique_lock lg(mtx);
-            m_fibers.insert(m_fibers.end(), fv.begin(), fv.end());
-        });
-
-        m_test_count = m_fibers.size();
-        // m_count_per_fiber = (num_iters - 1) / (nthreads * nfibers) + 1;
-        m_count_per_fiber = num_iters;
+        m_test_count = nthreads;
+        m_count_per_thread = num_iters;
     }
 
     void TearDown() override { iomanager.stop(); }
 
     void all_writer() {
-        for (uint64_t i{0}; i < m_count_per_fiber; ++i) {
+        for (uint64_t i{0}; i < m_count_per_thread; ++i) {
             write_once();
         }
-
-        LOGINFO("Fiber completed {} of exclusive locks", m_count_per_fiber);
+        LOGINFO("Thread completed {} exclusive locks", m_count_per_thread);
         {
             std::unique_lock lg(m_test_done_mtx);
             if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
@@ -95,11 +75,10 @@ protected:
     }
 
     void all_reader() {
-        for (uint64_t i{0}; i < m_count_per_fiber; ++i) {
+        for (uint64_t i{0}; i < m_count_per_thread; ++i) {
             read_once();
         }
-
-        LOGINFO("Fiber completed {} of shared locks", m_count_per_fiber);
+        LOGINFO("Thread completed {} shared locks", m_count_per_thread);
         {
             std::unique_lock lg(m_test_done_mtx);
             if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
@@ -113,7 +92,7 @@ protected:
 
         uint64_t read_count{0};
         uint64_t write_count{0};
-        for (uint64_t i{0}; i < m_count_per_fiber; ++i) {
+        for (uint64_t i{0}; i < m_count_per_thread; ++i) {
             if (read_or_write(re) == 0) {
                 write_once();
                 ++write_count;
@@ -123,7 +102,7 @@ protected:
             }
         }
 
-        LOGINFO("Fiber completed shared_locks={} exclusive_locks={}", read_count, write_count);
+        LOGINFO("Thread completed shared_locks={} exclusive_locks={}", read_count, write_count);
         {
             std::unique_lock lg(m_test_done_mtx);
             if (--m_test_count == 0) { m_test_done_cv.notify_one(); }
@@ -145,10 +124,20 @@ protected:
 };
 
 TEST_F(SharedMutexTest, single_writer_multiple_readers) {
-    iomanager.run_on_forget(m_fibers[0], [this]() { all_writer(); });
-    for (auto it = m_fibers.begin() + 1; it < m_fibers.end(); ++it) {
-        iomanager.run_on_forget(*it, [this]() { all_reader(); });
-    }
+    auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
+
+    // First reactor does all writes; the rest do reads.
+    // We use run_on_forget to reactor_regex::all_worker, but the first invocation
+    // sends a writer and the rest send readers. Since we can't easily target "first
+    // reactor only", simplify: send one writer per run. Use round_robin to spread.
+    iomanager.run_on_forget(iomgr::reactor_regex::all_worker, [this, nthreads]() {
+        static std::atomic< int > counter{0};
+        if (counter.fetch_add(1) == 0) {
+            all_writer();
+        } else {
+            all_reader();
+        }
+    });
 
     {
         std::unique_lock< std::mutex > lk(m_test_done_mtx);
@@ -157,9 +146,7 @@ TEST_F(SharedMutexTest, single_writer_multiple_readers) {
 }
 
 TEST_F(SharedMutexTest, random_reader_writers) {
-    for (const auto& f : m_fibers) {
-        iomanager.run_on_forget(f, [this]() { random_reader_writer(); });
-    }
+    iomanager.run_on_forget(iomgr::reactor_regex::all_worker, [this]() { random_reader_writer(); });
 
     {
         std::unique_lock< std::mutex > lk(m_test_done_mtx);
@@ -170,7 +157,7 @@ TEST_F(SharedMutexTest, random_reader_writers) {
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS)
-    sisl::logging::SetLogger("test_fiber_shared_mutex");
+    sisl::logging::SetLogger("test_shared_mutex");
     spdlog::set_pattern("[%D %T%z] [%^%L%$] [%t] %v");
 
     auto ret = RUN_ALL_TESTS();
