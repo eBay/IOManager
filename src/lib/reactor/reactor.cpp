@@ -29,7 +29,6 @@ extern "C" {
 
 namespace iomgr {
 thread_local IOReactor* IOReactor::this_reactor{nullptr};
-static thread_local IOFiber* t_this_fiber{nullptr};
 
 IOReactor::IOReactor() = default;
 
@@ -37,7 +36,7 @@ IOReactor::~IOReactor() {
     if (is_io_reactor()) { stop(); }
 }
 
-void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t num_fibers, const std::string& name,
+void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t /*num_fibers*/, const std::string& name,
                     const iodev_selector_t& iodev_selector, thread_state_notifier_t&& thread_state_notifier) {
     auto state = iomanager.get_state();
     if ((state == iomgr_state::stopping) || (state == iomgr_state::stopped)) {
@@ -63,7 +62,7 @@ void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t num_fibers,
         REACTOR_LOG(INFO, "IOReactor {} started of loop type={} and assigned reactor id {}", m_reactor_name,
                     loop_type(), m_reactor_num);
 
-        init(num_fibers);
+        init();
         if (m_keep_running) { REACTOR_LOG(INFO, "IOReactor is ready to go to listen loop"); }
     }
 
@@ -73,12 +72,8 @@ void IOReactor::run(int worker_slot_num, loop_type_t ltype, uint32_t num_fibers,
     }
 }
 
-void IOReactor::init(uint32_t /*num_fibers*/) {
+void IOReactor::init() {
     m_metrics = std::make_unique< IOThreadMetrics >(m_reactor_name);
-
-    // Single main fiber — Boost.Fiber sync-IO pool removed.
-    m_io_fibers.emplace_back(std::make_unique< IOFiber >(this, iomanager.m_fiber_ordinal_reserver.reserve()));
-    t_this_fiber = m_io_fibers[0].get();
     m_io_fiber_count.increment(1);
 
     // Do reactor specific initializations
@@ -141,12 +136,10 @@ void IOReactor::stop() {
     });
     REACTOR_LOG(INFO, "Reactor stop removed {} interfaces", removed_iface);
 
-    m_io_fiber_count.decrement(1); // Decrement the single main fiber
+    m_io_fiber_count.decrement(1);
 
-    // Clear all the IO carrier specific context (epoll or spdk etc..)
     if (!m_user_controlled_loop) { stop_impl(); }
 
-    m_io_fibers.clear();
     m_metrics.reset();
     iomanager.reactor_stopped();
 }
@@ -169,20 +162,8 @@ int IOReactor::remove_iodev(const io_device_ptr& iodev) {
     return ret;
 }
 
-io_fiber_t IOReactor::pick_fiber(fiber_regex /*r*/) {
-    return m_io_fibers[0].get(); // Single fiber per reactor; all regex variants resolve to main fiber
-}
-
-io_fiber_t IOReactor::main_fiber() const { return m_io_fibers[0].get(); }
-
-std::vector< io_fiber_t > IOReactor::sync_io_capable_fibers() const { return {}; }
-
 ////////////////////// Message Section ////////////////////////////////////////
-void IOReactor::deliver_msg(io_fiber_t fiber, iomgr_msg* msg) {
-    msg->m_dest_fiber = fiber;
-
-    // If the sender and receiver are same thread, take a shortcut to directly handle the message. Of course, this
-    // will cause out-of-order delivery of messages. However, there is no good way to prevent deadlock
+void IOReactor::deliver_msg(iomgr_msg* msg) {
     if (iomanager.this_reactor() == this) {
         handle_msg(msg);
     } else {
@@ -196,8 +177,6 @@ void IOReactor::handle_msg(iomgr_msg* msg) {
     if (msg->need_reply()) { msg->completed(); }
     iomgr_msg::free(msg);
 }
-
-io_fiber_t IOReactor::iofiber_self() const { return t_this_fiber; }
 
 //////////////////////////////// Device/Interface Section /////////////////////////////
 bool IOReactor::can_add_iface(cshared< IOInterface >& iface) const {

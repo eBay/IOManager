@@ -252,7 +252,7 @@ void timer_spdk::stop() {
 }
 
 void timer_spdk::cancel_thread_timer(cshared< spdk_timer_info >& st_info, bool wait_to_cancel) const {
-    iomanager.run_on(wait_to_cancel, st_info->single_thread_timer->owner_fiber, [st_info]() {
+    iomanager.run_on(wait_to_cancel, st_info->single_thread_timer->owner_reactor, [st_info]() {
         unregister_spdk_thread_timer(st_info->single_thread_timer);
         st_info->single_thread_timer = nullptr;
     });
@@ -316,7 +316,7 @@ void spdk_timer_info::cancel_single_thread_timer() {
 }
 
 spdk_thread_timer_info::spdk_thread_timer_info(cshared< spdk_timer_info >& sti) :
-        st_info{sti}, owner_fiber{iomanager.iofiber_self()} {}
+        st_info{sti}, owner_reactor{iomanager.this_reactor()} {}
 
 bool spdk_thread_timer_info::call_timer_cb_once() {
     bool ret = false;

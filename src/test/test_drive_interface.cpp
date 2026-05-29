@@ -46,8 +46,6 @@ SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 SISL_OPTION_GROUP(test_drive_interface,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
-                  (num_fibers, "", "num_fibers", "number of fibers per thread",
-                   ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
                   (num_ios, "", "num_ios", "number of io operations",
                    ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
                   (read_pct, "", "read_pct", "Percentage of reads in io operations",
@@ -115,7 +113,6 @@ public:
         m_dev_path = SISL_OPTIONS["dev_path"].as< std::string >();
         auto const dev_size = SISL_OPTIONS["dev_size_mb"].as< uint64_t >() * 1024 * 1024;
         m_nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
-        auto nfibers = SISL_OPTIONS["num_fibers"].as< uint32_t >();
         auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
 
         const std::filesystem::path file_path{m_dev_path};
@@ -135,7 +132,7 @@ public:
 
         m_each_thread_size = (dev_size - 1) / m_nthreads + 1;
         LOGINFO("Starting iomgr with {} threads, spdk: {}", m_nthreads, is_spdk);
-        ioenvironment.with_iomgr(iomgr_params{.num_threads = m_nthreads, .is_spdk = is_spdk, .num_fibers = nfibers});
+        ioenvironment.with_iomgr(iomgr_params{.num_threads = m_nthreads, .is_spdk = is_spdk});
 
         std::stringstream iomgr_ver;
         iomgr_ver << iomgr::get_version();
@@ -238,7 +235,8 @@ public:
         uint8_t* rbuf = iomanager.iobuf_alloc(s_driveattr.align_size, s_io_size);
         for (size_t offset{work->offset_start}; offset < work->offset_end; offset += s_io_size) {
             LOGTRACE("Verify offset={}", offset);
-            m_iodev->drive_interface()->sync_read(m_iodev.get(), r_cast< char* >(rbuf), s_io_size, offset);
+            // Use pread directly — no reactor needed for simple sequential verify
+            [[maybe_unused]] auto n = ::pread(m_iodev->fd(), rbuf, s_io_size, static_cast< off_t >(offset));
             for (size_t i{0}; i < s_io_size / sizeof(size_t); ++i) {
                 assert((r_cast< uint64_t* >(rbuf))[i] == offset);
             }
@@ -378,15 +376,14 @@ public:
 
         // We will do sync read to do the verification
         next_pick = 0;
-        iomanager.run_on_wait(reactor_regex::all_worker, fiber_regex::syncio_only,
-                              [this, &mtx, &next_pick, &work_list]() {
-                                  Workload* my_work;
-                                  {
-                                      std::unique_lock lg(mtx);
-                                      my_work = &work_list[next_pick++];
-                                  }
-                                  do_verify(my_work);
-                              });
+        iomanager.run_on_wait(reactor_regex::all_worker, [this, &mtx, &next_pick, &work_list]() {
+            Workload* my_work;
+            {
+                std::unique_lock lg(mtx);
+                my_work = &work_list[next_pick++];
+            }
+            do_verify(my_work);
+        });
     }
 
     void io_on_user_threads() {
@@ -413,7 +410,7 @@ public:
         for (uint32_t i{0}; i < m_nthreads; ++i) {
             iomanager.create_reactor("user" + std::to_string(i + 1),
                                      SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP,
-                                     SISL_OPTIONS["num_fibers"].as< uint32_t >(), [&](bool is_started) {
+                                     [&](bool is_started) {
                                          if (is_started) {
                                              Workload* my_work;
                                              {
@@ -437,15 +434,14 @@ public:
 
         // We will do sync read to do the verification
         next_pick = 0;
-        iomanager.run_on_wait(reactor_regex::all_user, fiber_regex::syncio_only,
-                              [this, &mtx, &next_pick, &work_list]() {
-                                  Workload* my_work;
-                                  {
-                                      std::unique_lock lg(mtx);
-                                      my_work = &work_list[next_pick++];
-                                  }
-                                  do_verify(my_work);
-                              });
+        iomanager.run_on_wait(reactor_regex::all_user, [this, &mtx, &next_pick, &work_list]() {
+            Workload* my_work;
+            {
+                std::unique_lock lg(mtx);
+                my_work = &work_list[next_pick++];
+            }
+            do_verify(my_work);
+        });
     }
 
     void io_on_regular_threads() {

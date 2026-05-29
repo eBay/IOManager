@@ -42,7 +42,6 @@
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/io_device.hpp>
-#include <iomgr/fiber_lib.hpp>  // IOFiber stub — retained for io_fiber_t compat
 
 namespace iomgr {
 
@@ -67,7 +66,6 @@ ENUM(iomgr_state, uint16_t,
 struct iomgr_params {
     size_t num_threads{0};
     bool is_spdk{false};
-    uint32_t num_fibers{0};
     uint32_t app_mem_size_mb{0};
     uint32_t hugepage_size_mb{0};
 };
@@ -104,7 +102,6 @@ public:
     }
 
     // TODO: Make this a dynamic config (albeit non-hotswap)
-    static constexpr uint32_t max_io_fibers{1024}; // Keep in mind increasing this cause increased mem footprint
 
     /////////////////////////////////// Start/Stop Control Related Operations //////////////////////////////
     /**
@@ -137,18 +134,13 @@ public:
      * @brief A way to start the User Reactor and run an IO Loop. This method makes the current thread run a loop
      * and thus will return only after the loop is exited
      *
-     * @param loop_type_t Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll) etc..
-     * @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent
-     * sync io, but it comes at the cost of more stack memory. Defaults to 4
-     * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
-     * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
-     * needs to ignore this device.
-     * @param addln_notifier Callback which notifies after reactor is ready or shutting down (with true or false)
-     * parameter. This is per reactor override of the same callback as iomanager start.
+     * @param loop_type_t Type of loop (TIGHT_LOOP, INTERRUPT_LOOP, ADAPTIVE_LOOP, or combination)
+     * @param iodev_selector [OPTIONAL] Callback to filter which iodevices are added to this reactor
+     * @param addln_notifier [OPTIONAL] Callback on reactor start/stop (true/false)
      */
-    void run_io_loop(loop_type_t loop_type, uint32_t num_fibers = 4, const iodev_selector_t& iodev_selector = nullptr,
+    void run_io_loop(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
                      thread_state_notifier_t&& addln_notifier = nullptr) {
-        _run_io_loop(-1, loop_type, num_fibers, "", iodev_selector, std::move(addln_notifier));
+        _run_io_loop(-1, loop_type, "", iodev_selector, std::move(addln_notifier));
     }
 
     /// @brief Create a new thread and start reactor loop of given type in that thread. This created reactor will be
@@ -156,26 +148,17 @@ public:
     /// @param name : Name of the reactor (used for logging)
     /// @param loop_type : Type of loop (tight loop), can be a combination either, TIGHT_LOOP | ADAPTIVE_LOOP or
     /// INTERRUPT_LOOP | ADAPTIVE_LOOP or
-    /// @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent
-    /// sync io, but it comes at the cost of more stack memory. Defaults to 4
     /// @param notifier : [OPTIONAL] Callback called from the new reactor thread with bool (start/stop)
-    void create_reactor(const std::string& name, loop_type_t loop_type, uint32_t num_fibers = 4u,
-                        thread_state_notifier_t&& notifier = nullptr);
+    void create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier = nullptr);
 
     /**
-     * @brief Convert the current thread to new user reactor
+     * @brief Convert the current thread to a user reactor and run the IO loop. Returns only after the loop exits.
      *
-     * @param is_tloop_reactor Is the loop it needs to run a tight loop or interrupt based loop (spdk vs epoll)
-     * @param num_fibers [OPTIONAL] Total number of fibers this reactor to start. More fibers means more concurrent sync
-     * io, but it comes at the cost of more stack memory. Defaults to 4
-     * @param iodev_selector [OPTIONAL] A selector callback which will be called when an iodevice is added to the
-     * reactor. Consumer of this callback can return true to allow the device to be added or false if this reactor
-     * needs to ignore this device.
-     * @param addln_notifier  Callback which notifies after reactor is ready or shutting down (with true or false)
-     * parameter. This is per reactor override of the same callback as iomanager start.
+     * @param loop_type  Type of loop (TIGHT_LOOP, INTERRUPT_LOOP, ADAPTIVE_LOOP, or combination)
+     * @param iodev_selector [OPTIONAL] Callback to filter which iodevices are added to this reactor
+     * @param addln_notifier  [OPTIONAL] Callback on reactor start/stop (true/false)
      */
-    void become_user_reactor(loop_type_t loop_type, uint32_t num_fibers = 4u,
-                             const iodev_selector_t& iodev_selector = nullptr,
+    void become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector = nullptr,
                              thread_state_notifier_t&& addln_notifier = nullptr);
 
     /**
@@ -206,36 +189,30 @@ public:
     void remove_interface(cshared< IOInterface >& iface);
 
     ////////////////////////////////// Message Passing Section ////////////////////////////////
-    /// @brief Direct method to execute the spdk method into a fiber (running on remote reactor). This method doesn't
-    /// wait for any success or its return, it will simply fire it and return.
-    /// @param fiber: Fiber to run this method on. It could be current fiber in case it executes the method right away
-    /// @param fn: Function to execute
-    /// @param context: Any void context
-    int run_on_forget(io_fiber_t fiber, spdk_msg_signature_t fn, void* context);
-
-    int run_on_forget(io_fiber_t fiber, const auto& fn) {
-        return send_msg(fiber, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+    /// Run fn on a specific reactor (fire and forget — does not wait for completion).
+    int run_on_forget(IOReactor* reactor, spdk_msg_signature_t fn, void* context);
+    int run_on_forget(IOReactor* reactor, const auto& fn) {
+        return send_msg(reactor, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
 
-    int run_on_forget(reactor_regex rr, fiber_regex fr, const auto& fn) {
+    /// Run fn on all reactors matching rr (fire and forget).
+    int run_on_forget(reactor_regex rr, const auto& fn) {
         static thread_local std::vector< std::future< bool > > s_future_list;
-        return multicast_msg(rr, fr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
+        return multicast_msg(rr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
                              s_future_list);
     }
 
-    int run_on_forget(reactor_regex rr, const auto& fn) { return run_on_forget(rr, fiber_regex::main_only, fn); }
-
-    int run_on_wait(io_fiber_t fiber, const auto& fn) {
+    /// Run fn on a specific reactor and block until it completes.
+    int run_on_wait(IOReactor* reactor, const auto& fn) {
         return send_msg_and_wait(
-            fiber, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+            reactor, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
 
-    int run_on_wait(reactor_regex rr, fiber_regex fr, const auto& fn) {
+    /// Run fn on all reactors matching rr and block until all complete.
+    int run_on_wait(reactor_regex rr, const auto& fn) {
         return multicast_msg_and_wait(
-            rr, fr, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+            rr, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
-
-    int run_on_wait(reactor_regex rr, const auto& fn) { return run_on_wait(rr, fiber_regex::main_only, fn); }
 
     template < typename... Args >
     int run_on(bool wait, Args&&... args) {
@@ -252,16 +229,13 @@ public:
     bool is_spdk_mode() const { return m_is_spdk; }
     bool is_uring_capable() const { return m_is_uring_capable; }
 
-    //////////////////////////// Reactor/Fiber related methods ///////////////////////
+    //////////////////////////// Reactor related methods ///////////////////////
     bool am_i_io_reactor() const;
     bool am_i_tight_loop_reactor() const;
     bool am_i_worker_reactor() const;
     bool am_i_adaptive_reactor() const;
-    bool am_i_sync_io_capable() const;
     void set_my_reactor_adaptive(bool adaptive);
-    io_fiber_t iofiber_self() const;
     IOReactor* this_reactor() const;
-    std::vector< io_fiber_t > sync_io_capable_fibers() const;
 
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
@@ -292,8 +266,8 @@ private:
     ~IOManager();
 
     void foreach_interface(const interface_cb_t& iface_cb);
-    void create_worker_reactors(uint32_t num_fibers);
-    void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name,
+    void create_worker_reactors();
+    void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                       const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
 
     void reactor_started(std::shared_ptr< IOReactor > reactor); // Notification that iomanager thread is ready to serve
@@ -310,12 +284,11 @@ private:
     /******** IO Thread related infra ********/
     thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
 
-    int send_msg(io_fiber_t fiber, iomgr_msg* msg);
-    int send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg);
+    int send_msg(IOReactor* reactor, iomgr_msg* msg);
+    int send_msg_and_wait(IOReactor* reactor, iomgr_waitable_msg* msg);
 
-    int multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
-                      std::vector< std::future< bool > >& out_msgs_list);
-    int multicast_msg_and_wait(reactor_regex rr, fiber_regex fr, iomgr_msg* msg);
+    int multicast_msg(reactor_regex rr, iomgr_msg* msg, std::vector< std::future< bool > >& out_msgs_list);
+    int multicast_msg_and_wait(reactor_regex rr, iomgr_msg* msg);
 
     /********* State Machine Related Operations ********/
     bool is_ready() const { return (get_state() == iomgr_state::running); }
@@ -380,7 +353,6 @@ private:
     std::unique_ptr< timer > m_global_worker_timer;
 
     thread_state_notifier_t m_common_thread_state_notifier{nullptr};
-    sisl::IDReserver m_fiber_ordinal_reserver;
 
     // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
     bool m_is_spdk{false};

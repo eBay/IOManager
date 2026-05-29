@@ -66,8 +66,6 @@ table IOMemory {
 
 table Thread {
     num_workers: uint32 = 2;
-
-    num_fibers: uint32 = 4;
 }
 
 table Poll {

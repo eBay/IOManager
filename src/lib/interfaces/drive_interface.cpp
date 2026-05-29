@@ -424,6 +424,9 @@ drive_attributes KernelDriveInterface::get_attributes(const std::string& devname
     return attr;
 }
 
+} // namespace iomgr
+
+#if 0 // sync_* removed; kept for reference only
 void KernelDriveInterface::init_write_zero_buf(const std::string& devname, const drive_type dev_type) {
 #ifdef __linux__
     if ((dev_type == drive_type::block_nvme) && IM_DYNAMIC_CONFIG(drive.zeros_by_ioctl)) {
@@ -600,4 +603,4 @@ std::error_code KernelDriveInterface::write_zero_writev(IODevice* iodev, uint64_
     DEBUG_ASSERT_EQ(total_sz_written, size, "write zero couldn't completely zero out");
     return ret;
 }
-} // namespace iomgr
+#endif

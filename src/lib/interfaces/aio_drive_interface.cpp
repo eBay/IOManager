@@ -116,7 +116,6 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
     LOGMSG_ASSERT(((dev_type == drive_type::block_nvme) || (dev_type == drive_type::block_hdd) ||
                    (dev_type == drive_type::file_on_hdd) || (dev_type == drive_type::file_on_nvme)),
                   "Unexpected dev type to open {}", dev_type);
-    init_write_zero_buf(devname, dev_type);
 
     auto fd = ::open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -128,8 +127,6 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
 
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
-    iodev->creator =
-        iomanager.am_i_io_reactor() ? iomanager.this_reactor()->pick_fiber(fiber_regex::main_only) : nullptr;
     iodev->dtype = dev_type;
 
     // We don't need to add the device to each thread, because each AioInterface thread context add an

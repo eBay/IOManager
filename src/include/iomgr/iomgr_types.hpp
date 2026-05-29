@@ -30,7 +30,6 @@ namespace iomgr {
 class IOReactor;
 struct IODevice;
 struct iomgr_msg;
-struct IOFiber;
 
 template < typename T >
 using shared = std::shared_ptr< T >;
@@ -49,7 +48,6 @@ using ev_callback = std::function< void(IODevice* iodev, void* cookie, int event
 
 /////////////////// Types for all IOReactors ////////////////////////
 using reactor_idx_t = uint32_t;
-using io_fiber_t = IOFiber*;
 using loop_type_t = uint64_t;
 
 static constexpr loop_type_t TIGHT_LOOP = 1 << 0;     // Completely tight loop consuming 100% cpu
@@ -72,15 +70,9 @@ ENUM(reactor_regex, uint8_t,
      all_tloop          // Represents all tight loop reactors (could be either worker or user)
 );
 
-ENUM(fiber_regex, uint8_t,
-     main_only,   // Run only on main fiber of the reactor
-     syncio_only, // Run only on the syncio capable fibers
-     random,      // Run on any fiber
-     round_robin  // Run in round robin manner
-);
-
 using eal_core_id_t = uint32_t;
-using thread_specifier = std::variant< reactor_regex, io_fiber_t >;
+// thread_specifier: reactor_regex for "all matching reactors"; IOReactor* for a specific reactor.
+using thread_specifier = std::variant< reactor_regex, IOReactor* >;
 using sys_thread_id_t = std::variant< std::thread, eal_core_id_t >;
 
 using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
@@ -94,7 +86,6 @@ inline T r_cast(U v) {
 
 /////////////////// Types for all IOInterfaces ////////////////////////
 class IOInterface;
-using io_interface_comp_cb_t = std::function< void(int64_t res) >;
 using listen_sentinel_cb_t = std::function< void(void) >;
 using interface_adder_t = std::function< void(void) >;
 using interface_cb_t = std::function< void(const std::shared_ptr< IOInterface >&) >;

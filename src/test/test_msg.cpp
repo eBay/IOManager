@@ -67,8 +67,8 @@ public:
         static thread_local uint64_t this_thread_sent_count{0};
         for (uint64_t i{0}; i < g_iters; ++i) {
             int count{0};
-            if (std::holds_alternative< io_fiber_t >(dest)) {
-                count = iomanager.run_on(is_wait, std::get< io_fiber_t >(dest), receiver);
+            if (std::holds_alternative< IOReactor* >(dest)) {
+                count = iomanager.run_on(is_wait, std::get< IOReactor* >(dest), receiver);
             } else if (std::holds_alternative< reactor_regex >(dest)) {
                 count = iomanager.run_on(is_wait, std::get< reactor_regex >(dest), receiver);
             }

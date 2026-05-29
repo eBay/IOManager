@@ -111,11 +111,6 @@ public:
                                                                uint64_t offset) override;
     sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) override;
 
-    std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) override;
-    std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-    std::error_code sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
-    std::error_code sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size, uint64_t offset) override;
-
     void on_event_notification(IODevice* iodev, void* cookie, int event);
     void handle_completions();
     void submit_batch() override;

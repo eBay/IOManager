@@ -29,7 +29,6 @@ using run_func_t = std::function< void(void) >;
 struct iomgr_waitable_msg;
 struct iomgr_msg : public sisl::ObjLifeCounter< iomgr_msg > {
 
-    io_fiber_t m_dest_fiber{nullptr}; // Is this message heading to a specific fiber within reactor, defaults main fiber
     run_func_t m_method;
 
     template < class... Args >

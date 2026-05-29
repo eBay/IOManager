@@ -54,7 +54,7 @@ public:
     uint64_t term_num = 0;
     spdk_poller* poller = nullptr;
     shared< spdk_timer_info > st_info;
-    io_fiber_t owner_fiber;
+    IOReactor* owner_reactor{nullptr};
 };
 
 class timer_spdk;
@@ -156,7 +156,7 @@ public:
     }
 
 protected:
-    bool is_thread_local() const { return std::holds_alternative< io_fiber_t >(m_scope); }
+    bool is_thread_local() const { return std::holds_alternative< IOReactor* >(m_scope); }
 
 protected:
     std::mutex m_list_mutex;   // Mutex that protects list and set

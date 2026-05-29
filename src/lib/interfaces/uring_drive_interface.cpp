@@ -165,7 +165,6 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_ty
     LOGMSG_ASSERT(((dev_type == drive_type::block_nvme) || (dev_type == drive_type::block_hdd) ||
                    (dev_type == drive_type::file_on_hdd) || (dev_type == drive_type::file_on_nvme)),
                   "Unexpected dev type to open {}", dev_type);
-    init_write_zero_buf(devname, dev_type);
 
     auto fd = open(devname.c_str(), oflags, 0640);
     if (fd == -1) {
@@ -177,7 +176,6 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_ty
 
     auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
-    iodev->creator = iomanager.am_i_io_reactor() ? iomanager.iofiber_self() : nullptr;
     iodev->dtype = dev_type;
     iodev->enable_metrics(devname);
 
@@ -325,8 +323,38 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_unmap(IODev
 
 sisl::async::disk_task< std::error_code > UringDriveInterface::async_write_zero(IODevice* iodev, uint64_t size,
                                                                                 uint64_t offset) {
-    LOGWARN("Uring async_write_zero is implemented as sync write, need to have more intelligent implementation");
-    co_return sync_write_zero(iodev, size, offset);
+    static constexpr uint64_t chunk_size{1u * 1024u * 1024u};
+    static thread_local std::vector< uint8_t > s_zero_buf;
+    if (s_zero_buf.size() < chunk_size) { s_zero_buf.assign(chunk_size, 0); }
+
+    uint64_t remain = size;
+    uint64_t cur_offset = offset;
+    while (remain > 0) {
+        const uint64_t write_size = std::min(remain, chunk_size);
+        auto iocb = new drive_iocb(this, iodev, DriveOpType::WRITE, write_size, cur_offset);
+        iocb->set_data(reinterpret_cast< char* >(s_zero_buf.data()));
+
+        auto submit_fn = [this, iocb]() {
+            DriveInterface::increment_outstanding_counter(iocb);
+            auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
+            if (sqe == nullptr) { return; }
+            io_uring_prep_write(sqe, iocb->iodev->fd(), iocb->get_data(), iocb->size, iocb->offset);
+            t_uring_ch->submit_if_needed(iocb, sqe, false);
+        };
+        if (iomanager.this_reactor() != nullptr) {
+            submit_fn();
+        } else {
+            iomanager.run_on_forget(reactor_regex::random_worker, submit_fn);
+        }
+
+        const int res = co_await iocb->completion;
+        DriveInterface::decrement_outstanding_counter(iocb);
+        delete iocb;
+        if (res < 0) { co_return std::error_code{-res, std::system_category()}; }
+        remain -= write_size;
+        cur_offset += write_size;
+    }
+    co_return std::error_code{};
 }
 
 sisl::async::disk_task< std::error_code > UringDriveInterface::queue_fsync(IODevice* iodev) {
@@ -349,24 +377,6 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::queue_fsync(IODev
     const auto ec = res >= 0 ? std::error_code{} : std::error_code{-res, std::system_category()};
     delete iocb;
     co_return ec;
-}
-
-std::error_code UringDriveInterface::sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) {
-    return KernelDriveInterface::sync_write(iodev, data, size, offset);
-}
-
-std::error_code UringDriveInterface::sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                 uint64_t offset) {
-    return KernelDriveInterface::sync_writev(iodev, iov, iovcnt, size, offset);
-}
-
-std::error_code UringDriveInterface::sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) {
-    return KernelDriveInterface::sync_read(iodev, data, size, offset);
-}
-
-std::error_code UringDriveInterface::sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                uint64_t offset) {
-    return KernelDriveInterface::sync_readv(iodev, iov, iovcnt, size, offset);
 }
 
 void UringDriveInterface::submit_batch() { t_uring_ch->submit_ios(); }

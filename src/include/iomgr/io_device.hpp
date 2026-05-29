@@ -55,7 +55,6 @@ public:
     std::string alias_name;
     backing_dev_t dev;
     int ev{0};
-    io_fiber_t creator;
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
@@ -86,7 +85,6 @@ public:
 
     bool is_global() const;
     bool is_my_thread_scope() const;
-    io_fiber_t fiber_scope() const;
     reactor_regex global_scope() const;
     IOReactor* reactor_scope() const;
 

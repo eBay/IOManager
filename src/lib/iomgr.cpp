@@ -73,9 +73,7 @@ SISL_LOGGING_DEF(iomgr)
 
 namespace iomgr {
 
-IOManager::IOManager() : m_fiber_ordinal_reserver(IOManager::max_io_fibers) {
-    m_iface_list.reserve(inbuilt_interface_count + 5);
-}
+IOManager::IOManager() { m_iface_list.reserve(inbuilt_interface_count + 5); }
 
 IOManager::~IOManager() = default;
 
@@ -162,8 +160,7 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
 
-    // Caller can override the number of fibers per thread; o.w., it is taken from dynamic config
-    create_worker_reactors((0 < params.num_fibers) ? params.num_fibers : IM_DYNAMIC_CONFIG(thread.num_fibers));
+    create_worker_reactors();
     wait_for_state(iomgr_state::sys_init);
 
     // Start the global timer
@@ -241,27 +238,24 @@ void IOManager::stop() {
     LOGINFO("IOManager Stopped and all IO threads are relinquished");
 }
 
-void IOManager::create_worker_reactors(uint32_t num_fibers) {
-    // First populate the full sparse vector of m_worker_reactors before starting workers.
+void IOManager::create_worker_reactors() {
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_reactors.push_back(nullptr);
     }
-
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_threads.emplace_back(m_impl->create_reactor_impl(
-            fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, num_fibers, (int)i, nullptr));
+            fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, (int)i, nullptr));
         LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
     }
 }
 
-void IOManager::create_reactor(const std::string& name, loop_type_t loop_type, uint32_t num_fibers,
-                               thread_state_notifier_t&& notifier) {
-    m_impl->create_reactor_impl(name, loop_type, num_fibers, -1, std::move(notifier));
+void IOManager::create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier) {
+    m_impl->create_reactor_impl(name, loop_type, -1, std::move(notifier));
 }
 
-void IOManager::become_user_reactor(loop_type_t loop_type, uint32_t num_fibers, const iodev_selector_t& iodev_selector,
+void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
                                     thread_state_notifier_t&& addln_notifier) {
-    _run_io_loop(-1, loop_type, num_fibers, "", std::move(iodev_selector), std::move(addln_notifier));
+    _run_io_loop(-1, loop_type, "", std::move(iodev_selector), std::move(addln_notifier));
 }
 
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
@@ -325,7 +319,7 @@ void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
     }
 }
 
-void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t num_fibers, const std::string& name,
+void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                              const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier) {
     loop_type_t ltype = loop_type;
 
@@ -342,7 +336,7 @@ void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, uint32_t
         reactor = std::make_shared< IOReactorEPoll >();
     }
     *(m_reactors.get()) = reactor;
-    reactor->run(iomgr_slot_num, ltype, num_fibers, name, iodev_selector, std::move(addln_notifier));
+    reactor->run(iomgr_slot_num, ltype, 0, name, iodev_selector, std::move(addln_notifier));
 }
 
 void IOManager::stop_io_loop() { this_reactor()->stop(); }
@@ -383,41 +377,31 @@ static bool match_regex(reactor_regex r, const IOReactor* reactor) {
     }
 }
 
-int IOManager::run_on_forget(io_fiber_t fiber, spdk_msg_signature_t fn, void* context) {
-    assert(fiber->reactor->is_tight_loop_reactor());
+int IOManager::run_on_forget(IOReactor* reactor, spdk_msg_signature_t fn, void* context) {
+    assert(reactor->is_tight_loop_reactor());
 #ifdef WITH_SPDK
-    spdk_thread_send_msg(fiber->spdk_thr, fn, context);
+    spdk_thread_send_msg(reactor->spdk_thr_, fn, context);
 #endif
     return 1;
 }
 
-int IOManager::send_msg(io_fiber_t fiber, iomgr_msg* msg) {
-    int ret{0};
-    specific_reactor(fiber->reactor->reactor_idx(), [msg, &ret, &fiber](IOReactor* reactor) {
-        if (reactor && reactor->is_io_reactor()) {
-            reactor->deliver_msg(fiber, msg);
-            ret = 1;
-        }
-    });
-    return ret;
+int IOManager::send_msg(IOReactor* reactor, iomgr_msg* msg) {
+    reactor->deliver_msg(msg);
+    return 1;
 }
 
-int IOManager::send_msg_and_wait(io_fiber_t fiber, iomgr_waitable_msg* msg) {
-    int ret{0};
+int IOManager::send_msg_and_wait(IOReactor* reactor, iomgr_waitable_msg* msg) {
     auto f = msg->m_promise.get_future();
-    if (send_msg(fiber, msg)) {
-        f.get();
-        ret = 1;
-    }
-    return ret;
+    send_msg(reactor, msg);
+    f.get();
+    return 1;
 }
 
 static void append_future_if_needed(iomgr_msg* msg, std::vector< std::future< bool > >& out_future_list) {
     if (msg->need_reply()) { out_future_list.push_back((r_cast< iomgr_waitable_msg* >(msg))->m_promise.get_future()); }
 }
 
-int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
-                             std::vector< std::future< bool > >& out_future_list) {
+int IOManager::multicast_msg(reactor_regex rr, iomgr_msg* msg, std::vector< std::future< bool > >& out_future_list) {
     int sent_to = 0;
     out_future_list.clear();
 
@@ -425,26 +409,24 @@ int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
         static thread_local std::random_device s_rd{};
         static thread_local std::default_random_engine s_re{s_rd()};
 
-        // Send to any random iomgr created io fiber
         auto& reactor = m_worker_reactors[m_rand_worker_distribution(s_re)];
         append_future_if_needed(msg, out_future_list);
-        reactor->deliver_msg(reactor->pick_fiber(fr), msg);
+        reactor->deliver_msg(msg);
         ++sent_to;
     } else {
         struct param_ctx {
             reactor_regex rr;
-            fiber_regex fr;
             iomgr_msg* msg;
             iomgr_msg* cloned_msg{nullptr};
             std::vector< std::future< bool > >& future_list;
             IOReactor* min_reactor = nullptr;
             int64_t min_cnt{std::numeric_limits< int64_t >::max()};
 
-            param_ctx(reactor_regex r, fiber_regex f, iomgr_msg* m, std::vector< std::future< bool > >& fl) :
-                    rr{r}, fr{f}, msg{m}, future_list{fl} {}
+            param_ctx(reactor_regex r, iomgr_msg* m, std::vector< std::future< bool > >& fl) :
+                    rr{r}, msg{m}, future_list{fl} {}
         };
 
-        param_ctx ctx{rr, fr, msg, out_future_list};
+        param_ctx ctx{rr, msg, out_future_list};
         _pick_reactors(rr, [&ctx, &sent_to](IOReactor* reactor, bool is_last_thread) {
             if (reactor && reactor->is_io_reactor()) {
                 if (match_regex(ctx.rr, reactor)) {
@@ -456,7 +438,7 @@ int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
                     } else {
                         ctx.cloned_msg = ctx.msg->clone();
                         append_future_if_needed(ctx.msg, ctx.future_list);
-                        reactor->deliver_msg(reactor->pick_fiber(ctx.fr), ctx.msg);
+                        reactor->deliver_msg(ctx.msg);
                         ctx.msg = ctx.cloned_msg;
                         ++sent_to;
                     }
@@ -465,24 +447,20 @@ int IOManager::multicast_msg(reactor_regex rr, fiber_regex fr, iomgr_msg* msg,
 
             if (is_last_thread && ctx.min_reactor) {
                 append_future_if_needed(ctx.msg, ctx.future_list);
-                ctx.min_reactor->deliver_msg(ctx.min_reactor->pick_fiber(ctx.fr), ctx.msg);
+                ctx.min_reactor->deliver_msg(ctx.msg);
                 ++sent_to;
             }
         });
 
-        if (ctx.cloned_msg != nullptr) {
-            // In case we multicasted, we will always have the last message excess, free it
-            iomgr_msg::free(ctx.cloned_msg);
-        }
-
+        if (ctx.cloned_msg != nullptr) { iomgr_msg::free(ctx.cloned_msg); }
         if (sent_to == 0) { iomgr_msg::free(msg); }
     }
     return sent_to;
 }
 
-int IOManager::multicast_msg_and_wait(reactor_regex r, fiber_regex fr, iomgr_msg* in_msg) {
+int IOManager::multicast_msg_and_wait(reactor_regex r, iomgr_msg* in_msg) {
     std::vector< std::future< bool > > s_future_list;
-    auto const count = multicast_msg(r, fr, in_msg, s_future_list);
+    auto const count = multicast_msg(r, in_msg, s_future_list);
     if (count) {
         for (auto& f : s_future_list) {
             f.get();
@@ -564,8 +542,6 @@ IOThreadMetrics& IOManager::this_thread_metrics() {
     }
 }
 
-io_fiber_t IOManager::iofiber_self() const { return this_reactor()->iofiber_self(); };
-
 bool IOManager::am_i_io_reactor() const {
     auto* r = this_reactor();
     return r && r->is_io_reactor();
@@ -586,18 +562,9 @@ bool IOManager::am_i_adaptive_reactor() const {
     return r && r->is_adaptive_loop();
 }
 
-bool IOManager::am_i_sync_io_capable() const {
-    return false; // Boost.Fiber sync-IO pool removed; no sync-IO capable fibers exist
-}
-
 void IOManager::set_my_reactor_adaptive(bool adaptive) {
     auto* r = this_reactor();
     if (r) { r->set_adaptive_loop(adaptive); }
-}
-
-std::vector< io_fiber_t > IOManager::sync_io_capable_fibers() const {
-    auto* r = this_reactor();
-    return r ? r->sync_io_capable_fibers() : std::vector< io_fiber_t >{};
 }
 
 /////////////////// IOManager Memory Management APIs ///////////////////////////////////
@@ -620,10 +587,7 @@ void IOManager::iobuf_pool_free(uint8_t* buf, size_t size, const sisl::buftag ta
 size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator::allocator().buf_size(buf); }
 
 /////////////////// IODevice class implementation ///////////////////////////////////
-IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} {
-    m_iodev_fiber_ctx.reserve(IOManager::max_io_fibers);
-    creator = iomanager.am_i_io_reactor() ? iomanager.iofiber_self() : nullptr;
-}
+IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} {}
 
 std::string IODevice::dev_id() const {
     if (std::holds_alternative< int >(dev)) {
@@ -643,12 +607,11 @@ spdk_bdev* IODevice::bdev() const { return spdk_bdev_desc_get_bdev(bdev_desc());
 spdk_nvmf_qpair* IODevice::nvmf_qp() const { return std::get< spdk_nvmf_qpair* >(dev); }
 #endif
 
-bool IODevice::is_global() const { return (!std::holds_alternative< io_fiber_t >(thread_scope)); }
-bool IODevice::is_my_thread_scope() const { return (!is_global() && (reactor_scope() == iomanager.this_reactor())); }
+bool IODevice::is_global() const { return std::holds_alternative< reactor_regex >(thread_scope); }
+bool IODevice::is_my_thread_scope() const { return !is_global() && (reactor_scope() == iomanager.this_reactor()); }
 
-io_fiber_t IODevice::fiber_scope() const { return std::get< io_fiber_t >(thread_scope); }
 reactor_regex IODevice::global_scope() const { return std::get< reactor_regex >(thread_scope); }
-IOReactor* IODevice::reactor_scope() const { return fiber_scope()->reactor; }
+IOReactor* IODevice::reactor_scope() const { return std::get< IOReactor* >(thread_scope); }
 
 void IODevice::clear() {
     dev = -1;

@@ -53,7 +53,7 @@ struct timer_test_info {
         unique_id = ++s_unique_id_gen;
     }
 
-    bool is_global() const { return std::holds_alternative< io_fiber_t >(scope); }
+    bool is_thread_local_timer() const { return std::holds_alternative< IOReactor* >(scope); }
 };
 
 std::atomic< uint64_t > timer_test_info::s_unique_id_gen{0};
@@ -113,7 +113,7 @@ public:
 
     void resume_timer(timer_test_info* ti) {
         LOGDEBUG("Resuming timer_id={} for next iteration, still {} to go", ti->unique_id, ti->pending_count);
-        if (std::holds_alternative< io_fiber_t >(ti->scope)) {
+        if (ti->is_thread_local_timer()) {
             ti->hdl = iomanager.schedule_thread_timer(ti->nanos_after, false /* auto recurring */, ti,
                                                       bind_this(TimerTest::validate_timeout, 1));
         } else {
@@ -124,7 +124,7 @@ public:
     }
 
     static std::string timer_scope_string(const thread_specifier scope) {
-        if (std::holds_alternative< io_fiber_t >(scope)) { return "local"; }
+        if (std::holds_alternative< IOReactor* >(scope)) { return "local"; }
         if (std::get< reactor_regex >(scope) == reactor_regex::all_worker) { return "all_worker"; }
         return "all_user";
     }
@@ -134,8 +134,8 @@ public:
         LOGDEBUG("Creating timer_id={} {} {} timer for {} ns for {} iterations", ti->unique_id,
                  timer_scope_string(scope), (recurring ? "recurring" : "one_time"), nanos_after, g_iters);
         ti->start_timer_time = Clock::now();
-        if (std::holds_alternative< io_fiber_t >(scope)) {
-            ti->scope = iomanager.iofiber_self();
+        if (std::holds_alternative< IOReactor* >(scope)) {
+            ti->scope = iomanager.this_reactor();
             ti->hdl = iomanager.schedule_thread_timer(nanos_after, recurring, ti.get(),
                                                       bind_this(TimerTest::validate_timeout, 1));
         } else {

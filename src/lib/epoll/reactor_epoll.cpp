@@ -72,7 +72,7 @@ void IOReactorEPoll::init_impl() {
                                                                 true /* thread_dev */, nullptr);
 
     // Create a per thread timer
-    m_thread_timer = std::make_unique< timer_epoll >(this_reactor->pick_fiber(fiber_regex::main_only));
+    m_thread_timer = std::make_unique< timer_epoll >(this_reactor);
     return;
 
 error:

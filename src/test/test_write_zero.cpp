@@ -147,26 +147,27 @@ public:
     }
 
     void write_zero_and_read() {
-        // Now issue write zeros
         m_start_time = Clock::now();
-        m_iodev->drive_interface()->sync_write_zero(m_iodev.get(), m_total_size, m_start_offset);
-        LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_total_size,
-                get_elapsed_time_us(m_start_time));
+        [this]() -> fire_and_forget_task {
+            co_await m_iodev->drive_interface()->async_write_zero(m_iodev.get(), m_total_size, m_start_offset);
+            LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_total_size,
+                    get_elapsed_time_us(m_start_time));
 
-        m_start_time = Clock::now();
-        auto read_remain_size = m_total_size;
-        auto cur_offset = m_start_offset;
-        while (read_remain_size > 0) {
-            const auto this_sz = std::min(max_io_size, read_remain_size);
-            auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-            [this, read_buf, this_sz, cur_offset]() -> fire_and_forget_task {
-                co_await m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz,
-                                                                cur_offset);
-                validate_zeros(read_buf, this_sz);
-            }();
-            cur_offset += this_sz;
-            read_remain_size -= this_sz;
-        }
+            m_start_time = Clock::now();
+            auto read_remain_size = m_total_size;
+            auto cur_offset = m_start_offset;
+            while (read_remain_size > 0) {
+                const auto this_sz = std::min(max_io_size, read_remain_size);
+                auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
+                [this, read_buf, this_sz, cur_offset]() -> fire_and_forget_task {
+                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz,
+                                                                    cur_offset);
+                    validate_zeros(read_buf, this_sz);
+                }();
+                cur_offset += this_sz;
+                read_remain_size -= this_sz;
+            }
+        }();
     }
 
     void validate_zeros(uint8_t* buf, size_t size) {

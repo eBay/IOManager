@@ -125,11 +125,9 @@ class DriveInterface;
 /****************** Reactor related ************************/
 struct iomgr_msg;
 struct timer;
-struct IOFiber;
 
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
-    friend class IOFiber;
     friend class SpdkDriveInterface;
 
 public:
@@ -146,13 +144,9 @@ public:
     int add_iodev(const io_device_ptr& iodev);
     int remove_iodev(const io_device_ptr& iodev);
 
-    void deliver_msg(io_fiber_t fiber, iomgr_msg* msg);
+    void deliver_msg(iomgr_msg* msg);
 
-    io_fiber_t iofiber_self() const;
     reactor_idx_t reactor_idx() const { return m_reactor_num; }
-    io_fiber_t pick_fiber(fiber_regex r);
-    io_fiber_t main_fiber() const;
-    std::vector< io_fiber_t > sync_io_capable_fibers() const;
 
     // TODO: Can we find more effective way to find out if reactor is started without using atomics
     bool is_io_reactor() const { return !(m_io_fiber_count.testz()); };
@@ -192,7 +186,7 @@ protected:
     void notify_thread_state(bool is_started);
 
 private:
-    void init(uint32_t num_fibers);
+    void init();
     bool listen_once();
     bool can_add_iface(const std::shared_ptr< IOInterface >& iface) const;
 
@@ -218,7 +212,6 @@ protected:
     int m_poll_interval{-1};
     uint64_t m_total_op = 0;
 
-    std::vector< std::unique_ptr< IOFiber > > m_io_fibers; // Single main IOFiber (ordinal 0)
     std::vector< std::function< void(void) > > m_poll_interval_cbs;
     std::vector< can_backoff_cb_t > m_can_backoff_cbs;
     uint64_t m_cur_backoff_delay_us{0};
@@ -226,19 +219,3 @@ protected:
     listen_sentinel_cb_t m_iomgr_sentinel_cb;
 };
 } // namespace iomgr
-
-namespace fmt {
-template <>
-struct formatter< iomgr::IOFiber > {
-    template < typename ParseContext >
-    constexpr auto parse(ParseContext& ctx) {
-        return ctx.begin();
-    }
-
-    template < typename FormatContext >
-    auto format(const iomgr::IOFiber& f, FormatContext& ctx) {
-        return fmt::format_to(fmt::appender(ctx.out()), "[reactor={}]", f.reactor->reactor_idx());
-    }
-};
-
-} // namespace fmt

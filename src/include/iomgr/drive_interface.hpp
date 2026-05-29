@@ -152,14 +152,6 @@ public:
     virtual sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
 
-    virtual std::error_code sync_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset) = 0;
-    virtual std::error_code sync_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                        uint64_t offset) = 0;
-    virtual std::error_code sync_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) = 0;
-    virtual std::error_code sync_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                       uint64_t offset) = 0;
-    virtual std::error_code sync_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) = 0;
-
     virtual DriveInterfaceMetrics& get_metrics() = 0;
 
     static drive_attributes get_attributes(const std::string& dev_name);

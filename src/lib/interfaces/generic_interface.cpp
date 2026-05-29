@@ -171,7 +171,7 @@ thread_local listen_sentinel_cb_t GenericIOInterface::t_listen_sentinel_cb;
 io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
                                                  bool is_per_thread_dev, const ev_callback& cb) {
     return make_io_device(dev, events_interested, pri, cookie,
-                          is_per_thread_dev ? thread_specifier{iomanager.this_reactor()->main_fiber()}
+                          is_per_thread_dev ? thread_specifier{iomanager.this_reactor()}
                                             : thread_specifier{reactor_regex::all_io},
                           std::move(cb));
 }
