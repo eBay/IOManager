@@ -3,10 +3,6 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <sisl/logging/logging.h>
-#if 0
-#include <isa-l/crc.h>
-#endif
-
 #include <sisl/fds/bitset.hpp>
 #include <sisl/utility/enum.hpp>
 #include <iomgr/iomgr.hpp>
@@ -126,32 +122,5 @@ public:
         }
     }
 
-private:
-#if 0
-    void init_shadow_file(const int fd) {
-        // initialize the file
-        uint8_t* init_csum_buf{nullptr};
-        const uint16_t csum_zero{crc16_t10dif(init_crc_16, static_cast< const uint8_t* >(m_init_buf),
-                                              iomgr::DriveInterface::get_attributes().phys_page_size)};
-        if (verify_csum()) {
-            init_csum_buf = iomanager.iobuf_alloc(512, sizeof(uint16_t));
-            *reinterpret_cast< uint16_t* >(init_csum_buf) = csum_zero;
-        }
-        const uint64_t offset_increment{tcfg.verify_csum() ? sizeof(uint16_t) : tcfg.max_io_size};
-        const uint64_t max_offset{tcfg.verify_csum() ? max_vol_size_csum : max_vol_size};
-
-        for (uint64_t offset{0}; offset < max_offset; offset += offset_increment) {
-            uint64_t write_size = (offset + offset_increment > max_offset) ? max_offset - offset : offset_increment;
-            write_vol_file(fd, static_cast< void* >(tcfg.verify_csum() ? init_csum_buf : init_buf), write_size,
-                           static_cast< off_t >(offset));
-        }
-        if (init_csum_buf) { iomanager.iobuf_free(init_csum_buf); }
-    }
-
-    void remove_shadow_file(const std::string& vol_name) {
-        auto shadow_fname = "/tmp/" + vol_name + "_shadow";
-        remove(shadow_fname.c_str());
-    }
-#endif
 };
 } // namespace iomgr

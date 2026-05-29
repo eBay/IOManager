@@ -68,11 +68,4 @@ protected:
 
 } // namespace iomgr
 
-#if 0
-namespace folly {
-template <>
-FOLLY_ASSUME_RELOCATABLE(iomgr::iomgr_msg);
-} // namespace folly
-#endif
-
 #endif // IOMGR_IOMGR_MSG_HPP

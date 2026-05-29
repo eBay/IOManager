@@ -335,23 +335,5 @@ bool spdk_thread_timer_info::call_timer_cb_once() {
 bool spdk_thread_timer_info::is_recurring_timer() const { return st_info->is_recurring; }
 #endif
 
-#if 0
-void timer_spdk::check_and_call_expired_timers() {
-    LOCK_IF_GLOBAL();
-    while (!m_timer_list.empty()) {
-        auto time_now = std::chrono::steady_clock::now();
-        auto tinfo = m_timer_list.top();
-        if (tinfo.expiry_time <= time_now) {
-            m_timer_list.pop();
-            UNLOCK_IF_GLOBAL();
-            tinfo.cb(tinfo.context);
-            LOCK_IF_GLOBAL();
-        } else {
-            break;
-        }
-    }
-    UNLOCK_IF_GLOBAL();
-}
-#endif
 
 } // namespace iomgr
