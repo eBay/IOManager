@@ -36,9 +36,6 @@
 #include <iomgr/iomgr_flip.hpp>
 #include <iomgr/drive_interface.hpp>
 #include "interfaces/kernel_drive_interface.hpp"
-#ifdef WITH_SPDK
-#include "interfaces/spdk_drive_interface.hpp"
-#endif
 #include "iomgr_config.hpp"
 #include "reactor/reactor.hpp"
 
@@ -215,12 +212,8 @@ drive_type DriveInterface::detect_drive_type(const std::string& dev_name) {
     } else if (std::filesystem::is_block_file(std::filesystem::status(dev_name))) {
         return is_rotational_device(dev_name) ? drive_type::block_hdd : drive_type::block_nvme;
     } else {
-#ifdef WITH_SPDK
-        return SpdkDriveInterface::detect_drive_type(dev_name);
-#else
         LOGMSG_ASSERT(false, "Could not detect drive type!");
         return drive_type::unknown;
-#endif
     }
 }
 
@@ -263,9 +256,7 @@ void DriveInterface::emulate_drive_attributes(const std::string& dev_name, const
 std::shared_ptr< DriveInterface > DriveInterface::get_iface_for_drive(const std::string& dev_name,
                                                                       const drive_type dtype) {
     drive_interface_type iface_type;
-    if (iomanager.is_spdk_mode() && (dtype != drive_type::file_on_hdd) && (dtype != drive_type::block_hdd)) {
-        iface_type = drive_interface_type::spdk;
-    } else if (iomanager.is_uring_capable() && !iomanager.is_spdk_mode()) {
+    if (iomanager.is_uring_capable()) {
         iface_type = drive_interface_type::uring;
     } else {
         iface_type = drive_interface_type::aio;

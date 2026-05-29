@@ -26,7 +26,6 @@ class IOMgrConan(ConanFile):
         "sanitize": ['address', 'thread', 'False'],
         'prerelease' : ['True', 'False'],
         "testing" : ['full', 'off', 'epoll_mode'],
-        "spdk": ['False'],
         }
     default_options = {
         'shared':       False,
@@ -35,7 +34,6 @@ class IOMgrConan(ConanFile):
         'sanitize':     False,
         'prerelease':   False,
         'testing':      'epoll_mode',
-        'spdk':         False,
     }
 
     exports_sources = "CMakeLists.txt", "cmake/*", "src/*", "test/*", "LICENSE"
@@ -57,9 +55,6 @@ class IOMgrConan(ConanFile):
             if self.conf.get("tools.build:skip_test", default=False):
                 if self.options.coverage or self.options.sanitize:
                     raise ConanInvalidConfiguration("Coverage/Sanitizer requires Testing!")
-        if self.settings.arch != "x86_64":
-            self.options["spdk"].native_build = True
-
     def build_requirements(self):
         self.test_requires("gtest/[^1.17]")
         self.test_requires("cpr/[^1.12]")

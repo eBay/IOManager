@@ -21,7 +21,6 @@
 #include <boost/heap/binomial_heap.hpp>
 #include <iomgr/iomgr_types.hpp>
 
-struct spdk_poller;
 namespace iomgr {
 typedef std::function< void(void*) > timer_callback_t;
 
@@ -42,49 +41,6 @@ struct timer_info {
     }
 };
 
-struct spdk_timer_info;
-struct spdk_thread_timer_info {
-public:
-    spdk_thread_timer_info(cshared< spdk_timer_info >& sti);
-    bool call_timer_cb_once();
-    bool is_recurring_timer() const;
-    void cancel_single_thread_timer();
-
-public:
-    uint64_t term_num = 0;
-    spdk_poller* poller = nullptr;
-    shared< spdk_timer_info > st_info;
-    IOReactor* owner_reactor{nullptr};
-};
-
-class timer_spdk;
-
-struct spdk_timer_info : public timer_info, std::enable_shared_from_this< spdk_timer_info > {
-public:
-    spdk_timer_info(uint64_t nanos_after, void* cookie, timer_callback_t&& timer_fn, timer* t, bool multi_threads,
-                    bool recurring) :
-            timer_info(nanos_after, cookie, std::move(timer_fn), t),
-            timeout_nanos{nanos_after},
-            is_multi_threaded{multi_threads},
-            is_recurring{recurring} {}
-
-    void add_thread_timer_info(cshared< spdk_thread_timer_info >& stt_info);
-    void delete_thread_timer_info();
-    shared< spdk_thread_timer_info > get_thread_timer_info();
-    void cancel_single_thread_timer();
-
-public:
-    // Following fields are applicable only for SPDK Timer
-    timer_spdk* timer;
-    uint64_t timeout_nanos{0};
-    std::atomic< uint64_t > cur_term_num{0}; // Term # for timer (where single timer cb to be called among all threads)
-    std::map< uint32_t, shared< spdk_thread_timer_info > > thread_timer_list;
-    shared< spdk_thread_timer_info > single_thread_timer; // In case single thread timer
-    bool is_multi_threaded{true};
-    bool is_recurring{false};
-    std::mutex timer_list_mtx;
-};
-
 struct compare_timer {
     bool operator()(const timer_info& ti1, const timer_info& ti2) const { return ti1.expiry_time > ti2.expiry_time; }
 };
@@ -94,7 +50,7 @@ class timer;
 struct IODevice;
 
 using timer_heap_t = boost::heap::binomial_heap< timer_info, boost::heap::compare< compare_timer > >;
-using timer_backing_handle_t = std::variant< timer_heap_t::handle_type, shared< IODevice >, shared< spdk_timer_info > >;
+using timer_backing_handle_t = std::variant< timer_heap_t::handle_type, shared< IODevice > >;
 using timer_handle_t = std::pair< timer*, timer_backing_handle_t >;
 static const timer_handle_t null_timer_handle = timer_handle_t(nullptr, shared< IODevice >(nullptr));
 
@@ -189,29 +145,6 @@ private:
 private:
     std::shared_ptr< IODevice > m_common_timer_io_dev;                // fd_info for the common timer fd
     std::set< std::shared_ptr< IODevice > > m_recurring_timer_iodevs; // fd infos of recurring timers
-};
-
-class timer_spdk : public timer {
-public:
-    timer_spdk(const thread_specifier& scope);
-    ~timer_spdk() override;
-
-    timer_handle_t schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn,
-                            bool wait_to_schedule = false) override;
-    void cancel(timer_handle_t thandle, bool wait_to_cancel = false) override;
-
-    /* all Timers are stopped on this thread. It is called when a thread is not part of iomgr */
-    void stop() override;
-
-private:
-    static shared< spdk_thread_timer_info > create_register_spdk_thread_timer(cshared< spdk_timer_info >& stinfo);
-    static void unregister_spdk_thread_timer(cshared< spdk_thread_timer_info >& stinfo);
-    void cancel_thread_timer(cshared< spdk_timer_info >& st_info, bool wait_to_cancel = false) const;
-    void cancel_global_timer(cshared< spdk_timer_info >& st_info) const;
-
-private:
-    std::unordered_set< shared< spdk_timer_info > > m_active_global_timer_infos;
-    std::unordered_set< shared< spdk_timer_info > > m_active_thread_timer_infos;
 };
 
 } // namespace iomgr

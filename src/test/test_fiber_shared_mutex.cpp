@@ -31,8 +31,7 @@ SISL_OPTION_GROUP(test_fiber_shared_mutex,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("10"), "number"),
                   (num_iters, "", "num_iters", "number of iterations",
-                   ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
-                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"));
+                   ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),);
 
 #define ENABLED_OPTIONS logging, iomgr, test_fiber_shared_mutex, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
@@ -50,12 +49,7 @@ protected:
 
 protected:
     void SetUp() override {
-        auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
-        auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-        auto num_iters = sisl::round_up(SISL_OPTIONS["num_iters"].as< uint64_t >(), nthreads);
-
-        LOGINFO("Starting iomgr with {} threads, spdk: {}", nthreads, is_spdk);
-        ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = nthreads, .is_spdk = is_spdk});
+        auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();        auto num_iters = sisl::round_up(SISL_OPTIONS["num_iters"].as< uint64_t >(), nthreads);        ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = nthreads});
 
         m_test_count = nthreads;
         m_count_per_thread = num_iters;

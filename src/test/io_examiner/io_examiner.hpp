@@ -79,10 +79,10 @@ protected:
     bool m_integrated_mode{false};
 
 public:
-    IOExaminer(uint32_t num_threads, bool integrated_mode, bool is_spdk) : m_integrated_mode{integrated_mode} {
+    IOExaminer(uint32_t num_threads, bool integrated_mode) : m_integrated_mode{integrated_mode} {
         RELEASE_ASSERT_EQ(integrated_mode, false, "Integrated mode not supported");
         m_vol_info.reserve(100);
-        if (!integrated_mode) { iomanager.start(iomgr_params{.num_threads = num_threads, .is_spdk = is_spdk}); }
+        if (!integrated_mode) { iomanager.start(iomgr_params{.num_threads = num_threads}); }
     }
 
     virtual ~IOExaminer() {

@@ -46,7 +46,6 @@ public:
 
     reactor_regex scope() const { return m_thread_scope; }
     void set_scope(reactor_regex t) { m_thread_scope = t; }
-    virtual bool is_spdk_interface() const { return false; }
 
     virtual void init_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor) {};
     virtual void clear_iodev_reactor_context(const io_device_ptr& iodev, IOReactor* reactor) {};

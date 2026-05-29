@@ -21,10 +21,6 @@
 #include <sisl/utility/enum.hpp>
 #include <sisl/fds/buffer.hpp>
 
-struct spdk_thread;
-struct spdk_bdev_desc;
-struct spdk_nvmf_qpair;
-
 namespace iomgr {
 ////// Forward declarations
 class IOReactor;
@@ -56,8 +52,6 @@ static constexpr loop_type_t ADAPTIVE_LOOP = 1 << 2;  // Adaptive approach by ba
 static constexpr loop_type_t USER_CONTROLLED_LOOP = 1 << 3; // User controlled loop where iomgr will poll on-need basis
 
 typedef std::function< void(bool) > thread_state_notifier_t;
-typedef std::variant< reactor_idx_t, spdk_thread* > backing_thread_t;
-typedef void (*spdk_msg_signature_t)(void*);
 
 ENUM(reactor_regex, uint8_t,
      all_io,            // Represents all io reactors
@@ -75,7 +69,7 @@ using eal_core_id_t = uint32_t;
 using thread_specifier = std::variant< reactor_regex, IOReactor* >;
 using sys_thread_id_t = std::variant< std::thread, eal_core_id_t >;
 
-using backing_dev_t = std::variant< int, spdk_bdev_desc*, spdk_nvmf_qpair* >;
+using backing_dev_t = int; // file descriptor
 using poll_cb_idx_t = uint32_t;
 using can_backoff_cb_t = std::function< bool(IOReactor*) >;
 
@@ -96,9 +90,7 @@ ENUM(drive_type, uint8_t,
      file_on_hdd,  // Works on top of file system which is hosted in HDD
      block_nvme,   // Kernel NVMe block device
      block_hdd,    // Kernel HDD block device
-     raw_nvme,     // Raw Nvme device (which can be opened only thru spdk)
      memory,       // Non-persistent memory
-     spdk_bdev,    // A SDPK version of bdev
      unknown       // Try to deduce it while loading
 )
 

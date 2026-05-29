@@ -265,7 +265,7 @@ void IOReactorEPoll::on_user_iodev_notification(IODevice* iodev, int event) {
 }
 
 bool IOReactorEPoll::is_iodev_addable(const io_device_const_ptr& iodev) const {
-    return (!iodev->is_spdk_dev() && IOReactor::is_iodev_addable(iodev));
+    return IOReactor::is_iodev_addable(iodev);
 }
 
 void IOReactorEPoll::idle_time_wakeup_poller() {

@@ -15,10 +15,9 @@ SISL_OPTION_GROUP(test_hs_vol,
                    cxxopts::value<uint32_t>()->default_value("1"), "count"))
 
 #define ENABLED_OPTIONS logging, iomgr, test_hs_vol, config
-#define SPDK_LOG_MODS IOMGR_LOG_MODS, flip
 
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
-SISL_LOGGING_INIT(SPDK_LOG_MODS)
+SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 constexpr size_t Ki = 1024;
 constexpr size_t Mi = Ki * Ki;
@@ -26,7 +25,7 @@ constexpr size_t Gi = Ki * Mi;
 
 int main(int argc, char* argv[]) {
     SISL_OPTIONS_LOAD(argc, argv, ENABLED_OPTIONS)
-    sisl::logging::SetLogger("spdk_volume");
+    sisl::logging::SetLogger("test_package");
     sisl::logging::install_crash_handler();
     spdlog::set_pattern("[%D %T.%e] [%^%l%$] [%t] %v");
 

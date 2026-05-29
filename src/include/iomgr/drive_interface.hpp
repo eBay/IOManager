@@ -33,7 +33,7 @@
 namespace iomgr {
 using Clock = std::chrono::steady_clock;
 
-ENUM(drive_interface_type, uint8_t, aio, spdk, uring)
+ENUM(drive_interface_type, uint8_t, aio, uring)
 ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO, FSYNC)
 
 struct drive_attributes {

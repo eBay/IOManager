@@ -7,14 +7,9 @@
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_timer.hpp>
 
-struct spdk_nvmf_qpair;
-struct spdk_bdev;
-
 namespace iomgr {
 class IOInterface;
 class DriveInterface;
-
-inline backing_dev_t null_backing_dev() { return backing_dev_t{std::in_place_type< spdk_bdev_desc* >, nullptr}; }
 
 struct IODeviceThreadContext {
     virtual ~IODeviceThreadContext() = default;
@@ -53,7 +48,7 @@ public:
     ev_callback cb{nullptr};
     std::string devname;
     std::string alias_name;
-    backing_dev_t dev;
+    int dev{-1}; // file descriptor
     int ev{0};
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
@@ -75,13 +70,7 @@ private:
     std::unique_ptr< IODeviceMetrics > m_metrics;
 
 public:
-    int fd() const { return std::get< int >(dev); }
-    spdk_bdev_desc* bdev_desc() const;
-    spdk_bdev* bdev() const;
-    bool is_spdk_dev() const {
-        return (std::holds_alternative< spdk_bdev_desc* >(dev) || std::holds_alternative< spdk_nvmf_qpair* >(dev));
-    }
-    spdk_nvmf_qpair* nvmf_qp() const;
+    int fd() const { return dev; }
 
     bool is_global() const;
     bool is_my_thread_scope() const;
@@ -134,7 +123,7 @@ public:
 
     void close() {
         m_metrics.release();
-        if (!is_spdk_dev()) { ::close(fd()); }
+        ::close(fd());
     }
 };
 

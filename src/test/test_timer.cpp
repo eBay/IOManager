@@ -20,7 +20,7 @@ using namespace std::chrono_literals;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_timer,
-                  (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
+                  (io_threads, "", "io_threads", "io_threads",
                    ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
                   (user_threads, "", "user_threads", "user_threads", ::cxxopts::value< uint32_t >()->default_value("2"),
                    "number"),
@@ -28,8 +28,7 @@ SISL_OPTION_GROUP(test_timer,
                    "number"),
                   (time_check, "Need timeout time check?", "time_check", "time_check",
                    ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
-                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),)
 
 #define ENABLED_OPTIONS logging, iomgr, test_timer, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
@@ -60,22 +59,17 @@ std::atomic< uint64_t > timer_test_info::s_unique_id_gen{0};
 
 static uint32_t g_io_threads{0};
 static uint32_t g_user_threads{0};
-static bool g_is_spdk{false};
 static uint64_t g_num_timers{0};
 static uint64_t g_iters{0};
 static bool g_need_time_check{false};
 static std::vector< timer_handle_t > g_thdls;
 
-void glob_setup() {
-    g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
-    if ((SISL_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
-    g_user_threads = SISL_OPTIONS["user_threads"].as< uint32_t >();
+void glob_setup() {    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();    g_user_threads = SISL_OPTIONS["user_threads"].as< uint32_t >();
     g_num_timers = SISL_OPTIONS["num_timers"].as< uint64_t >();
     g_iters = SISL_OPTIONS["num_timers"].as< uint64_t >();
     g_need_time_check = SISL_OPTIONS["time_check"].as< bool >();
 
-    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_io_threads, .is_spdk = g_is_spdk});
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_io_threads});
 }
 
 void glob_teardown() { iomanager.stop(); }

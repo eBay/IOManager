@@ -17,12 +17,11 @@ using namespace std::chrono_literals;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_msg,
-                  (io_threads, "", "io_threads", "io_threads - default 2 for spdk and 8 for non-spdk",
+                  (io_threads, "", "io_threads", "io_threads",
                    ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
                   (client_threads, "", "client_threads", "client_threads",
                    ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
-                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),
-                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"))
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),)
 
 #define ENABLED_OPTIONS logging, iomgr, test_msg, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
@@ -42,18 +41,13 @@ struct timer_test_info {
 
 static uint32_t g_io_threads{0};
 static uint32_t g_client_threads{0};
-static bool g_is_spdk{false};
 static uint64_t g_iters{0};
 // static std::vector< std::unique_ptr< timer_test_info > > g_timer_infos;
 
-void glob_setup() {
-    g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
-    if ((SISL_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
-    g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
+void glob_setup() {    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();    g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
     g_iters = SISL_OPTIONS["iters"].as< uint64_t >();
 
-    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_client_threads, .is_spdk = g_is_spdk});
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = g_client_threads});
 }
 
 void glob_teardown() { iomanager.stop(); }

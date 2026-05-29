@@ -53,8 +53,7 @@ SISL_OPTION_GROUP(test_drive_interface,
                   (dev_path, "", "dev_path", "drive path to test",
                    ::cxxopts::value< std::string >()->default_value("/tmp/iomgr_test_drive"), "path"),
                   (dev_size_mb, "", "dev_size_mb", "size of each device in MB",
-                   ::cxxopts::value< uint64_t >()->default_value("100"), "number"),
-                  (spdk, "", "spdk", "spdk", ::cxxopts::value< bool >()->default_value("false"), "true or false"));
+                   ::cxxopts::value< uint64_t >()->default_value("100"), "number"),);
 
 #define ENABLED_OPTIONS logging, iomgr, test_drive_interface, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
@@ -113,8 +112,6 @@ public:
         m_dev_path = SISL_OPTIONS["dev_path"].as< std::string >();
         auto const dev_size = SISL_OPTIONS["dev_size_mb"].as< uint64_t >() * 1024 * 1024;
         m_nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
-        auto is_spdk = SISL_OPTIONS["spdk"].as< bool >();
-
         const std::filesystem::path file_path{m_dev_path};
         if (!std::filesystem::exists(file_path)) {
             LOGINFO("Device {} doesn't exists, creating a file for size {}", m_dev_path, dev_size);
@@ -125,14 +122,9 @@ public:
             std::filesystem::resize_file(file_path, dev_size);
             m_created = true;
         }
-        if (is_spdk && m_nthreads > 2) {
-            LOGINFO("Spdk with more than 2 threads will cause overburden test systems, changing nthreads to 2");
-            m_nthreads = 2;
-        }
-
         m_each_thread_size = (dev_size - 1) / m_nthreads + 1;
-        LOGINFO("Starting iomgr with {} threads, spdk: {}", m_nthreads, is_spdk);
-        ioenvironment.with_iomgr(iomgr_params{.num_threads = m_nthreads, .is_spdk = is_spdk});
+        LOGINFO("Starting iomgr with {} threads", m_nthreads);
+        ioenvironment.with_iomgr(iomgr_params{.num_threads = m_nthreads});
 
         std::stringstream iomgr_ver;
         iomgr_ver << iomgr::get_version();
@@ -409,7 +401,7 @@ public:
 
         for (uint32_t i{0}; i < m_nthreads; ++i) {
             iomanager.create_reactor("user" + std::to_string(i + 1),
-                                     SISL_OPTIONS["spdk"].as< bool >() ? TIGHT_LOOP : INTERRUPT_LOOP,
+                                     INTERRUPT_LOOP,
                                      [&](bool is_started) {
                                          if (is_started) {
                                              Workload* my_work;

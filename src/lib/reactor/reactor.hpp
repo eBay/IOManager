@@ -22,12 +22,6 @@
 #include <chrono>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/iomgr_timer.hpp>
-#include <iomgr/fiber_lib.hpp>
-
-struct spdk_thread;
-struct spdk_bdev_desc;
-struct spdk_nvmf_qpair;
-struct spdk_bdev;
 
 namespace iomgr {
 #define REACTOR_LOG(level, __l, ...)                                                                                   \
@@ -128,7 +122,6 @@ struct timer;
 
 class IOReactor : public std::enable_shared_from_this< IOReactor > {
     friend class IOManager;
-    friend class SpdkDriveInterface;
 
 public:
     static thread_local IOReactor* this_reactor;

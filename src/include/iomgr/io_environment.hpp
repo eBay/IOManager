@@ -72,8 +72,7 @@ private:
     std::string m_ssl_cert;
     std::string m_ssl_key;
 
-    uint32_t app_mem_size_mb{0}; // Overriding parameters if any
-    uint32_t hugepage_size_mb{0};
+    uint32_t app_mem_size_mb{0};
 };
 #define ioenvironment iomgr::IOEnvironment::get_instance()
 

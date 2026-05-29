@@ -59,15 +59,13 @@ ENUM(iomgr_state, uint16_t,
      stopped,        // Stopped - this is the initial state
      interface_init, // Interface initialization is ongoing.
      reactor_init,   // All worker reactors are being initialized
-     sys_init,       // Any system wide init, say timer, spdk bdev initialization etc..
+     sys_init,       // System-wide init (timers, etc.)
      running,        // Active, ready to take traffic
      stopping);
 
 struct iomgr_params {
     size_t num_threads{0};
-    bool is_spdk{false};
     uint32_t app_mem_size_mb{0};
-    uint32_t hugepage_size_mb{0};
 };
 
 template < class... Ts >
@@ -87,13 +85,10 @@ class IOManager {
 public:
     friend class IOReactor;
     friend class IOReactorEPoll;
-    friend class IOReactorSPDK;
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
     friend class AioDriveInterface;
-    friend class SpdkDriveInterface;
-    friend class IOManagerSpdkImpl;
     friend class IOManagerEpollImpl;
 
     static IOManager& instance() {
@@ -108,15 +103,9 @@ public:
      * @brief Start the IOManager. This is expected to be among the first call while application is started to enable
      * for it to do IO. Without this start, any other iomanager call would fail.
      *
-     * @param Parameters containing
-     *  num_threads: Total number of worker reactors to start with. Expected to be > 0
-     *  is_spdk: Is the IOManager to be started in spdk mode or not. If set to true, all worker reactors are
-     *  automatically started as spdk worker reactors.
-     *  app_mem_size_mb: If the application using IOManager to be limited to specific size. If set to `0` takes
-     *  system memory into account.
-     *  hugepage_size_mb: Huge page size to be allocated. If set to `0`, will use system huge page size restriction
-     * @param notifier [OPTONAL] A callback every time a new reactor is started or stopped. This will be called from the
-     * reactor thread which is starting or stopping.
+     * @param params  num_threads: worker reactor count (0 = use dynamic config default).
+     *               app_mem_size_mb: application memory limit in MB (0 = detect from system).
+     * @param notifier [OPTIONAL] Called from each reactor thread on start (true) or stop (false).
      * @param iface_adder [OPTIONAL] Callback to add interface by the caller during iomanager start. If null, then
      * iomanager will add all the default interfaces essential to do the IO.
      */
@@ -190,7 +179,6 @@ public:
 
     ////////////////////////////////// Message Passing Section ////////////////////////////////
     /// Run fn on a specific reactor (fire and forget — does not wait for completion).
-    int run_on_forget(IOReactor* reactor, spdk_msg_signature_t fn, void* context);
     int run_on_forget(IOReactor* reactor, const auto& fn) {
         return send_msg(reactor, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
     }
@@ -226,7 +214,6 @@ public:
     ///////////////////////////// Access related methods /////////////////////////////
     GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     uint32_t num_workers() const { return m_num_workers; }
-    bool is_spdk_mode() const { return m_is_spdk; }
     bool is_uring_capable() const { return m_is_uring_capable; }
 
     //////////////////////////// Reactor related methods ///////////////////////
@@ -354,12 +341,9 @@ private:
 
     thread_state_notifier_t m_common_thread_state_notifier{nullptr};
 
-    // SPDK Specific parameters. TODO: We could move this to a separate instance if needbe
-    bool m_is_spdk{false};
     bool m_is_uring_capable{false};
 
     size_t m_mem_size_limit{0};
-    size_t m_hugepage_limit{0};
     size_t m_mem_soft_threshold_size{0};
     size_t m_mem_aggressive_threshold_size{0};
 

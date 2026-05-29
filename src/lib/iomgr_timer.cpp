@@ -21,9 +21,6 @@
 extern "C" {
 #include <sys/timerfd.h>
 #include <sys/epoll.h>
-#ifdef WITH_SPDK
-#include <spdk/thread.h>
-#endif
 }
 namespace iomgr {
 
@@ -131,7 +128,6 @@ void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
                        PROTECTED_REGION(m_recurring_timer_iodevs.erase(iodev));
                    },
                    [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
-                   [&](shared< spdk_timer_info > stinfo) { assert(0); },
                },
                thandle.second);
 }
@@ -188,152 +184,6 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
     return iodev;
 }
 
-#ifdef WITH_SPDK
-/************************ Timer Spdk *****************************/
-timer_spdk::timer_spdk(const thread_specifier& scope) : timer(scope) {}
-timer_spdk::~timer_spdk() = default;
-
-timer_handle_t timer_spdk::schedule(uint64_t nanos_after, bool recurring, void* cookie, timer_callback_t&& timer_fn,
-                                    bool wait_to_schedule) {
-    timer_handle_t thdl;
-
-    // Multi-thread timer only for global recurring timers, rest are single threaded timers
-    auto stinfo = std::make_shared< spdk_timer_info >(nanos_after, cookie, std::move(timer_fn), this,
-                                                      (recurring && !is_thread_local()), recurring);
-
-    if (recurring && !is_thread_local()) {
-        // In case of global timer, create multi-threaded version for recurring and let the timer callback choose to
-        // run only one. For non-recurring, pick a random io thread and from that point onwards its single threaded
-        iomanager.run_on(wait_to_schedule, reactor_regex::all_worker,
-                         [stinfo]() { stinfo->add_thread_timer_info(create_register_spdk_thread_timer(stinfo)); });
-
-        thdl = timer_handle_t(this, stinfo);
-        PROTECTED_REGION(m_active_global_timer_infos.insert(stinfo));
-    } else {
-        auto sched_in_thread = [stinfo]() { stinfo->single_thread_timer = create_register_spdk_thread_timer(stinfo); };
-
-        if (is_thread_local()) {
-            sched_in_thread();
-        } else {
-            iomanager.run_on(wait_to_schedule, reactor_regex::random_worker, sched_in_thread);
-        }
-        thdl = timer_handle_t(this, stinfo);
-        PROTECTED_REGION(m_active_thread_timer_infos.insert(stinfo));
-    }
-
-    return thdl;
-}
-
-void timer_spdk::cancel(timer_handle_t thdl, bool wait_to_cancel) {
-    std::visit(overloaded{[&](cshared< spdk_timer_info >& stinfo) {
-                              if (stinfo->single_thread_timer) {
-                                  cancel_thread_timer(stinfo, wait_to_cancel);
-                                  PROTECTED_REGION(m_active_thread_timer_infos.erase(stinfo));
-                              } else {
-                                  cancel_global_timer(stinfo);
-                                  PROTECTED_REGION(m_active_global_timer_infos.erase(stinfo));
-                              }
-                          },
-                          [&](timer_heap_t::handle_type heap_hdl) { assert(0); },
-                          [&](std::shared_ptr< IODevice > iodev) { assert(0); }},
-               thdl.second);
-}
-
-void timer_spdk::stop() {
-    for (auto it = m_active_global_timer_infos.begin(); it != m_active_global_timer_infos.end();) {
-        cancel_global_timer(*it);
-        it = m_active_global_timer_infos.erase(it);
-    }
-
-    for (auto it = m_active_thread_timer_infos.begin(); it != m_active_thread_timer_infos.end();) {
-        cancel_thread_timer(*it, true);
-        it = m_active_thread_timer_infos.erase(it);
-    }
-}
-
-void timer_spdk::cancel_thread_timer(cshared< spdk_timer_info >& st_info, bool wait_to_cancel) const {
-    iomanager.run_on(wait_to_cancel, st_info->single_thread_timer->owner_reactor, [st_info]() {
-        unregister_spdk_thread_timer(st_info->single_thread_timer);
-        st_info->single_thread_timer = nullptr;
-    });
-}
-
-void timer_spdk::cancel_global_timer(cshared< spdk_timer_info >& stinfo) const {
-    // Reset to max to prevent a callback while cancel is triggerred. In essence, this ensures that callback is never
-    // called upon timer is cancelled, ths there is no reason to wait_to_cancel.
-    stinfo->cur_term_num = std::numeric_limits< uint64_t >::max();
-
-    // Do a non-wait version of broadcast unconditionally, so that we can avoid poller deregister and listening on them
-    // issue on spdk thread
-    iomanager.run_on_forget(reactor_regex::all_worker, [stinfo]() {
-        unregister_spdk_thread_timer(stinfo->get_thread_timer_info());
-        stinfo->delete_thread_timer_info();
-    });
-}
-
-shared< spdk_thread_timer_info > timer_spdk::create_register_spdk_thread_timer(cshared< spdk_timer_info >& stinfo) {
-    auto stt_info = std::make_shared< spdk_thread_timer_info >(stinfo);
-    stt_info->poller = spdk_poller_register(
-        [](void* context) -> int {
-            auto stt_info = (spdk_thread_timer_info*)context;
-            auto st_info = stt_info->st_info;
-            auto is_recurring = stt_info->is_recurring_timer();
-            stt_info->call_timer_cb_once();
-
-            // DO NOT ACCESS stt_info or st_info beyond this as cancel_single_thread_timer free stt_info and st_info
-            if (!is_recurring) { st_info->cancel_single_thread_timer(); }
-            return 0;
-        },
-        (void*)stt_info.get(), stinfo->timeout_nanos / 1000);
-
-    return stt_info;
-}
-
-void timer_spdk::unregister_spdk_thread_timer(cshared< spdk_thread_timer_info >& sttinfo) {
-    LOGDEBUGMOD(iomgr, "Unregistering per thread timer={} thread_timer={} poller={}", (void*)sttinfo->st_info.get(),
-                (void*)sttinfo.get(), (void*)sttinfo->poller);
-    spdk_poller_unregister(&sttinfo->poller);
-}
-
-void spdk_timer_info::add_thread_timer_info(cshared< spdk_thread_timer_info >& stt_info) {
-    std::unique_lock l(timer_list_mtx);
-    thread_timer_list[iomanager.this_reactor()->reactor_idx()] = stt_info;
-}
-
-void spdk_timer_info::delete_thread_timer_info() {
-    std::unique_lock l(timer_list_mtx);
-    thread_timer_list[iomanager.this_reactor()->reactor_idx()] = nullptr;
-}
-
-shared< spdk_thread_timer_info > spdk_timer_info::get_thread_timer_info() {
-    std::unique_lock l(timer_list_mtx);
-    return thread_timer_list[iomanager.this_reactor()->reactor_idx()];
-}
-
-void spdk_timer_info::cancel_single_thread_timer() {
-    iomanager.cancel_timer(timer_handle_t{parent_timer, shared_from_this()}, false);
-    // DO NOT ACCESS *this* pointer beyond this as it cancel_timer could free up this
-}
-
-spdk_thread_timer_info::spdk_thread_timer_info(cshared< spdk_timer_info >& sti) :
-        st_info{sti}, owner_reactor{iomanager.this_reactor()} {}
-
-bool spdk_thread_timer_info::call_timer_cb_once() {
-    bool ret = false;
-    auto cur_term_num = term_num++;
-    if (!st_info->is_multi_threaded ||
-        st_info->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
-        ++(iomanager.this_thread_metrics().timer_wakeup_count);
-        st_info->cb(st_info->context);
-        ret = true;
-    }
-    // NOTE: Do not access this pointer or tinfo from this point, as once callback is called, it could
-    // cancel the timer and thus delete this pointer.
-    return ret;
-}
-
-bool spdk_thread_timer_info::is_recurring_timer() const { return st_info->is_recurring; }
-#endif
 
 
 } // namespace iomgr

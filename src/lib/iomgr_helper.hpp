@@ -104,45 +104,6 @@ static uint32_t get_cgroup_mem_limit() {
     return 0ul; // nothing found
 }
 
-static uint64_t get_hugepage_size() {
-    uint64_t hugepage_size{0};
-#ifdef __linux
-    if (auto hugepage_val = std::getenv(hugepage_env.c_str()); (hugepage_val != nullptr)) {
-        std::istringstream iss{hugepage_val};
-        std::string multiplier;
-        iss >> hugepage_size;
-        iss >> multiplier;
-
-        if (boost::iequals(multiplier, "Ti")) {
-            hugepage_size *= Ti;
-        } else if (boost::iequals(multiplier, "Gi")) {
-            hugepage_size *= Gi;
-        } else if (boost::iequals(multiplier, "Mi")) {
-            hugepage_size *= Mi;
-        } else if (boost::iequals(multiplier, "Ki")) {
-            hugepage_size *= Ki;
-        }
-    } else {
-        std::string token;
-        std::ifstream file("/proc/meminfo");
-        uint64_t pages_total{0};
-        uint64_t page_size{0};
-
-        while (file >> token) {
-            if (token == "HugePages_Free:") {
-                file >> pages_total;
-            } else if (token == "Hugepagesize:") {
-                file >> page_size;
-            }
-            // ignore rest of the line
-            file.ignore(std::numeric_limits< std::streamsize >::max(), '\n');
-        }
-        hugepage_size = page_size * Ki * pages_total;
-    }
-#endif
-    return hugepage_size;
-}
-
 static uint32_t get_app_mem_limit() {
 #ifndef NDEBUG
     uint32_t system_ram_mb = 512u;
@@ -157,11 +118,6 @@ static uint32_t get_app_mem_limit() {
     if (auto quota = get_cgroup_mem_limit(); quota > 0) { system_ram_mb = std::min(system_ram_mb, quota); }
 
     return system_ram_mb;
-}
-
-static uint32_t get_hugepage_limit() {
-    const auto hugepage_mb = IM_DYNAMIC_CONFIG(iomem.hugepage_size_mb);
-    return (hugepage_mb == 0) ? (get_hugepage_size() / Mi) : hugepage_mb;
 }
 
 static std::string _format_decimals(double val, const char* suffix) {

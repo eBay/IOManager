@@ -30,37 +30,13 @@
 
 #include <iomgr/iomgr.hpp>
 #include "iomgr_impl.hpp"
-#ifdef WITH_SPDK
-#include "spdk/iomgr_impl_spdk.hpp"
-#endif
 #include "epoll/iomgr_impl_epoll.hpp"
 #include "interfaces/aio_drive_interface.hpp"
-#ifdef WITH_SPDK
-#include "interfaces/spdk_drive_interface.hpp"
-#endif
 #include "interfaces/uring_drive_interface.hpp"
-
 #include "iomgr_helper.hpp"
 #include "iomgr_config.hpp"
 #include "watchdog.hpp"
 #include "epoll/reactor_epoll.hpp"
-#ifdef WITH_SPDK
-#include "spdk/reactor_spdk.hpp"
-
-// Must be included after sisl headers to avoid macro definition clash
-extern "C" {
-#include <spdk/log.h>
-#include <spdk/env.h>
-#include <spdk/thread.h>
-#include <spdk/bdev.h>
-#include <spdk/env_dpdk.h>
-#include <spdk/init.h>
-#include <spdk/rpc.h>
-#include <rte_errno.h>
-#include <rte_mempool.h>
-#include <rte_malloc.h>
-}
-#endif
 
 SISL_OPTION_GROUP(iomgr,
                   (iova_mode, "", "iova-mode", "IO Virtual Address mode ['pa'|'va']",
@@ -86,18 +62,13 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Prepare all the parameters (overridden, from config or default)
     sisl::VersionMgr::addVersion(PACKAGE_NAME, version::Semver200_version(PACKAGE_VERSION));
-    m_is_spdk = params.is_spdk;
     if (params.num_threads == 0) {
         m_num_workers = IM_DYNAMIC_CONFIG(thread.num_workers);
         if (auto quota = get_cpu_quota(); quota > 0) { m_num_workers = std::min(m_num_workers, quota); }
     } else {
-        // Caller has overridden the thread count
         m_num_workers = params.num_threads;
     }
     m_mem_size_limit = ((params.app_mem_size_mb == 0) ? get_app_mem_limit() : params.app_mem_size_mb) * Mi;
-    if (m_is_spdk) {
-        m_hugepage_limit = ((params.hugepage_size_mb == 0) ? get_hugepage_limit() : params.hugepage_size_mb) * Mi;
-    }
 
     // Setup the app memory throttling
     m_mem_soft_threshold_size = IM_DYNAMIC_CONFIG(iomem.soft_mem_release_threshold) * m_mem_size_limit / 100;
@@ -105,8 +76,8 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
         IM_DYNAMIC_CONFIG(iomem.aggressive_mem_release_threshold) * m_mem_size_limit / 100;
     sisl::set_memory_release_rate(IM_DYNAMIC_CONFIG(iomem.mem_release_rate));
 
-    LOGINFO("Starting IOManager version {} with {} threads [is_spdk={}] [mem_limit={}, hugepage={}]", PACKAGE_VERSION,
-            m_num_workers, m_is_spdk, in_bytes(m_mem_size_limit), in_bytes(m_hugepage_limit));
+    LOGINFO("Starting IOManager version {} with {} threads [mem_limit={}]", PACKAGE_VERSION, m_num_workers,
+            in_bytes(m_mem_size_limit));
 
     // m_expected_ifaces += expected_custom_ifaces;
     m_yet_to_start_nreactors.set(m_num_workers);
@@ -116,16 +87,7 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     // One common module and other internal handler
     m_common_thread_state_notifier = notifier;
 
-    // Initialize the impl module
-#if WITH_SPDK
-    if (m_is_spdk) {
-        m_impl = std::make_unique< IOManagerSpdkImpl >(m_hugepage_limit);
-    } else {
-#else
-    {
-#endif
-        m_impl = std::make_unique< IOManagerEpollImpl >();
-    }
+    m_impl = std::make_unique< IOManagerEpollImpl >();
 
     // Do Poller specific pre interface initialization
     m_impl->pre_interface_init();
@@ -139,22 +101,15 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     m_default_general_iface = std::make_shared< GenericIOInterface >();
     add_interface(m_default_general_iface);
 
-    // If caller wants to add the interface by themselves, allow to do so, else add drive interface by ourselves
     if (iface_adder) {
         iface_adder();
     } else {
-        if (m_is_uring_capable && !m_is_spdk) {
+        if (m_is_uring_capable) {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(
                 std::make_shared< UringDriveInterface >(new_interface_supported)));
         } else {
             add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
         }
-
-#if WITH_SPDK
-        if (m_is_spdk) {
-            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< SpdkDriveInterface >()));
-        }
-#endif
     }
 
     // Start all reactor threads
@@ -165,11 +120,7 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
 
     // Start the global timer
     m_global_user_timer = std::make_unique< timer_epoll >(reactor_regex::all_user);
-    m_global_worker_timer =
-#if WITH_SPDK
-        m_is_spdk ? std::unique_ptr< timer >(new timer_spdk(reactor_regex::all_worker)) :
-#endif
-                  std::unique_ptr< timer >(new timer_epoll(reactor_regex::all_worker));
+    m_global_worker_timer = std::make_unique< timer_epoll >(reactor_regex::all_worker);
     m_rand_worker_distribution = std::uniform_int_distribution< size_t >(0, m_worker_reactors.size() - 1);
 
     m_impl->post_interface_init();
@@ -244,7 +195,7 @@ void IOManager::create_worker_reactors() {
     }
     for (uint32_t i{0}; i < m_num_workers; ++i) {
         m_worker_threads.emplace_back(m_impl->create_reactor_impl(
-            fmt::format("iomgr_thread_{}", i), m_is_spdk ? TIGHT_LOOP : INTERRUPT_LOOP, (int)i, nullptr));
+            fmt::format("iomgr_thread_{}", i), INTERRUPT_LOOP, (int)i, nullptr));
         LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
     }
 }
@@ -279,15 +230,10 @@ void IOManager::add_interface(cshared< IOInterface >& iface, reactor_regex iface
     iomanager.run_on_wait(iface_scope, [iface]() { iface->on_reactor_start(iomanager.this_reactor()); });
 
     // TODO: Removed the code to Metrics Mempool populate from here. NEED TO VALIDATE IF WE NEED THIS IN CASE
-    // spdk is already inited
     LOGINFOMOD(iomgr, "Interface={} added, total_interfaces={}", (void*)iface.get(), m_iface_list.size());
 }
 
 shared< DriveInterface > IOManager::get_drive_interface(drive_interface_type type) {
-    if ((type == drive_interface_type::spdk) && !m_is_spdk) {
-        LOGERRORMOD(iomgr, "Attempting to access spdk's drive interface on non-spdk mode");
-        return nullptr;
-    }
     for (auto& iface : m_drive_ifaces) {
         if (iface->interface_type() == type) { return iface; }
     }
@@ -321,20 +267,8 @@ void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
 
 void IOManager::_run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                              const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier) {
-    loop_type_t ltype = loop_type;
-
-    shared< IOReactor > reactor;
-#ifdef WITH_SPDK
-    if (m_is_spdk && (loop_type & TIGHT_LOOP)) {
-        ltype = (loop_type & ~INTERRUPT_LOOP);
-        reactor = std::make_shared< IOReactorSPDK >();
-    } else {
-#else
-    {
-#endif
-        ltype = (loop_type & ~TIGHT_LOOP) | INTERRUPT_LOOP;
-        reactor = std::make_shared< IOReactorEPoll >();
-    }
+    const loop_type_t ltype = (loop_type & ~TIGHT_LOOP) | INTERRUPT_LOOP;
+    auto reactor = std::make_shared< IOReactorEPoll >();
     *(m_reactors.get()) = reactor;
     reactor->run(iomgr_slot_num, ltype, 0, name, iodev_selector, std::move(addln_notifier));
 }
@@ -375,14 +309,6 @@ static bool match_regex(reactor_regex r, const IOReactor* reactor) {
     } else {
         return ((r == reactor_regex::all_user) || (r == reactor_regex::least_busy_user));
     }
-}
-
-int IOManager::run_on_forget(IOReactor* reactor, spdk_msg_signature_t fn, void* context) {
-    assert(reactor->is_tight_loop_reactor());
-#ifdef WITH_SPDK
-    spdk_thread_send_msg(reactor->spdk_thr_, fn, context);
-#endif
-    return 1;
 }
 
 int IOManager::send_msg(IOReactor* reactor, iomgr_msg* msg) {
@@ -589,23 +515,7 @@ size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator
 /////////////////// IODevice class implementation ///////////////////////////////////
 IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} {}
 
-std::string IODevice::dev_id() const {
-    if (std::holds_alternative< int >(dev)) {
-        return std::to_string(fd());
-#ifdef WITH_SPDK
-    } else if (std::holds_alternative< spdk_bdev_desc* >(dev)) {
-        return spdk_bdev_get_name(bdev());
-#endif
-    } else {
-        return "";
-    }
-}
-
-#ifdef WITH_SPDK
-spdk_bdev_desc* IODevice::bdev_desc() const { return std::get< spdk_bdev_desc* >(dev); }
-spdk_bdev* IODevice::bdev() const { return spdk_bdev_desc_get_bdev(bdev_desc()); }
-spdk_nvmf_qpair* IODevice::nvmf_qp() const { return std::get< spdk_nvmf_qpair* >(dev); }
-#endif
+std::string IODevice::dev_id() const { return std::to_string(fd()); }
 
 bool IODevice::is_global() const { return std::holds_alternative< reactor_regex >(thread_scope); }
 bool IODevice::is_my_thread_scope() const { return !is_global() && (reactor_scope() == iomanager.this_reactor()); }

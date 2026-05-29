@@ -4,19 +4,15 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror -Wno-empty-body -
 find_package (GTest REQUIRED)
 find_package (cpr REQUIRED)
 
-link_directories(${spdk_LIB_DIRS} ${dpdk_LIB_DIRS})
 include_directories (BEFORE .. ../include)
 
 set (TEST_DEPS
-        iomgr 
+        iomgr
         sisl::sisl
-        ${spdk_LIBRARY_LIST}
-        ${dpdk_LIBRARY_LIST}
         GTest::gmock
     )
 
-if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "spdk_mode") OR 
-        ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))
+if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))
     #set(TEST_IOMGR_FILES test_iomgr.cpp)
     #add_executable(test_iomgr ${TEST_IOMGR_FILES})
     #target_link_libraries(test_iomgr ${TEST_DEPS} )
@@ -63,19 +59,4 @@ if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL
         SET_TESTS_PROPERTIES(TestMsg-Epoll PROPERTIES DEPENDS TestWriteZero-Epoll)
     endif()
 
-    if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "spdk_mode"))
-        add_test(NAME TestTimer-Spdk COMMAND test_timer --spdk true --iova-mode va)
-
-        add_test(NAME TestWriteZero-Spdk COMMAND test_write_zero --spdk true --iova-mode va --dev /tmp/test_wz_spdk)
-        SET_TESTS_PROPERTIES(TestWriteZero-Spdk PROPERTIES DEPENDS TestTimer-Spdk)
-
-        add_test(NAME TestMsg-Spdk COMMAND test_msg --spdk true --iova-mode va)
-        SET_TESTS_PROPERTIES(TestMsg-Spdk PROPERTIES DEPENDS TestWriteZero-Spdk)
-
-        add_test(NAME TestDrive-Spdk COMMAND test_drive --spdk true --iova-mode va --dev_path /tmp/iomgr_test_drive_spdk)
-        SET_TESTS_PROPERTIES(TestDrive-Spdk PROPERTIES DEPENDS TestMsg-Spdk)
-
-        add_test(NAME TestIOJob-Spdk COMMAND test_iojob --spdk true --iova-mode va)
-        SET_TESTS_PROPERTIES(TestIOJob-Spdk PROPERTIES DEPENDS TestDrive-Spdk)
-    endif()
 endif()
