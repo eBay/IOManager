@@ -41,6 +41,7 @@ struct open_how {
 #include <sisl/fds/buffer.hpp>
 
 #include "interfaces/kernel_drive_interface.hpp"
+#include "interfaces/drive_iocb.hpp"
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
@@ -114,6 +115,7 @@ public:
     void on_event_notification(IODevice* iodev, void* cookie, int event);
     void handle_completions();
     void submit_batch() override;
+protected:
     DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
 
 private:

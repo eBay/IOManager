@@ -41,9 +41,12 @@
 #include <sisl/metrics/metrics.hpp>
 
 #include "kernel_drive_interface.hpp"
+#include "drive_iocb.hpp"
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
+using poll_cb_idx_t = uint32_t; // also defined in reactor.hpp; duplicated here to avoid circular include
+
 constexpr unsigned MAX_OUTSTANDING_IO{200}; // if max outstanding IO is more than 200 then io_submit will fail.
 constexpr unsigned MAX_COMPLETIONS{MAX_OUTSTANDING_IO}; // how many completions to process in one shot
 
@@ -139,10 +142,12 @@ public:
     virtual void submit_batch() override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
-    DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
 
     static std::vector< int > s_poll_interval_table;
     static void init_poll_interval_table();
+
+protected:
+    DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
 
 private:
     void init_iface_reactor_context(IOReactor*) override;

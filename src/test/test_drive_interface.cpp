@@ -14,10 +14,10 @@
 #include <stdexcept>
 #include <string>
 
-#include <gtest/gtest.h>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
+#include <gtest/gtest.h>
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -53,7 +53,7 @@ SISL_OPTION_GROUP(test_drive_interface,
                   (dev_path, "", "dev_path", "drive path to test",
                    ::cxxopts::value< std::string >()->default_value("/tmp/iomgr_test_drive"), "path"),
                   (dev_size_mb, "", "dev_size_mb", "size of each device in MB",
-                   ::cxxopts::value< uint64_t >()->default_value("100"), "number"),);
+                   ::cxxopts::value< uint64_t >()->default_value("100"), "number"));
 
 #define ENABLED_OPTIONS logging, iomgr, test_drive_interface, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
@@ -155,7 +155,7 @@ public:
 
             LOGTRACE("Preload offset={}", offset);
             [this, work, req, offset]() -> fire_and_forget_task {
-                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
                                                                  s_io_size, offset);
                 ++work->available_qs;
                 ++work->nios_completed;
@@ -205,7 +205,7 @@ public:
             if (io_pct(re) < s_read_pct) {
                 LOGTRACE("Read offset={}", offset);
                 [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf), s_io_size,
+                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), reinterpret_cast< char* >(req->buf), s_io_size,
                                                                     offset);
                     do_completion();
                 }();
@@ -213,7 +213,7 @@ public:
                 req->buf_arr->fill(offset);
                 LOGTRACE("Write offset={}", offset);
                 [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
                                                                      s_io_size, offset);
                     do_completion();
                 }();
@@ -230,7 +230,7 @@ public:
             // Use pread directly — no reactor needed for simple sequential verify
             [[maybe_unused]] auto n = ::pread(m_iodev->fd(), rbuf, s_io_size, static_cast< off_t >(offset));
             for (size_t i{0}; i < s_io_size / sizeof(size_t); ++i) {
-                assert((r_cast< uint64_t* >(rbuf))[i] == offset);
+                assert((reinterpret_cast< uint64_t* >(rbuf))[i] == offset);
             }
         }
         iomanager.iobuf_free(rbuf);
@@ -255,7 +255,7 @@ public:
 
                 LOGTRACE("Preload offset={}", offset);
                 [this, work, req, offset, &q_cv]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
                                                                      s_io_size, offset);
                     ++work->available_qs;
                     ++work->nios_completed;
@@ -305,7 +305,7 @@ public:
                 if (io_pct(re) < s_read_pct) {
                     LOGTRACE("Read offset={}", offset);
                     [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                        co_await m_iodev->drive_interface()->async_read(m_iodev.get(), r_cast< char* >(req->buf),
+                        co_await m_iodev->drive_interface()->async_read(m_iodev.get(), reinterpret_cast< char* >(req->buf),
                                                                         s_io_size, offset);
                         do_completion();
                     }();
@@ -313,7 +313,7 @@ public:
                     req->buf_arr->fill(offset);
                     LOGTRACE("Write offset={}", offset);
                     [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                        co_await m_iodev->drive_interface()->async_write(m_iodev.get(), r_cast< const char* >(req->buf),
+                        co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
                                                                          s_io_size, offset);
                         do_completion();
                     }();

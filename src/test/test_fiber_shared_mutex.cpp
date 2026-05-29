@@ -18,9 +18,9 @@
 #include <shared_mutex>
 #include <vector>
 
-#include <gtest/gtest.h>
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
+#include <gtest/gtest.h>
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/io_environment.hpp>
@@ -31,7 +31,7 @@ SISL_OPTION_GROUP(test_fiber_shared_mutex,
                   (num_threads, "", "num_threads", "number of threads",
                    ::cxxopts::value< uint32_t >()->default_value("10"), "number"),
                   (num_iters, "", "num_iters", "number of iterations",
-                   ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),);
+                   ::cxxopts::value< uint64_t >()->default_value("10000"), "number"));
 
 #define ENABLED_OPTIONS logging, iomgr, test_fiber_shared_mutex, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)

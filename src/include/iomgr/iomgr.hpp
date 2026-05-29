@@ -26,26 +26,27 @@
 #include <vector>
 
 #include <future>
+#include <thread>
 #include <semver200.h>
 #include <sisl/fds/bitword.hpp>
 #include <sisl/fds/buffer.hpp>
 #include <sisl/fds/id_reserver.hpp>
 #include <sisl/fds/malloc_helper.hpp>
-#include <sisl/fds/sparse_vector.hpp>
 #include <sisl/logging/logging.h>
 #include <sisl/utility/atomic_counter.hpp>
 #include <sisl/utility/enum.hpp>
 #include <sisl/utility/thread_buffer.hpp>
 
-#include <iomgr/iomgr_msg.hpp>
-#include <iomgr/iomgr_timer.hpp>
 #include <iomgr/iomgr_types.hpp>
 #include <iomgr/drive_interface.hpp>
 #include <iomgr/io_device.hpp>
 
 namespace iomgr {
+using timer_callback_t = std::function< void(void*) >;
+using timer_handle_t   = std::shared_ptr< void >; // opaque; null == no active timer
 
-struct timer_info;
+struct iomgr_msg;
+struct iomgr_waitable_msg;
 
 // TODO: Make this part of an enum, to force add count upon adding new inbuilt io interface.
 static constexpr int inbuilt_interface_count = 1;
@@ -54,26 +55,16 @@ class DriveInterface;
 class IOManagerImpl;
 class IOThreadMetrics;
 class GenericIOInterface;
+class timer;       // defined in iomgr_timer_impl.hpp (internal)
+class timer_epoll; // defined in iomgr_timer_impl.hpp (internal)
 
-ENUM(iomgr_state, uint16_t,
-     stopped,        // Stopped - this is the initial state
-     interface_init, // Interface initialization is ongoing.
-     reactor_init,   // All worker reactors are being initialized
-     sys_init,       // System-wide init (timers, etc.)
-     running,        // Active, ready to take traffic
-     stopping);
+// Internal lifecycle state — not part of the public API contract.
+ENUM(iomgr_state, uint16_t, stopped, interface_init, reactor_init, sys_init, running, stopping);
 
 struct iomgr_params {
     size_t num_threads{0};
     uint32_t app_mem_size_mb{0};
 };
-
-template < class... Ts >
-struct overloaded : Ts... {
-    using Ts::operator()...;
-};
-template < class... Ts >
-overloaded(Ts...) -> overloaded< Ts... >;
 
 /**
  * @brief Get the IOManager version
@@ -178,36 +169,40 @@ public:
     void remove_interface(cshared< IOInterface >& iface);
 
     ////////////////////////////////// Message Passing Section ////////////////////////////////
-    /// Run fn on a specific reactor (fire and forget — does not wait for completion).
+    // Templates keep the exact callable type visible to the compiler; dispatch goes through
+    // erased void*/function-pointer bridge so iomgr_msg stays out of the public header.
     int run_on_forget(IOReactor* reactor, const auto& fn) {
-        return send_msg(reactor, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+        using F = std::decay_t< decltype(fn) >;
+        return _run_forget(
+            reactor, new F(fn), +[](void* p) { (*static_cast< F* >(p))(); },
+            +[](void* p) noexcept { delete static_cast< F* >(p); });
     }
-
-    /// Run fn on all reactors matching rr (fire and forget).
     int run_on_forget(reactor_regex rr, const auto& fn) {
-        static thread_local std::vector< std::future< bool > > s_future_list;
-        return multicast_msg(rr, iomgr_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}),
-                             s_future_list);
+        using F = std::decay_t< decltype(fn) >;
+        return _run_forget(
+            rr, new F(fn), +[](void* p) { (*static_cast< F* >(p))(); },
+            +[](void* p) noexcept { delete static_cast< F* >(p); });
     }
 
-    /// Run fn on a specific reactor and block until it completes.
     int run_on_wait(IOReactor* reactor, const auto& fn) {
-        return send_msg_and_wait(
-            reactor, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+        using F = std::decay_t< decltype(fn) >;
+        return _run_wait(
+            reactor, new F(fn), +[](void* p) { (*static_cast< F* >(p))(); },
+            +[](void* p) noexcept { delete static_cast< F* >(p); });
     }
-
-    /// Run fn on all reactors matching rr and block until all complete.
     int run_on_wait(reactor_regex rr, const auto& fn) {
-        return multicast_msg_and_wait(
-            rr, iomgr_waitable_msg::create(std::remove_reference_t< std::remove_cv_t< decltype(fn) > >{fn}));
+        using F = std::decay_t< decltype(fn) >;
+        return _run_wait(
+            rr, new F(fn), +[](void* p) { (*static_cast< F* >(p))(); },
+            +[](void* p) noexcept { delete static_cast< F* >(p); });
     }
 
     template < typename... Args >
     int run_on(bool wait, Args&&... args) {
         if (wait) {
-            return run_on_wait(args...);
+            return run_on_wait(std::forward< Args >(args)...);
         } else {
-            return run_on_forget(args...);
+            return run_on_forget(std::forward< Args >(args)...);
         }
     }
 
@@ -252,7 +247,7 @@ private:
     IOManager();
     ~IOManager();
 
-    void foreach_interface(const interface_cb_t& iface_cb);
+    void foreach_interface(const std::function< void(const cshared< IOInterface >&) >& iface_cb);
     void create_worker_reactors();
     void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                       const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
@@ -270,6 +265,15 @@ private:
 
     /******** IO Thread related infra ********/
     thread_state_notifier_t& thread_state_notifier() { return m_common_thread_state_notifier; }
+
+    // Erased-dispatch bridge: fn_copy is heap-owned; call invokes it; del frees it.
+    // Defined in iomgr.cpp which includes the internal iomgr_msg header.
+    using _fn_call_t = void (*)(void*);
+    using _fn_del_t = void (*)(void*) noexcept;
+    int _run_forget(IOReactor* reactor, void* fn_copy, _fn_call_t call, _fn_del_t del);
+    int _run_forget(reactor_regex rr, void* fn_copy, _fn_call_t call, _fn_del_t del);
+    int _run_wait(IOReactor* reactor, void* fn_copy, _fn_call_t call, _fn_del_t del);
+    int _run_wait(reactor_regex rr, void* fn_copy, _fn_call_t call, _fn_del_t del);
 
     int send_msg(IOReactor* reactor, iomgr_msg* msg);
     int send_msg_and_wait(IOReactor* reactor, iomgr_waitable_msg* msg);
@@ -333,7 +337,7 @@ private:
     std::condition_variable m_cv;
 
     std::vector< std::shared_ptr< IOReactor > > m_worker_reactors;
-    std::vector< sys_thread_id_t > m_worker_threads;
+    std::vector< std::thread > m_worker_threads;
     std::uniform_int_distribution< size_t > m_rand_worker_distribution;
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
@@ -352,3 +356,5 @@ private:
 
 #define iomanager iomgr::IOManager::instance()
 } // namespace iomgr
+
+SISL_LOGGING_DECL(IOMGR_LOG_MODS)

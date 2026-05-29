@@ -3,46 +3,20 @@
 #include <string>
 #include <mutex>
 
-#include <sisl/fds/sparse_vector.hpp>
-#include <iomgr/iomgr.hpp>
-#include <iomgr/iomgr_timer.hpp>
+#include <iomgr/iomgr_types.hpp>
+#include <sisl/utility/atomic_counter.hpp>
 
 namespace iomgr {
 class IOInterface;
 class DriveInterface;
-
-struct IODeviceThreadContext {
-    virtual ~IODeviceThreadContext() = default;
-};
-
-class IODeviceMetrics : public sisl::MetricsGroup {
-public:
-    IODeviceMetrics(std::string devname) : sisl::MetricsGroup("IODeviceMetrics", devname) {
-
-        REGISTER_HISTOGRAM(read_size, "Read IO Size", "io_size", {"op", "read"}, HistogramBucketsType(OpSizeBuckets));
-        REGISTER_HISTOGRAM(write_size, "Write IO size", "io_size", {"op", "write"},
-                           HistogramBucketsType(OpSizeBuckets));
-        REGISTER_HISTOGRAM(fsync_size, "Fsync IO size", "io_size", {"op", "fsync"},
-                           HistogramBucketsType(OpSizeBuckets));
-        // FixMe: The OpLatecyBuckets might not friendly for HDD
-        REGISTER_HISTOGRAM(read_lat, "Read IO Lat", "io_lat_us", {"op", "read"}, HistogramBucketsType(OpLatecyBuckets));
-        REGISTER_HISTOGRAM(write_lat, "Write IO Lat", "io_lat_us", {"op", "write"},
-                           HistogramBucketsType(OpLatecyBuckets));
-        REGISTER_HISTOGRAM(fsync_lat, "Fsync IO Lat", "io_lat_us", {"op", "fsync"},
-                           HistogramBucketsType(OpLatecyBuckets));
-        register_me_to_farm();
-    }
-    IODeviceMetrics(const IODeviceMetrics&) = delete;
-    IODeviceMetrics(IODeviceMetrics&&) noexcept = delete;
-    IODeviceMetrics& operator=(const IODeviceMetrics&) = delete;
-    IODeviceMetrics& operator=(IODeviceMetrics&&) noexcept = delete;
-    ~IODeviceMetrics() { deregister_me_from_farm(); }
-};
+class IODeviceMetrics;        // defined in drive_iocb.hpp (internal)
+struct IODeviceThreadContext; // extension point for per-reactor device state
+struct timer_info;            // defined in iomgr_timer_impl.hpp (internal)
 
 class IODevice {
 public:
     IODevice(const int pri, const thread_specifier scope);
-    virtual ~IODevice() = default;
+    virtual ~IODevice(); // defined in iomgr.cpp where timer_info and IODeviceMetrics are complete
 
 public:
     ev_callback cb{nullptr};
@@ -53,8 +27,6 @@ public:
     void* cookie{nullptr};
     std::unique_ptr< timer_info > tinfo;
     IOInterface* io_interface{nullptr};
-    std::mutex m_ctx_init_mtx; // Mutex to protect iodev thread ctx
-    sisl::sparse_vector< std::unique_ptr< IODeviceThreadContext > > m_iodev_fiber_ctx;
     bool ready{false};
     sisl::atomic_counter< int32_t > thread_op_pending_count{0}; // Number of add/remove of iodev to thread pending
     drive_type dtype{drive_type::unknown};
@@ -67,7 +39,7 @@ public:
 private:
     thread_specifier thread_scope{reactor_regex::all_io};
     int pri{1};
-    std::unique_ptr< IODeviceMetrics > m_metrics;
+    std::unique_ptr< IODeviceMetrics > m_metrics; // forward-declared above
 
 public:
     int fd() const { return dev; }
@@ -82,31 +54,6 @@ public:
     void clear();
     DriveInterface* drive_interface();
 
-    void observe_metrics(drive_iocb* iocb) {
-        if (!m_metrics.get()) { return; }
-        auto dur = get_elapsed_time_us(iocb->op_start_time);
-        switch (iocb->op_type) {
-        case DriveOpType::WRITE:
-            HISTOGRAM_OBSERVE(*m_metrics, write_lat, dur);
-            HISTOGRAM_OBSERVE(*m_metrics, write_size, iocb->size);
-            LOGTRACE("write, size {}, lat {}", iocb->size, dur);
-            break;
-        case DriveOpType::READ:
-            HISTOGRAM_OBSERVE(*m_metrics, read_lat, dur);
-            HISTOGRAM_OBSERVE(*m_metrics, read_size, iocb->size);
-            LOGTRACE("read, size {}, lat {}", iocb->size, dur);
-            break;
-        case DriveOpType::FSYNC:
-            HISTOGRAM_OBSERVE(*m_metrics, fsync_lat, dur);
-            HISTOGRAM_OBSERVE(*m_metrics, fsync_size, iocb->size);
-            LOGTRACE("fsync, size {}, lat {}", iocb->size, dur);
-            break;
-
-        default:
-            break;
-        }
-    }
-
     void decrement_pending(int32_t count = 1) {
         if ((post_add_remove_cb != nullptr) && thread_op_pending_count.decrement_testz(count)) {
             post_add_remove_cb(this);
@@ -119,12 +66,10 @@ public:
         }
     }
 
-    void enable_metrics(std::string group_name) { m_metrics = std::make_unique< IODeviceMetrics >(group_name); }
+    void enable_metrics(std::string group_name);   // defined in drive_iocb.cpp
+    void observe_metrics(struct drive_iocb* iocb); // defined in drive_iocb.cpp
 
-    void close() {
-        m_metrics.release();
-        ::close(fd());
-    }
+    void close(); // defined in drive_iocb.cpp where IODeviceMetrics is complete
 };
 
 } // namespace iomgr

@@ -414,7 +414,7 @@ private:
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
         [this, req, vol_dev, size, lba]() -> fire_and_forget_task {
-            co_await vol_dev->drive_interface()->async_write(vol_dev.get(), r_cast< const char* >(req->buffer), size,
+            co_await vol_dev->drive_interface()->async_write(vol_dev.get(), reinterpret_cast< const char* >(req->buffer), size,
                                                              lba * req->vol_info->m_page_size);
             on_completion(req);
         }();
@@ -438,7 +438,7 @@ private:
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
         [this, req, vol_dev, size, lba]() -> fire_and_forget_task {
-            co_await vol_dev->drive_interface()->async_read(vol_dev.get(), r_cast< char* >(req->buffer), size,
+            co_await vol_dev->drive_interface()->async_read(vol_dev.get(), reinterpret_cast< char* >(req->buffer), size,
                                                             lba * req->vol_info->m_page_size);
             on_completion(req);
         }();

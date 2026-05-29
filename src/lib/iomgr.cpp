@@ -29,12 +29,15 @@
 #include <sisl/version.hpp>
 
 #include <iomgr/iomgr.hpp>
+#include "iomgr_msg.hpp"
 #include "iomgr_impl.hpp"
 #include "epoll/iomgr_impl_epoll.hpp"
 #include "interfaces/aio_drive_interface.hpp"
+#include "interfaces/drive_iocb.hpp"
 #include "interfaces/uring_drive_interface.hpp"
 #include "iomgr_helper.hpp"
 #include "iomgr_config.hpp"
+#include "iomgr_timer_impl.hpp"
 #include "watchdog.hpp"
 #include "epoll/reactor_epoll.hpp"
 
@@ -166,10 +169,7 @@ void IOManager::stop() {
     try {
         // Join all the iomanager threads
         for (auto& thr : m_worker_threads) {
-            if (std::holds_alternative< std::thread >(thr)) {
-                auto& t = std::get< std::thread >(thr);
-                if (t.joinable()) { t.join(); }
-            }
+            if (thr.joinable()) { thr.join(); }
         }
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during thread join", e.what()); }
 
@@ -194,8 +194,8 @@ void IOManager::create_worker_reactors() {
         m_worker_reactors.push_back(nullptr);
     }
     for (uint32_t i{0}; i < m_num_workers; ++i) {
-        m_worker_threads.emplace_back(m_impl->create_reactor_impl(
-            fmt::format("iomgr_thread_{}", i), INTERRUPT_LOOP, (int)i, nullptr));
+        m_worker_threads.emplace_back(
+            m_impl->create_reactor_impl(fmt::format("iomgr_thread_{}", i), INTERRUPT_LOOP, (int)i, nullptr));
         LOGDEBUGMOD(iomgr, "Created iomanager worker reactor thread {}...", i);
     }
 }
@@ -258,7 +258,7 @@ void IOManager::add_drive_interface(cshared< DriveInterface >& iface, reactor_re
     m_drive_ifaces.push_back(iface);
 }
 
-void IOManager::foreach_interface(const interface_cb_t& iface_cb) {
+void IOManager::foreach_interface(const std::function< void(const cshared< IOInterface >&) >& iface_cb) {
     std::shared_lock lg(m_iface_list_mtx);
     for (auto& iface : m_iface_list) {
         iface_cb(iface);
@@ -309,6 +309,41 @@ static bool match_regex(reactor_regex r, const IOReactor* reactor) {
     } else {
         return ((r == reactor_regex::all_user) || (r == reactor_regex::least_busy_user));
     }
+}
+
+////////////////////// Erased-dispatch bridge implementations ///////////////////
+// Each _run_* overload wraps the erased fn_copy+call+del into an iomgr_msg
+// (or iomgr_waitable_msg) and routes through the normal send/multicast path.
+// Single-reactor overloads: [fn_copy, call, del] lambda fits in std::function SBO.
+// Multi-reactor overloads: shared_ptr owns fn_copy so cloned messages share the
+// callable and it is deleted exactly once when the last clone is destroyed.
+
+int IOManager::_run_forget(IOReactor* reactor, void* fn_copy, _fn_call_t call, _fn_del_t del) {
+    return send_msg(reactor, iomgr_msg::create([fn_copy, call, del]() {
+                        call(fn_copy);
+                        del(fn_copy);
+                    }));
+}
+
+int IOManager::_run_forget(reactor_regex rr, void* fn_copy, _fn_call_t call, _fn_del_t del) {
+    // multicast_msg clones the message for each reactor — shared_ptr ensures fn_copy
+    // is deleted exactly once after the last clone's method executes.
+    auto sp = std::shared_ptr< void >(fn_copy, del);
+    static thread_local std::vector< std::future< bool > > s_future_list;
+    return multicast_msg(rr, iomgr_msg::create([sp, call]() { call(sp.get()); }), s_future_list);
+}
+
+int IOManager::_run_wait(IOReactor* reactor, void* fn_copy, _fn_call_t call, _fn_del_t del) {
+    return send_msg_and_wait(reactor, iomgr_waitable_msg::create([fn_copy, call, del]() {
+                                 call(fn_copy);
+                                 del(fn_copy);
+                             }));
+}
+
+int IOManager::_run_wait(reactor_regex rr, void* fn_copy, _fn_call_t call, _fn_del_t del) {
+    // Same shared_ptr pattern for the waitable multicast path.
+    auto sp = std::shared_ptr< void >(fn_copy, del);
+    return multicast_msg_and_wait(rr, iomgr_waitable_msg::create([sp, call]() { call(sp.get()); }));
 }
 
 int IOManager::send_msg(IOReactor* reactor, iomgr_msg* msg) {
@@ -441,14 +476,15 @@ timer_handle_t IOManager::schedule_global_timer(uint64_t nanos_after, bool recur
         t = m_global_user_timer.get();
     } else {
         LOGMSG_ASSERT(0, "Setting timer with invalid regex {}", enum_name(r));
-        return null_timer_handle;
+        return {};
     }
 
     return t->schedule(nanos_after, recurring, cookie, std::move(timer_fn), wait_to_schedule);
 }
 
 void IOManager::cancel_timer(timer_handle_t thdl, bool wait_to_cancel) {
-    return thdl.first->cancel(thdl, wait_to_cancel);
+    if (!thdl) return;
+    timer_state(thdl).tmr->cancel(thdl, wait_to_cancel);
 }
 
 void IOManager::set_poll_interval(const int interval) { this_reactor()->set_poll_interval(interval); }
@@ -514,6 +550,7 @@ size_t IOManager::iobuf_size(uint8_t* buf) const { return sisl::AlignedAllocator
 
 /////////////////// IODevice class implementation ///////////////////////////////////
 IODevice::IODevice(int p, thread_specifier scope) : thread_scope{scope}, pri{p} {}
+IODevice::~IODevice() = default; // unique_ptr<timer_info> + unique_ptr<IODeviceMetrics> destructors run here
 
 std::string IODevice::dev_id() const { return std::to_string(fd()); }
 
@@ -527,7 +564,6 @@ void IODevice::clear() {
     dev = -1;
     tinfo = nullptr;
     cookie = nullptr;
-    m_iodev_fiber_ctx.clear();
 }
 
 DriveInterface* IODevice::drive_interface() { return static_cast< DriveInterface* >(io_interface); }

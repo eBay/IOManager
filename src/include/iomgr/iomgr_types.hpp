@@ -13,10 +13,11 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #pragma once
-#include <thread>
-#include <variant>
+#include <chrono>
+#include <cstdint>
 #include <functional>
-#include <boost/heap/binomial_heap.hpp>
+#include <memory>
+#include <variant>
 
 #include <sisl/utility/enum.hpp>
 #include <sisl/fds/buffer.hpp>
@@ -25,7 +26,6 @@ namespace iomgr {
 ////// Forward declarations
 class IOReactor;
 struct IODevice;
-struct iomgr_msg;
 
 template < typename T >
 using shared = std::shared_ptr< T >;
@@ -35,6 +35,8 @@ using cshared = const std::shared_ptr< T >;
 
 template < typename T >
 using unique = std::unique_ptr< T >;
+
+using Clock = std::chrono::steady_clock;
 
 /////////////////// Types for all IODevice ////////////////////////
 using io_device_ptr = shared< IODevice >;
@@ -51,7 +53,7 @@ static constexpr loop_type_t INTERRUPT_LOOP = 1 << 1; // Interrupt drive loop us
 static constexpr loop_type_t ADAPTIVE_LOOP = 1 << 2;  // Adaptive approach by backing off before polling upon no-load
 static constexpr loop_type_t USER_CONTROLLED_LOOP = 1 << 3; // User controlled loop where iomgr will poll on-need basis
 
-typedef std::function< void(bool) > thread_state_notifier_t;
+using thread_state_notifier_t = std::function< void(bool) >;
 
 ENUM(reactor_regex, uint8_t,
      all_io,            // Represents all io reactors
@@ -64,26 +66,13 @@ ENUM(reactor_regex, uint8_t,
      all_tloop          // Represents all tight loop reactors (could be either worker or user)
 );
 
-using eal_core_id_t = uint32_t;
 // thread_specifier: reactor_regex for "all matching reactors"; IOReactor* for a specific reactor.
 using thread_specifier = std::variant< reactor_regex, IOReactor* >;
-using sys_thread_id_t = std::variant< std::thread, eal_core_id_t >;
-
-using backing_dev_t = int; // file descriptor
-using poll_cb_idx_t = uint32_t;
-using can_backoff_cb_t = std::function< bool(IOReactor*) >;
-
-template < typename T, typename U >
-inline T r_cast(U v) {
-    return reinterpret_cast< T >(v);
-}
 
 /////////////////// Types for all IOInterfaces ////////////////////////
 class IOInterface;
 using listen_sentinel_cb_t = std::function< void(void) >;
 using interface_adder_t = std::function< void(void) >;
-using interface_cb_t = std::function< void(const std::shared_ptr< IOInterface >&) >;
-using io_interface_id_t = uint32_t;
 
 ENUM(drive_type, uint8_t,
      file_on_nvme, // Works on top of file system which is hosted in NVMe
@@ -94,6 +83,6 @@ ENUM(drive_type, uint8_t,
      unknown       // Try to deduce it while loading
 )
 
-#define IOMGR_LOG_MODS iomgr, io_wd
-SISL_LOGGING_DECL(IOMGR_LOG_MODS);
 } // namespace iomgr
+
+#define IOMGR_LOG_MODS iomgr, io_wd

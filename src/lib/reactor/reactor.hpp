@@ -16,14 +16,16 @@
 
 #include <sisl/logging/logging.h>
 #include <sisl/metrics/metrics.hpp>
-#include <sisl/fds/sparse_vector.hpp>
 #include <sisl/utility/atomic_counter.hpp>
 #include <sisl/utility/enum.hpp>
 #include <chrono>
 #include <iomgr/iomgr_types.hpp>
-#include <iomgr/iomgr_timer.hpp>
+#include "iomgr_timer_impl.hpp"
 
 namespace iomgr {
+using poll_cb_idx_t = uint32_t;
+using can_backoff_cb_t = std::function< bool(class IOReactor*) >;
+
 #define REACTOR_LOG(level, __l, ...)                                                                                   \
     {                                                                                                                  \
         LOG##level##MOD_FMT(iomgr, ([&](fmt::memory_buffer& buf, const char* __m, auto&&... args) -> bool {            \

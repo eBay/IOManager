@@ -15,6 +15,7 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/drive_interface.hpp>
+#include "interfaces/drive_iocb.hpp"
 
 namespace iomgr {
 
@@ -111,4 +112,35 @@ std::string drive_iocb::to_string() const {
     }
     return str;
 }
+
+void IODevice::close() {
+    m_metrics.reset();
+    ::close(fd());
+}
+
+void IODevice::enable_metrics(std::string group_name) {
+    m_metrics = std::make_unique< IODeviceMetrics >(std::move(group_name));
+}
+
+void IODevice::observe_metrics(drive_iocb* iocb) {
+    if (!m_metrics) { return; }
+    auto dur = get_elapsed_time_us(iocb->op_start_time);
+    switch (iocb->op_type) {
+    case DriveOpType::WRITE:
+        HISTOGRAM_OBSERVE(*m_metrics, write_lat, dur);
+        HISTOGRAM_OBSERVE(*m_metrics, write_size, iocb->size);
+        break;
+    case DriveOpType::READ:
+        HISTOGRAM_OBSERVE(*m_metrics, read_lat, dur);
+        HISTOGRAM_OBSERVE(*m_metrics, read_size, iocb->size);
+        break;
+    case DriveOpType::FSYNC:
+        HISTOGRAM_OBSERVE(*m_metrics, fsync_lat, dur);
+        HISTOGRAM_OBSERVE(*m_metrics, fsync_size, iocb->size);
+        break;
+    default:
+        break;
+    }
+}
+
 } // namespace iomgr

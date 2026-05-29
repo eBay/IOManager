@@ -51,7 +51,7 @@ uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) {
     // Create io device and add it local thread
     using namespace std::placeholders;
     m_ring_ev_iodev = iomanager.generic_interface()->make_io_device(
-        backing_dev_t(ev_fd), EPOLLIN, 0, nullptr, true,
+        ev_fd, EPOLLIN, 0, nullptr, true,
         std::bind(&UringDriveInterface::on_event_notification, iface, _1, _2, _3));
     iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->handle_completions(); });
 }
@@ -174,7 +174,7 @@ io_device_ptr UringDriveInterface::open_dev(const std::string& devname, drive_ty
         return nullptr;
     }
 
-    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
+    auto iodev = alloc_io_device(fd, 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
     iodev->dtype = dev_type;
     iodev->enable_metrics(devname);
@@ -210,7 +210,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_write(IODev
     }
 
     auto submit_fn = [this, iocb, part_of_batch, new_intfc = m_new_intfc]() {
-        DriveInterface::increment_outstanding_counter(iocb);
+        increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
         if (new_intfc) {
@@ -239,7 +239,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_writev(IODe
     iocb->set_iovs(iov, iovcnt);
 
     auto submit_fn = [this, iocb, part_of_batch]() {
-        DriveInterface::increment_outstanding_counter(iocb);
+        increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
         io_uring_prep_writev(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
@@ -270,7 +270,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_read(IODevi
     }
 
     auto submit_fn = [this, iocb, part_of_batch, new_intfc = m_new_intfc]() {
-        DriveInterface::increment_outstanding_counter(iocb);
+        increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
         if (new_intfc) {
@@ -299,7 +299,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_readv(IODev
     iocb->set_iovs(iov, iovcnt);
 
     auto submit_fn = [this, iocb, part_of_batch]() {
-        DriveInterface::increment_outstanding_counter(iocb);
+        increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
         io_uring_prep_readv(sqe, iocb->iodev->fd(), iocb->get_iovs(), iocb->iovcnt, iocb->offset);
@@ -335,7 +335,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_write_zero(
         iocb->set_data(reinterpret_cast< char* >(s_zero_buf.data()));
 
         auto submit_fn = [this, iocb]() {
-            DriveInterface::increment_outstanding_counter(iocb);
+            increment_outstanding_counter(iocb);
             auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
             if (sqe == nullptr) { return; }
             io_uring_prep_write(sqe, iocb->iodev->fd(), iocb->get_data(), iocb->size, iocb->offset);
@@ -348,7 +348,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::async_write_zero(
         }
 
         const int res = co_await iocb->completion;
-        DriveInterface::decrement_outstanding_counter(iocb);
+        decrement_outstanding_counter(iocb);
         delete iocb;
         if (res < 0) { co_return std::error_code{-res, std::system_category()}; }
         remain -= write_size;
@@ -361,7 +361,7 @@ sisl::async::disk_task< std::error_code > UringDriveInterface::queue_fsync(IODev
     auto iocb = new drive_iocb(this, iodev, DriveOpType::FSYNC, 0, 0);
 
     auto submit_fn = [this, iocb]() {
-        DriveInterface::increment_outstanding_counter(iocb);
+        increment_outstanding_counter(iocb);
         auto sqe = t_uring_ch->get_sqe_or_enqueue(iocb);
         if (sqe == nullptr) { return; }
         io_uring_prep_fsync(sqe, iocb->iodev->fd(), IORING_FSYNC_DATASYNC);
@@ -459,10 +459,10 @@ void UringDriveInterface::handle_completions() {
 
 void UringDriveInterface::complete_io(drive_iocb* iocb) {
 #ifdef _PRERELEASE
-    if (DriveInterface::inject_delay_if_needed(iocb, [this](drive_iocb* iocb) { complete_io(iocb); })) { return; }
+    if (inject_delay_if_needed(iocb, [this](drive_iocb* iocb) { complete_io(iocb); })) { return; }
 #endif
     iocb->iodev->observe_metrics(iocb);
-    DriveInterface::decrement_outstanding_counter(iocb);
+    decrement_outstanding_counter(iocb);
     sisl::async::complete_cqe_state(iocb->completion, static_cast< int >(iocb->result));
     // iocb is deleted by the coroutine after co_await resumes
 }

@@ -21,6 +21,7 @@ extern "C" {
 
 #include <sisl/logging/logging.h>
 #include <iomgr/iomgr.hpp>
+#include "iomgr_msg.hpp"
 #include "epoll/reactor_epoll.hpp"
 #include "iomgr_config.hpp"
 
@@ -68,7 +69,7 @@ void IOReactorEPoll::init_impl() {
         REACTOR_LOG(ERROR, "Unable to open the eventfd, marking this as non-io reactor");
         goto error;
     }
-    m_msg_iodev = iomanager.generic_interface()->make_io_device(backing_dev_t{evfd}, EPOLLIN, 1 /* pri */, nullptr,
+    m_msg_iodev = iomanager.generic_interface()->make_io_device(evfd, EPOLLIN, 1 /* pri */, nullptr,
                                                                 true /* thread_dev */, nullptr);
 
     // Create a per thread timer

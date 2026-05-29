@@ -1,4 +1,3 @@
-#include <gtest/gtest.h>
 #include <vector>
 #include <chrono>
 #include <mutex>
@@ -7,6 +6,7 @@
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
 #include <sisl/fds/buffer.hpp>
+#include <gtest/gtest.h>
 
 #include <iomgr/io_environment.hpp>
 #include <iomgr/iomgr.hpp>
@@ -21,8 +21,7 @@ SISL_OPTION_GROUP(test_msg,
                    ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
                   (client_threads, "", "client_threads", "client_threads",
                    ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
-                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"),)
-
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"))
 #define ENABLED_OPTIONS logging, iomgr, test_msg, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 

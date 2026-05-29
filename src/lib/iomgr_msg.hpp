@@ -12,8 +12,7 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#ifndef IOMGR_IOMGR_MSG_HPP
-#define IOMGR_IOMGR_MSG_HPP
+#pragma once
 
 #include <future>
 #include <iostream>
@@ -67,5 +66,3 @@ protected:
 };
 
 } // namespace iomgr
-
-#endif // IOMGR_IOMGR_MSG_HPP

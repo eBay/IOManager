@@ -49,6 +49,7 @@
 #include <iomgr/iomgr.hpp>
 #include "interfaces/aio_drive_interface.hpp"
 #include "iomgr_config.hpp"
+#include "iomgr_helper.hpp"
 #include "reactor/reactor.hpp"
 
 namespace iomgr {
@@ -125,7 +126,7 @@ io_device_ptr AioDriveInterface::open_dev(const std::string& devname, drive_type
         return nullptr;
     }
 
-    auto iodev = alloc_io_device(backing_dev_t(fd), 9 /* pri */, reactor_regex::all_io);
+    auto iodev = alloc_io_device(fd, 9 /* pri */, reactor_regex::all_io);
     iodev->devname = devname;
     iodev->dtype = dev_type;
 
@@ -148,7 +149,7 @@ void AioDriveInterface::close_dev(const io_device_ptr& iodev) {
 void AioDriveInterface::init_iface_reactor_context(IOReactor*) {
     t_aio_ctx = std::make_unique< aio_thread_context >();
     t_aio_ctx->m_ev_io_dev =
-        iomanager.generic_interface()->make_io_device(backing_dev_t(t_aio_ctx->m_ev_fd), EPOLLIN, 0, nullptr, true,
+        iomanager.generic_interface()->make_io_device(t_aio_ctx->m_ev_fd, EPOLLIN, 0, nullptr, true,
                                                       bind_this(AioDriveInterface::on_event_notification, 3));
     t_aio_ctx->m_poll_cb_idx =
         iomanager.this_reactor()->register_poll_interval_cb(bind_this(AioDriveInterface::handle_completions, 0));

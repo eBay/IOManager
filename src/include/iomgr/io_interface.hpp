@@ -12,8 +12,7 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#ifndef IOMGR_INTERFACE_HPP
-#define IOMGR_INTERFACE_HPP
+#pragma once
 
 #include <functional>
 #include <variant>
@@ -38,9 +37,9 @@ public:
     void on_reactor_start(IOReactor* reactor);
     void on_reactor_stop(IOReactor* reactor);
 
-    io_device_ptr alloc_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                  const thread_specifier& scope, const ev_callback& cb);
-    inline io_device_ptr alloc_io_device(backing_dev_t dev, int pri, const thread_specifier& scope) {
+    io_device_ptr alloc_io_device(int dev, int events_interested, int pri, void* cookie, const thread_specifier& scope,
+                                  const ev_callback& cb);
+    inline io_device_ptr alloc_io_device(int dev, int pri, const thread_specifier& scope) {
         return alloc_io_device(dev, 0, pri, nullptr, scope, nullptr);
     }
 
@@ -56,17 +55,17 @@ protected:
 
 protected:
     std::shared_mutex m_mtx;
-    std::unordered_map< backing_dev_t, io_device_ptr > m_iodev_map;
+    std::unordered_map< int, io_device_ptr > m_iodev_map;
     reactor_regex m_thread_scope{reactor_regex::all_io};
 };
 
 class GenericIOInterface : public IOInterface {
 public:
     std::string name() const override { return "generic_interface"; }
-    io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                 const thread_specifier& scope, const ev_callback& cb);
-    io_device_ptr make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
-                                 bool is_per_thread_dev, const ev_callback& cb);
+    io_device_ptr make_io_device(int dev, int events_interested, int pri, void* cookie, const thread_specifier& scope,
+                                 const ev_callback& cb);
+    io_device_ptr make_io_device(int dev, int events_interested, int pri, void* cookie, bool is_per_thread_dev,
+                                 const ev_callback& cb);
 
     void attach_listen_sentinel_cb(const listen_sentinel_cb_t& cb);
     void detach_listen_sentinel_cb();
@@ -81,4 +80,3 @@ private:
     listen_sentinel_cb_t m_listen_sentinel_cb;
 };
 } // namespace iomgr
-#endif // IOMGR_INTERFACE_HPP

@@ -35,6 +35,7 @@
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_flip.hpp>
 #include <iomgr/drive_interface.hpp>
+#include "interfaces/drive_iocb.hpp"
 #include "interfaces/kernel_drive_interface.hpp"
 #include "iomgr_config.hpp"
 #include "reactor/reactor.hpp"
@@ -285,7 +286,7 @@ io_device_ptr DriveInterface::open_dev(const std::string& dev_name, int oflags) 
 
 size_t DriveInterface::get_size(IODevice* iodev) { return iodev->drive_interface()->get_dev_size(iodev); }
 
-void DriveInterface::increment_outstanding_counter(drive_iocb* iocb) {
+void increment_outstanding_counter(drive_iocb* iocb) {
     switch (iocb->op_type) {
     case DriveOpType::READ:
         COUNTER_INCREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
@@ -311,7 +312,7 @@ void DriveInterface::increment_outstanding_counter(drive_iocb* iocb) {
     ++thread_metrics.drive_io_count;
 }
 
-void DriveInterface::decrement_outstanding_counter(drive_iocb* iocb) {
+void decrement_outstanding_counter(drive_iocb* iocb) {
     switch (iocb->op_type) {
     case DriveOpType::READ:
         COUNTER_DECREMENT(iocb->iface->get_metrics(), outstanding_read_cnt, 1);
@@ -335,7 +336,7 @@ void DriveInterface::decrement_outstanding_counter(drive_iocb* iocb) {
 }
 
 #ifdef _PRERELEASE
-bool DriveInterface::inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb) {
+bool inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb) {
     auto closure = [iocb, cb = std::move(delayed_cb)]() {
         LOGDEBUGMOD(iomgr, "[device={},op_type={}]: Delayed completion simulation - finish", iocb->iodev->devname,
                     enum_name(iocb->op_type));

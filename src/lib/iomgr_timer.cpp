@@ -15,7 +15,8 @@
 #include <unordered_set>
 
 #include <iomgr/iomgr.hpp>
-#include <iomgr/iomgr_timer.hpp>
+#include "iomgr_timer_impl.hpp"
+#include "iomgr_helper.hpp"
 #include "reactor/reactor.hpp"
 
 extern "C" {
@@ -24,18 +25,10 @@ extern "C" {
 }
 namespace iomgr {
 
-#define PROTECTED_REGION(instructions)                                                                                 \
-    if (!is_thread_local()) m_list_mutex.lock();                                                                       \
-    instructions;                                                                                                      \
-    if (!is_thread_local()) m_list_mutex.unlock();
-
-#define LOCK_IF_GLOBAL()                                                                                               \
-    if (!is_thread_local()) m_list_mutex.lock();
-
-#define UNLOCK_IF_GLOBAL()                                                                                             \
-    if (!is_thread_local()) m_list_mutex.unlock();
-
-std::atomic< int64_t > timer::s_pending_scheduled_canceled{0};
+// Define the static members declared in timer base class
+std::mutex timer::s_pending_mutex{};
+std::condition_variable timer::s_pending_cv{};
+int32_t timer::s_pending_timers{0};
 
 timer_epoll::timer_epoll(const thread_specifier& scope) : timer(scope) {
     m_common_timer_io_dev = setup_timer_fd(false, true /* wait_to_setup */);
@@ -90,7 +83,7 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
         iodev->tinfo = std::make_unique< timer_info >(nanos_after, cookie, std::move(timer_fn), this);
 
         PROTECTED_REGION(m_recurring_timer_iodevs.insert(iodev)); // Add to list of recurring timer fds
-        thdl = timer_handle_t(this, iodev);
+        thdl = make_timer_handle(this, iodev);
     } else {
         tspec.it_interval.tv_sec = 0;
         tspec.it_interval.tv_nsec = 0;
@@ -101,8 +94,11 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
         raw_iodev = m_common_timer_io_dev.get();
 
         // Create a timer_info and add it to the heap.
-        PROTECTED_REGION(auto heap_hdl = m_timer_list.emplace(nanos_after, cookie, std::move(timer_fn), this));
-        thdl = timer_handle_t(this, heap_hdl);
+        timer_heap_t::handle_type heap_hdl;
+        LOCK_IF_GLOBAL();
+        heap_hdl = m_timer_list.emplace(nanos_after, cookie, std::move(timer_fn), this);
+        UNLOCK_IF_GLOBAL();
+        thdl = make_timer_handle(this, heap_hdl);
     }
 
     tspec.it_value.tv_sec = nanos_after / 1000000000;
@@ -117,7 +113,7 @@ timer_handle_t timer_epoll::schedule(uint64_t nanos_after, bool recurring, void*
 }
 
 void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
-    if (thandle == null_timer_handle) return;
+    if (!thandle) return;
     std::visit(overloaded{
                    [&](cshared< IODevice >& iodev) {
                        LOGINFO("Removing recurring {} timer fd {} device ",
@@ -129,7 +125,7 @@ void timer_epoll::cancel(timer_handle_t thandle, bool wait_to_cancel) {
                    },
                    [&](timer_heap_t::handle_type heap_hdl) { PROTECTED_REGION(m_timer_list.erase(heap_hdl)); },
                },
-               thandle.second);
+               timer_state(thandle).backing);
 }
 
 void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
@@ -174,8 +170,7 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
 
     LOGINFO("Creating {} {} timer fd {} and adding it into fd poll list",
             (is_recurring ? "recurring" : "non-recurring"), (is_thread_local() ? "per-thread" : "global"), fd);
-    auto iodev =
-        iomanager.generic_interface()->alloc_io_device(backing_dev_t(fd), EPOLLIN, 1, nullptr, m_scope, nullptr);
+    auto iodev = iomanager.generic_interface()->alloc_io_device(fd, EPOLLIN, 1, nullptr, m_scope, nullptr);
     iomanager.generic_interface()->add_io_device(iodev, wait_to_setup);
     if (iodev == nullptr) {
         close(fd);
@@ -183,7 +178,5 @@ std::shared_ptr< IODevice > timer_epoll::setup_timer_fd(bool is_recurring, bool 
     }
     return iodev;
 }
-
-
 
 } // namespace iomgr

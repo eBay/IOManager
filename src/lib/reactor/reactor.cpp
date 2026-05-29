@@ -21,6 +21,7 @@ extern "C" {
 
 #include <sisl/logging/logging.h>
 #include <iomgr/iomgr.hpp>
+#include "iomgr_msg.hpp"
 #include "reactor/reactor.hpp"
 #include "iomgr_config.hpp"
 

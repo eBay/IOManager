@@ -5,11 +5,11 @@
 #include <random>
 #include <vector>
 
-#include <gtest/gtest.h>
 
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
 #include <sisl/utility/thread_factory.hpp>
+#include <gtest/gtest.h>
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/io_environment.hpp>
@@ -28,8 +28,7 @@ SISL_OPTION_GROUP(test_timer,
                    "number"),
                   (time_check, "Need timeout time check?", "time_check", "time_check",
                    ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"),)
-
+                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"))
 #define ENABLED_OPTIONS logging, iomgr, test_timer, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 

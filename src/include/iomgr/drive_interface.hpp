@@ -12,8 +12,7 @@
  * CONDITIONS OF ANY KIND, either express or implied. See the License for the
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
-#ifndef IOMGR_DRIVE_INTERFACE_HPP
-#define IOMGR_DRIVE_INTERFACE_HPP
+#pragma once
 
 #include <fcntl.h>
 #include <chrono>
@@ -25,16 +24,13 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
-#include <sisl/async/cqe_state.hpp>
 #include <sisl/async/disk_task.hpp>
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
-using Clock = std::chrono::steady_clock;
 
 ENUM(drive_interface_type, uint8_t, aio, uring)
-ENUM(DriveOpType, uint8_t, WRITE, READ, UNMAP, WRITE_ZERO, FSYNC)
 
 struct drive_attributes {
     uint32_t phys_page_size{4096};        // Physical page size of flash ssd/nvme. This is optimal size to do IO
@@ -59,75 +55,7 @@ struct drive_attributes {
     }
 };
 
-class DriveInterfaceMetrics : public sisl::MetricsGroup {
-public:
-    explicit DriveInterfaceMetrics(const char* group_name, const char* inst_name) :
-            sisl::MetricsGroup(group_name, inst_name) {
-        REGISTER_COUNTER(completion_errors, "IO Completion errors");
-        REGISTER_COUNTER(write_io_submission_errors, "write submission errors", "io_submission_errors",
-                         {"io_direction", "write"});
-        REGISTER_COUNTER(read_io_submission_errors, "read submission errors", "io_submission_errors",
-                         {"io_direction", "read"});
-        REGISTER_COUNTER(resubmit_io_on_err, "number of times ios are resubmitted");
-
-        REGISTER_COUNTER(outstanding_write_cnt, "outstanding write cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_read_cnt, "outstanding read cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_unmap_cnt, "outstanding unmap cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_fsync_cnt, "outstanding fsync cnt", sisl::_publish_as::publish_as_gauge);
-        REGISTER_COUNTER(outstanding_write_zero_cnt, "outstanding write zero cnt", sisl::_publish_as::publish_as_gauge);
-    }
-
-    virtual ~DriveInterfaceMetrics() { deregister_me_from_farm(); }
-};
-
-class DriveInterface;
-struct drive_iocb {
-#ifndef NDEBUG
-    static std::atomic< uint64_t > _iocb_id_counter;
-#endif
-    static constexpr int inlined_iov_count = 4;
-    typedef std::array< iovec, inlined_iov_count > inline_iov_array;
-    typedef std::unique_ptr< iovec[] > large_iov_array;
-
-    IODevice* iodev;
-    DriveInterface* iface;
-    DriveOpType op_type;
-    uint64_t size;
-    uint64_t offset;
-    uint64_t unique_id{0}; // used by io watchdog
-    int iovcnt = 0;
-    int64_t result{-1};
-    sisl::async::cqe_awaitable completion{};
-    uint32_t resubmit_cnt{0};
-    uint32_t part_read_resubmit_cnt{0}; // only valid for uring interface
-    IOReactor* initiating_reactor;
-#ifndef NDEBUG
-    uint64_t iocb_id;
-#endif
-    Clock::time_point op_start_time;
-    Clock::time_point op_submit_time;
-
-private:
-    // Inline or additional memory
-    std::variant< inline_iov_array, large_iov_array, char* > user_data;
-
-public:
-    drive_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset);
-    virtual ~drive_iocb() = default;
-
-    void set_iovs(const iovec* iovs, const int count);
-    void set_data(char* data);
-
-    iovec* get_iovs() const;
-    void update_iovs_on_partial_result();
-
-    char* get_data() const { return std::get< char* >(user_data); }
-    bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
-
-    std::string to_string() const;
-};
-
-class IOWatchDog;
+class DriveInterfaceMetrics; // defined in drive_iocb.hpp (internal)
 
 class DriveInterface : public IOInterface {
 public:
@@ -151,8 +79,7 @@ public:
                                                                        uint64_t offset) = 0;
     virtual sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
-
-    virtual DriveInterfaceMetrics& get_metrics() = 0;
+    virtual class DriveInterfaceMetrics& get_metrics() = 0;
 
     static drive_attributes get_attributes(const std::string& dev_name);
     static drive_type get_drive_type(const std::string& dev_name);
@@ -161,12 +88,6 @@ public:
     static io_device_ptr open_dev(const std::string& dev_name, int oflags);
     static std::shared_ptr< DriveInterface > get_iface_for_drive(const std::string& dev_name, const drive_type dtype);
     static size_t get_size(IODevice* iodev);
-    static void increment_outstanding_counter(drive_iocb* iocb);
-    static void decrement_outstanding_counter(drive_iocb* iocb);
-
-#ifdef _PRERELEASE
-    static bool inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb);
-#endif
 
 protected:
     virtual size_t get_dev_size(IODevice* iodev) = 0;
@@ -183,4 +104,3 @@ private:
     static std::mutex s_dev_attrs_lookup_mtx;
 };
 } // namespace iomgr
-#endif // IOMGR_DEFAULT_INTERFACE_HPP

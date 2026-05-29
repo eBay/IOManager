@@ -10,8 +10,8 @@
 
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
-
 #include <gtest/gtest.h>
+
 
 #include <iomgr/iomgr.hpp>
 #include "io_examiner/io_job.hpp"
@@ -32,8 +32,7 @@ SISL_OPTION_GROUP(test_io,
                   (device_list, "", "device_list", "List of device paths",
                    ::cxxopts::value< std::vector< std::string > >(), "path [...]"),
                   (device_size, "", "device_size", "size of devices to do IO on",
-                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"),)
-
+                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"))
 #define ENABLED_OPTIONS logging, iomgr, test_io, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 

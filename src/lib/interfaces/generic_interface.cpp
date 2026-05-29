@@ -14,7 +14,7 @@
  **************************************************************************/
 #include <sisl/logging/logging.h>
 #include <iomgr/iomgr.hpp>
-#include <iomgr/iomgr_msg.hpp>
+#include "iomgr_msg.hpp"
 #include <iomgr/io_interface.hpp>
 #include "reactor/reactor.hpp"
 
@@ -53,7 +53,7 @@ int IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
     } else {
         {
             std::unique_lock lg(m_mtx);
-            m_iodev_map.insert(std::pair< backing_dev_t, io_device_ptr >(iodev->dev, iodev));
+            m_iodev_map.insert(std::pair< int, io_device_ptr >(iodev->dev, iodev));
         }
         if (wait_to_add) {
             added_count = iomanager.run_on_wait(iodev->global_scope(), add_to_reactor);
@@ -154,7 +154,7 @@ void IOInterface::on_reactor_stop(IOReactor* reactor) {
     }
 }
 
-io_device_ptr IOInterface::alloc_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+io_device_ptr IOInterface::alloc_io_device(int dev, int events_interested, int pri, void* cookie,
                                            const thread_specifier& scope, const ev_callback& cb) {
     auto iodev = std::make_shared< IODevice >(pri, scope);
     iodev->dev = dev;
@@ -168,7 +168,7 @@ io_device_ptr IOInterface::alloc_io_device(backing_dev_t dev, int events_interes
 
 ///////////////////////////////////////// GenericIOInterface Section ////////////////////////////////////////////
 thread_local listen_sentinel_cb_t GenericIOInterface::t_listen_sentinel_cb;
-io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+io_device_ptr GenericIOInterface::make_io_device(int dev, int events_interested, int pri, void* cookie,
                                                  bool is_per_thread_dev, const ev_callback& cb) {
     return make_io_device(dev, events_interested, pri, cookie,
                           is_per_thread_dev ? thread_specifier{iomanager.this_reactor()}
@@ -176,7 +176,7 @@ io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_i
                           std::move(cb));
 }
 
-io_device_ptr GenericIOInterface::make_io_device(backing_dev_t dev, int events_interested, int pri, void* cookie,
+io_device_ptr GenericIOInterface::make_io_device(int dev, int events_interested, int pri, void* cookie,
                                                  const thread_specifier& scope, const ev_callback& cb) {
     auto iodev = alloc_io_device(dev, events_interested, pri, cookie, scope, cb);
     add_io_device(iodev, true /* wait_to_add */);

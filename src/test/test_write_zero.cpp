@@ -168,7 +168,7 @@ public:
         bool all_zero{true};
         size_t remain_size = size;
 
-        const int* pInt = r_cast< int* >(buf);
+        const int* pInt = reinterpret_cast< int* >(buf);
         for (; remain_size >= sizeof(int); remain_size -= sizeof(int), ++pInt) {
             if (*pInt != 0) {
                 all_zero = false;
@@ -177,7 +177,7 @@ public:
         }
 
         if (all_zero && (remain_size > 0)) {
-            const uint8_t* pByte = r_cast< const uint8_t* >(pInt);
+            const uint8_t* pByte = reinterpret_cast< const uint8_t* >(pInt);
             for (; remain_size > 0; --remain_size, ++pByte) {
                 if (*pByte != 0x00) {
                     all_zero = false;

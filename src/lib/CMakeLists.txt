@@ -11,15 +11,18 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPACKAGE_NAME=\\\"${PROJECT_NAME}\\\""
 
 find_package(flatbuffers REQUIRED)
 find_package(sisl REQUIRED)
-find_package(liburing REQUIRED)
 find_package(zmarok-semver REQUIRED)
 
 list(APPEND COMMON_DEPS
-      liburing::liburing
       sisl::sisl
       sisl::http
       aio
     )
+if (${liburing_FOUND})
+list(APPEND COMMON_DEPS
+      liburing::liburing
+  )
+endif ()
 
 add_subdirectory(interfaces)
 add_subdirectory(epoll)
@@ -32,6 +35,7 @@ set(IOMGR_OBJECTS
     $<TARGET_OBJECTS:iomgr_reactor>
     io_environment.cpp
     iomgr.cpp
+    iomgr_helper.cpp
     iomgr_timer.cpp
     watchdog.cpp
 )
