@@ -18,16 +18,7 @@
 
 #include <iomgr/io_environment.hpp>
 #include <iomgr/iomgr.hpp>
-
-struct fire_and_forget_task {
-    struct promise_type {
-        fire_and_forget_task get_return_object() noexcept { return {}; }
-        std::suspend_never initial_suspend() noexcept { return {}; }
-        std::suspend_never final_suspend() noexcept { return {}; }
-        void return_void() noexcept {}
-        void unhandled_exception() { std::terminate(); }
-    };
-};
+#include <iomgr/coro.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -86,9 +77,11 @@ public:
             ASSERT_NE(fd, -1) << "Open of device " << dev << " failed";
             const auto ret{fallocate(fd, 0, 0, dev_size)};
             ASSERT_EQ(ret, 0) << "fallocate of device " << dev << " for size " << dev_size << " failed";
-        }        ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
+        }
+        ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
 
-        int oflags{O_CREAT | O_RDWR};        m_iodev = iomgr::DriveInterface::open_dev(dev, oflags);
+        int oflags{O_CREAT | O_RDWR};
+        m_iodev = iomgr::DriveInterface::open_dev(dev, oflags);
         m_driveattr = iomgr::DriveInterface::get_attributes(dev);
 
         s_runner.start();
@@ -119,11 +112,9 @@ public:
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz = std::min(max_io_size, remain_size);
-            [this, buf, this_sz, cur_offset]() -> fire_and_forget_task {
-                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz,
-                                                                 cur_offset);
-                on_write_completion(buf, this_sz);
-            }();
+            iomgr::detach(
+                m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset),
+                [this, buf, this_sz](std::error_code) { on_write_completion(buf, this_sz); });
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
@@ -142,26 +133,25 @@ public:
 
     void write_zero_and_read() {
         m_start_time = Clock::now();
-        [this]() -> fire_and_forget_task {
-            co_await m_iodev->drive_interface()->async_write_zero(m_iodev.get(), m_total_size, m_start_offset);
-            LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_total_size,
-                    get_elapsed_time_us(m_start_time));
+        iomgr::detach(m_iodev->drive_interface()->async_write_zero(m_iodev.get(), m_total_size, m_start_offset),
+                      [this](std::error_code) {
+                          LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s",
+                                  m_total_size, get_elapsed_time_us(m_start_time));
 
-            m_start_time = Clock::now();
-            auto read_remain_size = m_total_size;
-            auto cur_offset = m_start_offset;
-            while (read_remain_size > 0) {
-                const auto this_sz = std::min(max_io_size, read_remain_size);
-                auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-                [this, read_buf, this_sz, cur_offset]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf, (uint32_t)this_sz,
-                                                                    cur_offset);
-                    validate_zeros(read_buf, this_sz);
-                }();
-                cur_offset += this_sz;
-                read_remain_size -= this_sz;
-            }
-        }();
+                          m_start_time = Clock::now();
+                          auto read_remain_size = m_total_size;
+                          auto cur_offset = m_start_offset;
+                          while (read_remain_size > 0) {
+                              const auto this_sz = std::min(max_io_size, read_remain_size);
+                              auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
+                              iomgr::detach(
+                                  m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf,
+                                                                         (uint32_t)this_sz, cur_offset),
+                                  [this, read_buf, this_sz](std::error_code) { validate_zeros(read_buf, this_sz); });
+                              cur_offset += this_sz;
+                              read_remain_size -= this_sz;
+                          }
+                      });
     }
 
     void validate_zeros(uint8_t* buf, size_t size) {

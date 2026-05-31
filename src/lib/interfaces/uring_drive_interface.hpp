@@ -15,11 +15,8 @@
 #pragma once
 
 #include <unistd.h>
+#include <cstdint>
 #include <string>
-#include <stack>
-#include <queue>
-#include <atomic>
-#include <mutex>
 
 #include <fcntl.h>
 
@@ -27,11 +24,6 @@
 /// with system header /usr/include/futex.h
 #define LIBURING_COMPAT_H
 #define BLOCK_URING_CMD_DISCARD _IO(0x12, 0)
-struct open_how {
-    uint64_t flags;
-    uint64_t mode;
-    uint64_t resolve;
-};
 ///
 
 #include <liburing.h>
@@ -39,9 +31,11 @@ struct open_how {
 
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/fds/buffer.hpp>
+#include <sisl/async/io_uring_scheduler.hpp>
 
 #include "interfaces/kernel_drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
+#include <iomgr/drive_interface.hpp> // exec::task return type
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
@@ -60,33 +54,19 @@ public:
     ~UringDriveInterfaceMetrics() = default;
 };
 
-// Per thread structure which has all details for uring
+// Per-thread io_uring channel. The ring's completion delivery + SQE batching is owned by the
+// sisl::async::io_uring_scheduler; this struct just holds the ring, the scheduler, the wakeup
+// eventfd device, and the outstanding-op count used to drive tight-polling and shutdown drain.
 class UringDriveInterface;
 struct uring_drive_channel {
-    struct io_uring m_ring;
-    std::queue< drive_iocb* > m_iocb_waitq;
+    ::io_uring m_ring{};
+    sisl::async::io_uring_scheduler m_sched; // wraps &m_ring; non-movable
     io_device_ptr m_ring_ev_iodev;
-    // prepared_ios are IOs sent to uring but not submitted yet
-    uint32_t m_prepared_ios{0};
-    // in_flight_ios are IOs submitted to uring, but not completed yet
-    uint32_t m_in_flight_ios{0};
+    uint64_t m_outstanding{0};     // in-flight drive coroutines on this reactor
+    int m_saved_poll_interval{-1}; // reactor poll interval captured while tight-polling outstanding IO
 
     uring_drive_channel(UringDriveInterface* iface);
     ~uring_drive_channel();
-    drive_iocb* pop_waitq() {
-        if (m_iocb_waitq.size() == 0) { return nullptr; }
-        drive_iocb* iocb = m_iocb_waitq.front();
-        m_iocb_waitq.pop();
-        return iocb;
-    }
-
-    size_t waitq_size() const { return m_iocb_waitq.size(); }
-    struct io_uring_sqe* get_sqe_or_enqueue(drive_iocb* iocb);
-    void submit_ios();
-    // It assumes SQ size is same as CQ size, so we check the counters to make sure CQ doesn't overflow.
-    bool can_submit() const;
-    void submit_if_needed(drive_iocb* iocb, struct io_uring_sqe*, bool part_of_batch);
-    void drain_waitq();
 };
 
 class UringDriveInterface : public KernelDriveInterface {
@@ -98,31 +78,36 @@ public:
 
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
-    sisl::async::disk_task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
-                                                          uint64_t offset, bool part_of_batch = false) override;
-    sisl::async::disk_task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                           uint64_t offset, bool part_of_batch = false) override;
-    sisl::async::disk_task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                                         bool part_of_batch = false) override;
-    sisl::async::disk_task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                                          uint64_t offset, bool part_of_batch = false) override;
-    sisl::async::disk_task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                          bool part_of_batch = false) override;
-    sisl::async::disk_task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size,
-                                                               uint64_t offset) override;
-    sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) override;
+
+    exec::task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                              bool part_of_batch = false) override;
+    exec::task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                               uint64_t offset, bool part_of_batch = false) override;
+    exec::task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                             bool part_of_batch = false) override;
+    exec::task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                              uint64_t offset, bool part_of_batch = false) override;
+    exec::task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                              bool part_of_batch = false) override;
+    exec::task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
+    exec::task< std::error_code > queue_fsync(IODevice* iodev) override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
-    void handle_completions();
-    void submit_batch() override;
+    void submit_batch() override; // no-op: the scheduler flushes queued SQEs in poll_once
+
+    // Reactor sentinel: flush queued SQEs + reap completions (resuming suspended coroutines).
+    void poll_completions();
+
+    static uring_drive_channel* this_channel() { return t_uring_ch; }
+
 protected:
     DriveInterfaceMetrics& get_metrics() override { return m_metrics; }
 
 private:
     void init_iface_reactor_context(IOReactor*) override;
     void clear_iface_reactor_context(IOReactor*) override;
-
-    void complete_io(drive_iocb* iocb);
+    // Reactor stop: drive poll_once until every in-flight coroutine has completed and freed.
+    void drain_outstanding_ios();
 
 private:
     static thread_local uring_drive_channel* t_uring_ch;

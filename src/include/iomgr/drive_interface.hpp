@@ -24,13 +24,13 @@
 #include <system_error>
 
 #include <nlohmann/json.hpp>
-#include <sisl/async/disk_task.hpp>
+#include <exec/task.hpp>
 #include <iomgr/io_interface.hpp>
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
 
-ENUM(drive_interface_type, uint8_t, aio, uring)
+ENUM(drive_interface_type, uint8_t, uring)
 
 struct drive_attributes {
     uint32_t phys_page_size{4096};        // Physical page size of flash ssd/nvme. This is optimal size to do IO
@@ -63,21 +63,18 @@ public:
     virtual drive_interface_type interface_type() const = 0;
     virtual void close_dev(const io_device_ptr& iodev) = 0;
 
-    virtual sisl::async::disk_task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
-                                                                  uint64_t offset, bool part_of_batch = false) = 0;
-    virtual sisl::async::disk_task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                                   uint32_t size, uint64_t offset,
-                                                                   bool part_of_batch = false) = 0;
-    virtual sisl::async::disk_task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size,
-                                                                 uint64_t offset, bool part_of_batch = false) = 0;
-    virtual sisl::async::disk_task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                                  uint32_t size, uint64_t offset,
-                                                                  bool part_of_batch = false) = 0;
-    virtual sisl::async::disk_task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                                                  bool part_of_batch = false) = 0;
-    virtual sisl::async::disk_task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size,
-                                                                       uint64_t offset) = 0;
-    virtual sisl::async::disk_task< std::error_code > queue_fsync(IODevice* iodev) = 0;
+    virtual exec::task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
+                                                      bool part_of_batch = false) = 0;
+    virtual exec::task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                       uint64_t offset, bool part_of_batch = false) = 0;
+    virtual exec::task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
+                                                     bool part_of_batch = false) = 0;
+    virtual exec::task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
+                                                      uint64_t offset, bool part_of_batch = false) = 0;
+    virtual exec::task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
+                                                      bool part_of_batch = false) = 0;
+    virtual exec::task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) = 0;
+    virtual exec::task< std::error_code > queue_fsync(IODevice* iodev) = 0;
     virtual void submit_batch() = 0;
     virtual class DriveInterfaceMetrics& get_metrics() = 0;
 

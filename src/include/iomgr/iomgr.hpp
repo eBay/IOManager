@@ -43,7 +43,7 @@
 
 namespace iomgr {
 using timer_callback_t = std::function< void(void*) >;
-using timer_handle_t   = std::shared_ptr< void >; // opaque; null == no active timer
+using timer_handle_t = std::shared_ptr< void >; // opaque; null == no active timer
 
 struct iomgr_msg;
 struct iomgr_waitable_msg;
@@ -79,7 +79,6 @@ public:
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
-    friend class AioDriveInterface;
     friend class IOManagerEpollImpl;
 
     static IOManager& instance() {
