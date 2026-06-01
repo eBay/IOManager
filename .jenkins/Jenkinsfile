@@ -3,90 +3,63 @@ pipeline {
 
     environment {
         ARTIFACTORY_PASS = credentials('ARTIFACTORY_PASS')
-        CONAN_USER = 'oss'
-        STABLE_BRANCH = 'stable/v*'
-        BUILD_MISSING = "--build missing"
-        built_chain = ''
-        failed_pkg = ''
-    }
-
-    parameters {
-        string(defaultValue: "", description: 'UpstreamTriggered', name: 'upstream_triggered')
     }
 
     stages {
-        stage('Get Version') {
+        stage('Mission Briefing') {
             steps {
                 script {
                     PROJECT = sh(script: "grep -m 1 'name =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
+                    CONAN_FLAGS = "-s:h compiler.cppstd=23 -c tools.build:skip_test=True --build missing --build '${PROJECT}*'"
                     VER = sh(script: "grep -m 1 ' version =' conanfile.py | awk '{print \$3}' | tr -d '\n' | tr -d '\"'", returnStdout: true)
-                    CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
-                    TAG = "${VER}@${CONAN_USER}/${CONAN_CHANNEL}"
-                    CONAN_FLAGS="--name ${PROJECT} --user ${CONAN_USER} --channel ${CONAN_CHANNEL}"
-                    slackSend color: '#0063D1', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* is building: ${BUILD_URL}"
-                    env.pkg_version = "${PROJECT}/${TAG}"
+                    SLACK_THREAD = '#sds-ci'
                 }
             }
         }
 
-        stage('Tag Stable Build') {
-            when { branch "${STABLE_BRANCH}" }
+        stage('Test Flight') {
+            when { not { branch "stable/v*" } }
             steps {
                 script {
-                    TAG = "${VER}@"
-                    CONAN_FLAGS = "--name ${PROJECT}"
+                    CONAN_CHANNEL = sh(script: "echo ${BRANCH_NAME} | sed -E 's,(\\w+-?\\d*)/.*,\\1,' | sed -E 's,-,_,' | tr -d '\n'", returnStdout: true)
+                    CONAN_FLAGS = "${CONAN_FLAGS} --user oss --channel ${CONAN_CHANNEL}"
                 }
             }
         }
 
-        stage("Compile") {
+        stage("Pre-flight") {
             steps {
-                sh "conan create ${BUILD_MISSING} -s:h build_type=Debug ${CONAN_FLAGS} . ; \
-                    conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} . ; \
-                    conan create ${BUILD_MISSING} -s:h build_type=RelWithDebInfo -o sisl/*:prerelease=True -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} . ; \
-                    "
+                script {
+                    def slackResponse = slackSend(color: '#0063D1', channel: '#sds-ci', message: "🚀 *${PROJECT}* `${VER}` on `${BRANCH_NAME}` — build #${BUILD_NUMBER} has begun systems check\nCountdown initiated. Manage your expectations.\n<${BUILD_URL}|Watch nervously>")
+                    SLACK_THREAD = slackResponse?.threadId ?: '#sds-ci'
+                    sh "conan graph info -s:h build_type=Debug ${CONAN_FLAGS} ."
+                    sh "conan graph info -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} ."
+                }
             }
         }
 
-        stage("Deploy") {
+        stage("Ignition") {
+            steps {
+                script {
+                    slackSend color: '#9B59B6', channel: "${SLACK_THREAD}", message: "⛽ *${PROJECT}* `${BRANCH_NAME}` build #${BUILD_NUMBER} \nAll systems Go...going somewhere anyways...\nLet's light this 🕯️... 3... 2... 1...!"
+                }
+                sh "conan create -s:h build_type=Debug ${CONAN_FLAGS} ."
+                script {
+                    slackSend color: '#E67E22', channel: "${SLACK_THREAD}", message: "🧑‍🚀 *${PROJECT}* `${BRANCH_NAME}`\n*Debug: green.* One more build between us and home.\nI've been in here long enough to start naming the compiler warnings. Don't ask.\nRelWithDebInfo... *please don't fail me now.*"
+                }
+                sh "conan create -s:h build_type=RelWithDebInfo -o sisl/*:malloc_impl=tcmalloc ${CONAN_FLAGS} ."
+            }
+        }
+
+        stage("Touchdown") {
             when {
                 expression { !(env.BRANCH_NAME =~ /PR-/) }
             }
             steps {
                 sh "conan remote login -p ${ARTIFACTORY_PASS} ebay-local _service_sds"
-                sh "conan graph info ./ | grep 'ref: ' | awk '{print \$2}'  | sort | uniq | grep -v ${PROJECT} | grep -v '#' | while read pkg; do conan upload -r ebay-local -c \"\${pkg}\"; done"
-                sh "conan upload ${PROJECT}/${TAG} -c -r ebay-local"
-            }
-        }
-        stage("Downstream Build") {
-            when { allOf {
-               expression { (env.BRANCH_NAME == "${STABLE_BRANCH}") }
-               expression { (!"${upstream_triggered}") || ("${upstream_triggered}" == "") }
-            } }
-        
-            stages {
-                stage('Homestore') {
-                    steps {
-                        script {
-                            built_chain = env.pkg_version
-                            def hs_res = build job: "Homestore/${TARGET_BRANCH}", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
-                            built_chain = "${built_chain}" + ", " + "$hs_res.buildVariables.pkg_version"
-                        }
-                    }
-                    post {
-                        failure { script { failed_pkg = "Homestore" } }
-                    }
-                }
-                stage('HomeObject') {
-                    steps {
-                        script {
-                            def hrepl_res = build job: "HomeObject/main", parameters: [[$class: 'StringParameterValue', name: 'upstream_triggered', value: 'true']], propagate: true
-                            built_chain = "${built_chain}" + ", " + "$hrepl_res.buildVariables.pkg_version"
-                        }
-                    }
-                    post {
-                        failure { script { failed_pkg = "HomeObject" } }
-                    }
+                sh "conan upload '*:*' -r ebay-local --confirm"
+                script {
+                    slackSend color: '#8A6BBF', channel: "${SLACK_THREAD}", message: "📦  (`${BRANCH_NAME}`) — everyone survived long enough to land in Artifactory\nPackage `${PROJECT}@${VER}` is live and ready to pull downstream"
                 }
             }
         }
@@ -95,14 +68,16 @@ pipeline {
     post {
         failure {
             script {
-                if ("${failed_pkg}" != "") {
-                    slackSend color: '#E43237', channel: '#homestore-build', message: "@here IOManager's downstream pkg - *${failed_pkg}* build failed.\n*URL:* ${BUILD_URL}\nIf result not expected, revert (aka `conan remove -r ebay-local`) these pkgs: ```${built_chain}```"
-                }
+                def log = currentBuild.rawBuild.getLog(40)
+                    .collect { it.replaceAll(/\x1B\[[0-9;]*[a-zA-Z]/, '') }
+                    .dropRight(15)
+                    .join('\n')
+                def fence = '```'
+                slackSend color: '#E43237', channel: "${SLACK_THREAD}", replyBroadcast: true, message: "💀 *${PROJECT}* `${VER}` (`${BRANCH_NAME}`) build #${BUILD_NUMBER} didn't make it\nHeld on for _${currentBuild.durationString}_ before calling it quits\n<${BUILD_URL}|Post-mortem>\n🪦\n${fence}${log}${fence}"
             }
-            slackSend color: '#E43237', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has had a failure : ${BUILD_URL}"
         }
         success {
-            slackSend color: '#85B717', channel: '#sds-ci', message: "*${PROJECT}/${TAG}* has completed successfully."
+            slackSend color: '#85B717', channel: "${SLACK_THREAD}", replyBroadcast: true, message: "✅ *${PROJECT}* `${VER}` (`${BRANCH_NAME}`) build #${BUILD_NUMBER} — it actually worked\nDebug + RelWithDebInfo both green in _${currentBuild.durationString}_\n<${BUILD_URL}|Full report>\n🍾 Mission successful!"
         }
     }
 }
