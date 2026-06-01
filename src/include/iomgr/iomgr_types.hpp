@@ -83,6 +83,11 @@ ENUM(drive_type, uint8_t,
      unknown       // Try to deduce it while loading
 )
 
+// The backend that services a drive. Only io_uring remains; kept as an enum so the (internal) drive
+// registry can stay generic. Declared here (not in the now-internal drive_interface.hpp) because the
+// public IOManager::get_drive_interface() signature names it.
+ENUM(drive_interface_type, uint8_t, uring)
+
 } // namespace iomgr
 
 #define IOMGR_LOG_MODS iomgr, io_wd

@@ -38,12 +38,10 @@
 #include <sisl/utility/thread_buffer.hpp>
 
 #include <iomgr/iomgr_types.hpp>
-#include <iomgr/drive_interface.hpp>
-#include <iomgr/io_device.hpp>
 
 namespace iomgr {
 using timer_callback_t = std::function< void(void*) >;
-using timer_handle_t   = std::shared_ptr< void >; // opaque; null == no active timer
+using timer_handle_t = std::shared_ptr< void >; // opaque; null == no active timer
 
 struct iomgr_msg;
 struct iomgr_waitable_msg;
@@ -79,8 +77,11 @@ public:
     friend class IOInterface;
     friend class DriveInterface;
     friend class GenericIOInterface;
-    friend class AioDriveInterface;
     friend class IOManagerEpollImpl;
+    // Reach the internal generic_interface() through the iomanager singleton (friendship isn't inherited,
+    // so DriveInterface's friendship doesn't cover these):
+    friend class uring_drive_channel; // per-reactor uring queue: registers its eventfd iodevice
+    friend class timer_epoll;         // arms/cancels its timer fds
 
     static IOManager& instance() {
         static IOManager inst;
@@ -147,27 +148,6 @@ public:
      */
     void stop_io_loop();
 
-    ////////////////////////////////// Interface/Device Related Operations ////////////////////////////////
-    /**
-     * @brief Add a new IOInterface to the iomanager. All iodevice added to IOManager have to be part of some interface.
-     * By default iomanager automatically creates genericinterface and driveinterfaces. Any additional interface can
-     * be added through this API.
-     *
-     * @param iface Shared pointer to the IOInterface to be added
-     * @param iface_scope [OPTIONAL] Scope of which reactors these interface is to be added. By default it will be
-     * added to all IO reactors. While it can accept any reactor_regex, really it is not practical to use
-     * reactor_regex::random_user or reactor_regex::any_worker.
-     */
-    void add_interface(cshared< IOInterface >& iface, reactor_regex iface_scope = reactor_regex::all_io);
-
-    /***
-     * @brief Remove the IOInterface from the iomanager. Once removed, it will remove all the devices added to that
-     * interface and cleanup their resources.
-     *
-     * @param iface: Shared pointer to the IOInterface to be removed.
-     */
-    void remove_interface(cshared< IOInterface >& iface);
-
     ////////////////////////////////// Message Passing Section ////////////////////////////////
     // Templates keep the exact callable type visible to the compiler; dispatch goes through
     // erased void*/function-pointer bridge so iomgr_msg stays out of the public header.
@@ -207,7 +187,6 @@ public:
     }
 
     ///////////////////////////// Access related methods /////////////////////////////
-    GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
     uint32_t num_workers() const { return m_num_workers; }
     bool is_uring_capable() const { return m_is_uring_capable; }
 
@@ -238,14 +217,21 @@ public:
     void set_poll_interval(const int interval);
     int get_poll_interval() const;
 
-    IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
-    void drive_interface_submit_batch();
-
+    // Returns an iomgr-internal metrics type; used only by the internal drive path (not a consumer API),
+    // but left public because its callers are free functions rather than friendable members.
     IOThreadMetrics& this_thread_metrics();
 
 private:
     IOManager();
     ~IOManager();
+
+    // Internal accessors: these take/return iomgr-internal types (IOInterface / GenericIOInterface /
+    // IOWatchDog), so they are not part of the consumer-facing API. Friends above (interfaces,
+    // reactors, uring_drive_channel, timer_epoll) reach them through the iomanager singleton.
+    void add_interface(cshared< IOInterface >& iface, reactor_regex iface_scope = reactor_regex::all_io);
+    void remove_interface(cshared< IOInterface >& iface);
+    GenericIOInterface* generic_interface() { return m_default_general_iface.get(); }
+    IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
 
     void foreach_interface(const std::function< void(const cshared< IOInterface >&) >& iface_cb);
     void create_worker_reactors();

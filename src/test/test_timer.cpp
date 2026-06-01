@@ -1,10 +1,11 @@
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <random>
+#include <thread>
 #include <vector>
-
 
 #include <sisl/logging/logging.h>
 #include <sisl/options/options.h>
@@ -13,22 +14,21 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/io_environment.hpp>
+#include <iomgr/timer.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
 
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SISL_OPTION_GROUP(test_timer,
-                  (io_threads, "", "io_threads", "io_threads",
-                   ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
-                  (user_threads, "", "user_threads", "user_threads", ::cxxopts::value< uint32_t >()->default_value("2"),
-                   "number"),
-                  (num_timers, "", "num_timers", "num_timers", ::cxxopts::value< uint64_t >()->default_value("1000"),
-                   "number"),
-                  (time_check, "Need timeout time check?", "time_check", "time_check",
-                   ::cxxopts::value< bool >()->default_value("false"), "true or false"),
-                  (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"))
+SISL_OPTION_GROUP(
+    test_timer,
+    (io_threads, "", "io_threads", "io_threads", ::cxxopts::value< uint32_t >()->default_value("4"), "number"),
+    (user_threads, "", "user_threads", "user_threads", ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
+    (num_timers, "", "num_timers", "num_timers", ::cxxopts::value< uint64_t >()->default_value("1000"), "number"),
+    (time_check, "Need timeout time check?", "time_check", "time_check",
+     ::cxxopts::value< bool >()->default_value("false"), "true or false"),
+    (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("100"), "number"))
 #define ENABLED_OPTIONS logging, iomgr, test_timer, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
@@ -63,7 +63,9 @@ static uint64_t g_iters{0};
 static bool g_need_time_check{false};
 static std::vector< timer_handle_t > g_thdls;
 
-void glob_setup() {    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();    g_user_threads = SISL_OPTIONS["user_threads"].as< uint32_t >();
+void glob_setup() {
+    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
+    g_user_threads = SISL_OPTIONS["user_threads"].as< uint32_t >();
     g_num_timers = SISL_OPTIONS["num_timers"].as< uint64_t >();
     g_iters = SISL_OPTIONS["num_timers"].as< uint64_t >();
     g_need_time_check = SISL_OPTIONS["time_check"].as< bool >();
@@ -184,6 +186,44 @@ protected:
 TEST_F(TimerTest, global_recurring_timer) {
     create_random_timers(reactor_regex::all_worker, true /* recurring */);
     wait_for_all_timers();
+}
+
+// Exercises the RAII timer API: a one-shot fires once and self-removes, a recurring timer stops
+// when its token is dropped, and moving a token transfers ownership without double-cancelling.
+TEST_F(TimerTest, raii_token_lifecycle) {
+    std::atomic< int > oneshot_count{0};
+    std::atomic< int > recurring_count{0};
+
+    // (1) Fire-and-forget one-shot fires exactly once, then self-removes (nothing to cancel).
+    iomgr::schedule_oneshot(
+        2ms, reactor_regex::all_worker, [&oneshot_count]() { ++oneshot_count; }, true /* wait_to_schedule */);
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(oneshot_count.load(), 1);
+
+    // (2) A recurring timer stops firing once its token is destroyed.
+    {
+        auto tok = iomgr::schedule_recurring(
+            1ms, reactor_regex::all_worker, [&recurring_count]() { ++recurring_count; }, true /* wait_to_schedule */);
+        ASSERT_TRUE(tok.active());
+        while (recurring_count.load() < 3) {
+            std::this_thread::sleep_for(1ms);
+        }
+    } // <-- token destructor cancels the recurring timer
+    std::this_thread::sleep_for(50ms); // let any in-flight callbacks drain
+    const int settled = recurring_count.load();
+    std::this_thread::sleep_for(50ms);
+    EXPECT_EQ(recurring_count.load(), settled) << "recurring timer kept firing after its token was dropped";
+
+    // (3) Move transfers ownership; the moved-from token is inactive and won't double-cancel.
+    auto a = iomgr::schedule_recurring(50ms, reactor_regex::all_worker, []() {}, true /* wait_to_schedule */);
+    ASSERT_TRUE(a.active());
+    auto b = std::move(a);
+    EXPECT_FALSE(a.active());
+    EXPECT_TRUE(b.active());
+    b.cancel(true /* wait */);
+    EXPECT_FALSE(b.active());
+    b.cancel(); // idempotent
+    EXPECT_FALSE(b.active());
 }
 
 /* NOTE: Make sure this is the last test case, so that iomanager stop is running in parallel to timer test */

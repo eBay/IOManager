@@ -34,7 +34,7 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_flip.hpp>
-#include <iomgr/drive_interface.hpp>
+#include "drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
 #include "interfaces/kernel_drive_interface.hpp"
 #include "iomgr_config.hpp"
@@ -113,7 +113,6 @@ static bool is_rotational_device(const std::string& device) {
         return false;
     }
 }
-
 
 #ifdef MEGACLI_OPTION_ENABLED
 // NOTE: This piece of code is taken from stackoverflow
@@ -256,13 +255,9 @@ void DriveInterface::emulate_drive_attributes(const std::string& dev_name, const
 
 std::shared_ptr< DriveInterface > DriveInterface::get_iface_for_drive(const std::string& dev_name,
                                                                       const drive_type dtype) {
-    drive_interface_type iface_type;
-    if (iomanager.is_uring_capable()) {
-        iface_type = drive_interface_type::uring;
-    } else {
-        iface_type = drive_interface_type::aio;
-    }
-    return iomanager.get_drive_interface(iface_type);
+    // io_uring is the only drive backend (libaio dropped); IOManager::start() already hard-errors if the
+    // system is not io_uring-capable, so reaching here guarantees a uring interface exists.
+    return iomanager.get_drive_interface(drive_interface_type::uring);
 }
 
 drive_attributes DriveInterface::get_attributes(const std::string& dev_name) {

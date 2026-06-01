@@ -49,7 +49,9 @@ protected:
 
 protected:
     void SetUp() override {
-        auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();        auto num_iters = sisl::round_up(SISL_OPTIONS["num_iters"].as< uint64_t >(), nthreads);        ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = nthreads});
+        auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
+        auto num_iters = sisl::round_up(SISL_OPTIONS["num_iters"].as< uint64_t >(), nthreads);
+        ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = nthreads});
 
         m_test_count = nthreads;
         m_count_per_thread = num_iters;

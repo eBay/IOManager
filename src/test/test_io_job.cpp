@@ -12,32 +12,30 @@
 #include <sisl/options/options.h>
 #include <gtest/gtest.h>
 
-
 #include <iomgr/iomgr.hpp>
 #include "io_examiner/io_job.hpp"
 
 using namespace iomgr;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
-SISL_OPTION_GROUP(test_io,
-                  (run_time, "", "run_time", "run time for io", ::cxxopts::value< uint32_t >()->default_value("60"),
-                   "seconds"),
-                  (num_threads, "", "num_threads", "num_threads",
-                   ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
-                  (blk_size, "", "blk_size", "blk size in KB for IO",
-                   ::cxxopts::value< uint32_t >()->default_value("0"), "number"),
-                  (qdepth, "", "qdepth", "qdepth for IO", ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
-                  (load_type, "", "load_type", "io_type for IO, 0 - random, 1 - same, 2 - sequential",
-                   ::cxxopts::value< uint32_t >()->default_value("0"), "number"),
-                  (device_list, "", "device_list", "List of device paths",
-                   ::cxxopts::value< std::vector< std::string > >(), "path [...]"),
-                  (device_size, "", "device_size", "size of devices to do IO on",
-                   ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"))
+SISL_OPTION_GROUP(
+    test_io,
+    (run_time, "", "run_time", "run time for io", ::cxxopts::value< uint32_t >()->default_value("60"), "seconds"),
+    (num_threads, "", "num_threads", "num_threads", ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
+    (blk_size, "", "blk_size", "blk size in KB for IO", ::cxxopts::value< uint32_t >()->default_value("0"), "number"),
+    (qdepth, "", "qdepth", "qdepth for IO", ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
+    (load_type, "", "load_type", "io_type for IO, 0 - random, 1 - same, 2 - sequential",
+     ::cxxopts::value< uint32_t >()->default_value("0"), "number"),
+    (device_list, "", "device_list", "List of device paths", ::cxxopts::value< std::vector< std::string > >(),
+     "path [...]"),
+    (device_size, "", "device_size", "size of devices to do IO on",
+     ::cxxopts::value< uint64_t >()->default_value("1073741824"), "size"))
 #define ENABLED_OPTIONS logging, iomgr, test_io, config
 SISL_OPTIONS_ENABLE(ENABLED_OPTIONS)
 
 TEST(IOMgrTest, basic_io_test) {
-    const auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();    auto examiner = std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */);
+    const auto nthreads = SISL_OPTIONS["num_threads"].as< uint32_t >();
+    auto examiner = std::make_shared< iomgr::IOExaminer >(nthreads, false /* integrated mode */);
 
     // Create an add the device
     std::vector< std::string > devs{std::string{"/tmp/io_test_epoll"}};

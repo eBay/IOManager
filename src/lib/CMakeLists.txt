@@ -16,7 +16,7 @@ find_package(zmarok-semver REQUIRED)
 list(APPEND COMMON_DEPS
       sisl::sisl
       sisl::http
-      aio
+      STDEXEC::stdexec
     )
 if (${liburing_FOUND})
 list(APPEND COMMON_DEPS
@@ -37,6 +37,8 @@ set(IOMGR_OBJECTS
     iomgr.cpp
     iomgr_helper.cpp
     iomgr_timer.cpp
+    drive.cpp
+    timer.cpp
     watchdog.cpp
 )
 add_library(iomgr_config OBJECT)

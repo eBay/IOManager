@@ -43,10 +43,10 @@ IOEnvironment& IOEnvironment::with_http_server(std::string const& ssl_cert, std:
         const auto threads = IM_DYNAMIC_CONFIG(io_env.http_num_threads);
         const auto max_size = IM_DYNAMIC_CONFIG(io_env.http_max_request_size);
         if (ssl_cert.empty()) {
-            m_http_server = std::make_shared< iomgr::HttpServer >(port, threads, max_size, m_token_verifier.get());
+            m_http_server = std::make_shared< sisl::HttpServer >(port, threads, max_size, m_token_verifier.get());
         } else {
-            m_http_server = std::make_shared< iomgr::HttpServer >(ssl_cert, ssl_key, port, threads, max_size,
-                                                                  m_token_verifier.get());
+            m_http_server = std::make_shared< sisl::HttpServer >(ssl_cert, ssl_key, port, threads, max_size,
+                                                                 m_token_verifier.get());
         }
     }
     return get_instance();

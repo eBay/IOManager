@@ -17,8 +17,8 @@ using namespace std::chrono_literals;
 SISL_LOGGING_INIT(IOMGR_LOG_MODS, flip)
 
 SISL_OPTION_GROUP(test_msg,
-                  (io_threads, "", "io_threads", "io_threads",
-                   ::cxxopts::value< uint32_t >()->default_value("8"), "number"),
+                  (io_threads, "", "io_threads", "io_threads", ::cxxopts::value< uint32_t >()->default_value("8"),
+                   "number"),
                   (client_threads, "", "client_threads", "client_threads",
                    ::cxxopts::value< uint32_t >()->default_value("2"), "number"),
                   (iters, "", "iters", "iters", ::cxxopts::value< uint64_t >()->default_value("10000"), "number"))
@@ -43,7 +43,9 @@ static uint32_t g_client_threads{0};
 static uint64_t g_iters{0};
 // static std::vector< std::unique_ptr< timer_test_info > > g_timer_infos;
 
-void glob_setup() {    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();    g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
+void glob_setup() {
+    g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
+    g_client_threads = SISL_OPTIONS["client_threads"].as< uint32_t >();
     g_iters = SISL_OPTIONS["iters"].as< uint64_t >();
 
     ioenvironment.with_iomgr(iomgr_params{.num_threads = g_client_threads});
@@ -70,7 +72,7 @@ public:
             ASSERT_GT(count, 0) << "Expect messages to be sent to atleast 1 thread";
             m_sent_count.fetch_add(count);
         }
-        // LOGINFO("Sent {} messages from this thread", this_thread_sent_count);
+        LOGTRACE("Sent {} messages from this thread", this_thread_sent_count);
     }
 
     void sync_msg_test(const thread_specifier& dest, const run_method_t& receiver) {

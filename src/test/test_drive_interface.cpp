@@ -25,19 +25,7 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/io_environment.hpp>
-#include <iomgr/drive_interface.hpp>
-
-// Eager coroutine that auto-destroys its frame on completion. Used to launch
-// disk_task<> coroutines inside run_on_forget lambdas or reactor callbacks.
-struct fire_and_forget_task {
-    struct promise_type {
-        fire_and_forget_task get_return_object() noexcept { return {}; }
-        std::suspend_never initial_suspend() noexcept { return {}; }
-        std::suspend_never final_suspend() noexcept { return {}; }
-        void return_void() noexcept {}
-        void unhandled_exception() { std::terminate(); }
-    };
-};
+#include <iomgr/drive.hpp>
 
 using log_level = spdlog::level::level_enum;
 
@@ -129,12 +117,12 @@ public:
         std::stringstream iomgr_ver;
         iomgr_ver << iomgr::get_version();
         LOGINFO("IOManager ver. {}", iomgr_ver.str());
-        m_iodev = iomgr::DriveInterface::open_dev(m_dev_path, O_CREAT | O_RDWR);
-        s_driveattr = iomgr::DriveInterface::get_attributes(m_dev_path);
+        m_drive = iomgr::open_drive(m_dev_path, O_CREAT | O_RDWR).value();
+        s_driveattr = iomgr::attributes_of(m_dev_path);
     }
 
     void TearDown() override {
-        m_iodev->drive_interface()->close_dev(m_iodev);
+        m_drive.reset(); // RAII close
 
         // Stop the IOManage for clean exit
         iomanager.stop();
@@ -154,20 +142,19 @@ public:
             req->buf_arr->fill(offset);
 
             LOGTRACE("Preload offset={}", offset);
-            [this, work, req, offset]() -> fire_and_forget_task {
-                co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
-                                                                 s_io_size, offset);
-                ++work->available_qs;
-                ++work->nios_completed;
-                delete req;
-                if (work->next_io_offset.load() < work->offset_end) {
-                    issue_preload(work);
-                } else if (work->nios_completed.load() == work->nios_issued.load()) {
-                    LOGINFO("We are done with the preload of size={} with num_ios={}",
-                            s_io_size * work->nios_completed.load(), work->nios_completed.load());
-                    work->preload_cb();
-                }
-            }();
+            iomgr::detach(iomgr::async_write(m_drive, reinterpret_cast< const char* >(req->buf), s_io_size, offset),
+                          [this, work, req](iomgr::io_result) {
+                              ++work->available_qs;
+                              ++work->nios_completed;
+                              delete req;
+                              if (work->next_io_offset.load() < work->offset_end) {
+                                  issue_preload(work);
+                              } else if (work->nios_completed.load() == work->nios_issued.load()) {
+                                  LOGINFO("We are done with the preload of size={} with num_ios={}",
+                                          s_io_size * work->nios_completed.load(), work->nios_completed.load());
+                                  work->preload_cb();
+                              }
+                          });
 
             work->next_io_offset += s_io_size;
             ++work->nios_issued;
@@ -204,19 +191,13 @@ public:
             };
             if (io_pct(re) < s_read_pct) {
                 LOGTRACE("Read offset={}", offset);
-                [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_read(m_iodev.get(), reinterpret_cast< char* >(req->buf), s_io_size,
-                                                                    offset);
-                    do_completion();
-                }();
+                iomgr::detach(iomgr::async_read(m_drive, reinterpret_cast< char* >(req->buf), s_io_size, offset),
+                              [do_completion = std::move(do_completion)](iomgr::io_result) { do_completion(); });
             } else {
                 req->buf_arr->fill(offset);
                 LOGTRACE("Write offset={}", offset);
-                [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
-                                                                     s_io_size, offset);
-                    do_completion();
-                }();
+                iomgr::detach(iomgr::async_write(m_drive, reinterpret_cast< const char* >(req->buf), s_io_size, offset),
+                              [do_completion = std::move(do_completion)](iomgr::io_result) { do_completion(); });
             }
         }
     }
@@ -225,15 +206,17 @@ public:
         LOGINFO("Running verification");
 
         uint8_t* rbuf = iomanager.iobuf_alloc(s_driveattr.align_size, s_io_size);
+        const int vfd = ::open(m_dev_path.c_str(), O_RDONLY);
         for (size_t offset{work->offset_start}; offset < work->offset_end; offset += s_io_size) {
             LOGTRACE("Verify offset={}", offset);
             // Use pread directly — no reactor needed for simple sequential verify
-            [[maybe_unused]] auto n = ::pread(m_iodev->fd(), rbuf, s_io_size, static_cast< off_t >(offset));
+            [[maybe_unused]] auto n = ::pread(vfd, rbuf, s_io_size, static_cast< off_t >(offset));
             for (size_t i{0}; i < s_io_size / sizeof(size_t); ++i) {
                 assert((reinterpret_cast< uint64_t* >(rbuf))[i] == offset);
             }
         }
         iomanager.iobuf_free(rbuf);
+        ::close(vfd);
         LOGINFO("Verification successful for this thread");
     }
 
@@ -254,14 +237,13 @@ public:
                 --work->available_qs;
 
                 LOGTRACE("Preload offset={}", offset);
-                [this, work, req, offset, &q_cv]() -> fire_and_forget_task {
-                    co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
-                                                                     s_io_size, offset);
-                    ++work->available_qs;
-                    ++work->nios_completed;
-                    delete req;
-                    q_cv.notify_one();
-                }();
+                iomgr::detach(iomgr::async_write(m_drive, reinterpret_cast< const char* >(req->buf), s_io_size, offset),
+                              [work, req, &q_cv](iomgr::io_result) {
+                                  ++work->available_qs;
+                                  ++work->nios_completed;
+                                  delete req;
+                                  q_cv.notify_one();
+                              });
                 work->next_io_offset += s_io_size;
                 ++work->nios_issued;
             }
@@ -304,19 +286,14 @@ public:
                 };
                 if (io_pct(re) < s_read_pct) {
                     LOGTRACE("Read offset={}", offset);
-                    [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                        co_await m_iodev->drive_interface()->async_read(m_iodev.get(), reinterpret_cast< char* >(req->buf),
-                                                                        s_io_size, offset);
-                        do_completion();
-                    }();
+                    iomgr::detach(iomgr::async_read(m_drive, reinterpret_cast< char* >(req->buf), s_io_size, offset),
+                                  [do_completion = std::move(do_completion)](iomgr::io_result) { do_completion(); });
                 } else {
                     req->buf_arr->fill(offset);
                     LOGTRACE("Write offset={}", offset);
-                    [this, req, offset, do_completion = std::move(do_completion)]() -> fire_and_forget_task {
-                        co_await m_iodev->drive_interface()->async_write(m_iodev.get(), reinterpret_cast< const char* >(req->buf),
-                                                                         s_io_size, offset);
-                        do_completion();
-                    }();
+                    iomgr::detach(
+                        iomgr::async_write(m_drive, reinterpret_cast< const char* >(req->buf), s_io_size, offset),
+                        [do_completion = std::move(do_completion)](iomgr::io_result) { do_completion(); });
                 }
                 ++work->nios_issued;
             }
@@ -400,23 +377,21 @@ public:
         }
 
         for (uint32_t i{0}; i < m_nthreads; ++i) {
-            iomanager.create_reactor("user" + std::to_string(i + 1),
-                                     INTERRUPT_LOOP,
-                                     [&](bool is_started) {
-                                         if (is_started) {
-                                             Workload* my_work;
-                                             {
-                                                 std::unique_lock lg(mtx);
-                                                 my_work = &work_list[next_pick++];
-                                             }
+            iomanager.create_reactor("user" + std::to_string(i + 1), INTERRUPT_LOOP, [&](bool is_started) {
+                if (is_started) {
+                    Workload* my_work;
+                    {
+                        std::unique_lock lg(mtx);
+                        my_work = &work_list[next_pick++];
+                    }
 
-                                             my_work->preload_cb = [my_work, this]() {
-                                                 my_work->reuse_ready();
-                                                 issue_rw_io(my_work);
-                                             };
-                                             issue_preload(my_work);
-                                         }
-                                     });
+                    my_work->preload_cb = [my_work, this]() {
+                        my_work->reuse_ready();
+                        issue_rw_io(my_work);
+                    };
+                    issue_preload(my_work);
+                }
+            });
         }
 
         // Wait for all thread rw completion
@@ -474,7 +449,7 @@ public:
     }
 
 protected:
-    io_device_ptr m_iodev{nullptr};
+    iomgr::drive_handle m_drive;
     std::atomic< size_t > m_next_available_range{0};
     size_t m_each_thread_size{0};
     bool m_created{false};

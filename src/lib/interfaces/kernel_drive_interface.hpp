@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include <iomgr/drive_interface.hpp>
+#include "drive_interface.hpp"
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {

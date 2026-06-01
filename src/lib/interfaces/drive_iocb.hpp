@@ -3,19 +3,16 @@
 // Internal header — not part of the installed public API.
 // Included only by drive interface implementations (.cpp files).
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
-#include <variant>
-#include <memory>
 
 #include <sisl/metrics/metrics.hpp>
-#include <sisl/async/cqe_state.hpp>
 #include <sisl/utility/enum.hpp>
 
-#include <iomgr/drive_interface.hpp>
+#include "io_device.hpp" // IODevice (members are dereferenced here)
+#include "drive_interface.hpp"
 
 namespace iomgr {
 using Clock = std::chrono::steady_clock;
@@ -63,48 +60,25 @@ public:
     ~DriveInterfaceMetrics() { deregister_me_from_farm(); }
 };
 
+// Lightweight per-op record kept only for metrics/accounting now that the io_uring scheduler owns the
+// completion path (buffers, iovecs and partial-result bookkeeping live in the drive coroutine frames).
 class DriveInterface;
 struct drive_iocb {
 #ifndef NDEBUG
     static std::atomic< uint64_t > _iocb_id_counter;
+    uint64_t iocb_id;
 #endif
-    static constexpr int inlined_iov_count = 4;
-    typedef std::array< iovec, inlined_iov_count > inline_iov_array;
-    typedef std::unique_ptr< iovec[] > large_iov_array;
-
     IODevice* iodev;
     DriveInterface* iface;
     DriveOpType op_type;
     uint64_t size;
     uint64_t offset;
-    uint64_t unique_id{0};
-    int iovcnt = 0;
-    int64_t result{-1};
-    sisl::async::cqe_awaitable completion{};
-    uint32_t resubmit_cnt{0};
-    uint32_t part_read_resubmit_cnt{0};
-    IOReactor* initiating_reactor;
-#ifndef NDEBUG
-    uint64_t iocb_id;
-#endif
+    uint64_t unique_id{0};         // assigned by IOWatchDog for outstanding-IO tracking
+    IOReactor* initiating_reactor; // used by _PRERELEASE inject_delay_if_needed
     Clock::time_point op_start_time;
-    Clock::time_point op_submit_time;
 
-private:
-    std::variant< inline_iov_array, large_iov_array, char* > user_data;
-
-public:
     drive_iocb(DriveInterface* iface, IODevice* iodev, DriveOpType op_type, uint64_t size, uint64_t offset);
     virtual ~drive_iocb() = default;
-
-    void set_iovs(const iovec* iovs, const int count);
-    void set_data(char* data);
-
-    iovec* get_iovs() const;
-    void update_iovs_on_partial_result();
-
-    char* get_data() const { return std::get< char* >(user_data); }
-    bool has_iovs() const { return !std::holds_alternative< char* >(user_data); }
 
     std::string to_string() const;
 };
@@ -113,6 +87,12 @@ public:
 // Defined in drive_interface.cpp alongside their backing static data.
 void increment_outstanding_counter(drive_iocb* iocb);
 void decrement_outstanding_counter(drive_iocb* iocb);
+
+// Largest single write_zero chunk and a shared, process-wide, read-only buffer of that many zero
+// bytes. The kernel only reads it for the write, so one allocation safely serves every reactor
+// thread (vs. a per-thread 1 MB buffer, which scaled resident memory with thread count).
+constexpr uint64_t k_write_zero_chunk = 1ull * 1024 * 1024;
+const uint8_t* zero_buffer(size_t size);
 #ifdef _PRERELEASE
 bool inject_delay_if_needed(drive_iocb* iocb, std::function< void(drive_iocb*) > delayed_cb);
 #endif

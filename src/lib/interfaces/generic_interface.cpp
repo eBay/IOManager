@@ -15,7 +15,7 @@
 #include <sisl/logging/logging.h>
 #include <iomgr/iomgr.hpp>
 #include "iomgr_msg.hpp"
-#include <iomgr/io_interface.hpp>
+#include "io_interface.hpp"
 #include "reactor/reactor.hpp"
 
 namespace iomgr {

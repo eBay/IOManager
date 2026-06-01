@@ -93,7 +93,7 @@ class IOMgrConan(ConanFile):
         tc.variables["BUILD_COVERAGE"] = "OFF"
         tc.variables["PRERELEASE_ON"] = "OFF"
         tc.variables["CMAKE_TEST_TARGET"] = self.options.testing
-        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
+        if self.options.get_safe("prerelease"):
             tc.variables["PRERELEASE_ON"] = "ON"
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
@@ -128,8 +128,7 @@ class IOMgrConan(ConanFile):
         copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
-        self.cpp_info.system_libs.extend(["aio"])
-        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
+        if self.options.get_safe("prerelease"):
             self.cpp_info.defines.append("_PRERELEASE=1")
         if self.options.get_safe("sanitize") and self.options.sanitize != "False":
             if self.options.sanitize == "thread":

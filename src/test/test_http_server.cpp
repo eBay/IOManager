@@ -4,9 +4,9 @@
 #include <httplib/httplib.h>
 #include <cpr/cpr.h>
 #include <gtest/gtest.h>
+#include <sisl/http/http_server.hpp>
 
 #include "iomgr/io_environment.hpp"
-#include "iomgr/http_server.hpp"
 
 SISL_LOGGING_INIT()
 SISL_OPTIONS_ENABLE(logging)
@@ -17,7 +17,7 @@ protected:
         ioenvironment.with_iomgr(iomgr::iomgr_params{.num_threads = 1}).with_http_server();
         auto server = ioenvironment.get_http_server();
         server->setup_routes(
-            {{iomgr::http_method::Get, "/api/v1/ping",
+            {{sisl::http_method::Get, "/api/v1/ping",
               [](const httplib::Request&, httplib::Response& res) { res.set_content("pong", "text/plain"); }}});
         server->start();
     }

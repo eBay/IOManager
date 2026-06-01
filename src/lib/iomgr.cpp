@@ -32,7 +32,6 @@
 #include "iomgr_msg.hpp"
 #include "iomgr_impl.hpp"
 #include "epoll/iomgr_impl_epoll.hpp"
-#include "interfaces/aio_drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
 #include "interfaces/uring_drive_interface.hpp"
 #include "iomgr_helper.hpp"
@@ -107,12 +106,15 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     if (iface_adder) {
         iface_adder();
     } else {
-        if (m_is_uring_capable) {
-            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(
-                std::make_shared< UringDriveInterface >(new_interface_supported)));
-        } else {
-            add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(std::make_shared< AioDriveInterface >()));
+        // io_uring is the only drive backend; the libaio fallback was removed. Absence is a hard error
+        // rather than a silent degrade.
+        if (!m_is_uring_capable) {
+            throw std::runtime_error(
+                "iomgr requires io_uring: the system is not io_uring-capable (or drive.disable_io_uring is set) "
+                "and the libaio fallback has been removed");
         }
+        add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(
+            std::make_shared< UringDriveInterface >(new_interface_supported)));
     }
 
     // Start all reactor threads
@@ -210,12 +212,6 @@ void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_
 }
 
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
-
-void IOManager::drive_interface_submit_batch() {
-    for (auto& iface : m_drive_ifaces) {
-        iface->submit_batch();
-    }
-}
 
 void IOManager::add_interface(cshared< IOInterface >& iface, reactor_regex iface_scope) {
     LOGINFOMOD(iomgr, "Adding new interface={} to thread_scope={}", (void*)iface.get(), enum_name(iface_scope));
