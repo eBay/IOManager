@@ -88,8 +88,10 @@ iomgr::detach(iomgr::async_write(drv, data, size, offset), [](iomgr::io_result r
 });
 ```
 
-> ⚠️ **Inverted truthiness.** `std::error_code` is truthy on *failure*; `io_result` is truthy on
-> *success*. `if (ec)` (error) becomes `if (!r)` (error), and the success value is the byte count.
+> ⚠️ **Truthiness flips.** v12 handed back a bare `std::error_code` — truthy meant *failure*, and there
+> was no byte count. v13 hands back an `io_result` (a `std::expected`) that is truthy on *success*: `*r`
+> is the **bytes transferred**, and on failure (`!r`) `r.error()` is a `std::error_condition`. A v12
+> `if (ec) { fail(); }` therefore becomes `if (!r) { fail(); }`.
 
 The full set of free functions: `async_write`, `async_writev`, `async_read`, `async_readv`,
 `async_unmap`, `async_write_zero`, `queue_fsync` — each takes a `const drive_handle&` and returns an
