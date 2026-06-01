@@ -18,6 +18,9 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#ifdef IOMGR_V12_FIBER_COMPAT
+#include <cstdlib> // std::abort (v12 fiber-compat stubs)
+#endif
 #include <functional>
 #include <mutex>
 #include <memory>
@@ -41,7 +44,8 @@
 
 namespace iomgr {
 using timer_callback_t = std::function< void(void*) >;
-using timer_handle_t = std::shared_ptr< void >; // opaque; null == no active timer
+using timer_handle_t = std::shared_ptr< void >;  // opaque; null == no active timer
+inline const timer_handle_t null_timer_handle{}; // sentinel for "no timer"
 
 struct iomgr_msg;
 struct iomgr_waitable_msg;
@@ -131,6 +135,23 @@ public:
     /// INTERRUPT_LOOP | ADAPTIVE_LOOP or
     /// @param notifier : [OPTIONAL] Callback called from the new reactor thread with bool (start/stop)
     void create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier = nullptr);
+
+#ifdef IOMGR_V12_FIBER_COMPAT
+    // ---- v12 fiber-compat (migration shim; see iomgr/iomgr_types.hpp + iomgr/fiber_lib.hpp). Inline so
+    // they need not exist in a libiomgr built without the macro, and add no data members (no ABI change).
+    // The accessors report "no fibers"; the fiber-targeted run_on_* abort(), so any live path that still
+    // depends on fiber scheduling names itself loudly at runtime -- i.e. it still needs converting to
+    // co_await. test_physical_device never starts the fiber subsystems, so none of these are reached. ----
+    void create_reactor(const std::string& name, loop_type_t loop_type, uint32_t /*num_fibers*/,
+                        thread_state_notifier_t&& notifier = nullptr) {
+        create_reactor(name, loop_type, std::move(notifier)); // num_fibers is meaningless without fibers
+    }
+    bool am_i_sync_io_capable() const { return false; }
+    io_fiber_t iofiber_self() const { return nullptr; }
+    std::vector< io_fiber_t > sync_io_capable_fibers() const { return {}; }
+    int run_on_forget(io_fiber_t, const auto&) { std::abort(); } // convert this caller to co_await
+    int run_on_wait(io_fiber_t, const auto&) { std::abort(); }   // convert this caller to co_await
+#endif
 
     /**
      * @brief Convert the current thread to a user reactor and run the IO loop. Returns only after the loop exits.
