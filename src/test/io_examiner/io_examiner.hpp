@@ -15,7 +15,7 @@ private:
     friend class Job;
     friend class IOJob;
 
-    io_device_ptr m_vol_dev;
+    iomgr::drive_handle m_vol_dev;
     std::string m_vol_name;
     int m_shadow_fd;
 
@@ -98,15 +98,15 @@ public:
     void add_device(const std::string& dev_name, const int oflags) {
         std::shared_ptr< vol_info_t > info = std::make_shared< vol_info_t >();
 
-        info->m_vol_dev = iomgr::DriveInterface::open_dev(dev_name.c_str(), oflags);
+        info->m_vol_dev = iomgr::open_drive(dev_name.c_str(), oflags).value();
         info->m_vol_name = std::filesystem::path(dev_name).filename();
 
         auto shadow_fname = "/tmp/" + info->m_vol_name + "_shadow";
         info->m_shadow_fd = open(shadow_fname.c_str(), O_RDWR);
         // init_shadow_file(info->m_shadow_fd);
 
-        info->m_page_size = iomgr::DriveInterface::get_attributes(dev_name).phys_page_size;
-        info->m_max_vol_blks = iomgr::DriveInterface::get_size(info->m_vol_dev.get()) / info->m_page_size;
+        info->m_page_size = iomgr::attributes_of(dev_name).phys_page_size;
+        info->m_max_vol_blks = iomgr::size_of(info->m_vol_dev) / info->m_page_size;
         info->m_pending_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);
         info->m_hole_lbas_bm = std::make_unique< sisl::Bitset >(info->m_max_vol_blks);
         info->invalidate_lbas(0, info->m_max_vol_blks); // Punch hole for all.
@@ -118,9 +118,8 @@ public:
 
     void close_devices() {
         for (auto& vinfo : m_vol_info) {
-            vinfo->m_vol_dev->drive_interface()->close_dev(vinfo->m_vol_dev);
+            vinfo->m_vol_dev.reset();
         }
     }
-
 };
 } // namespace iomgr

@@ -11,7 +11,8 @@
 #include <sisl/metrics/metrics.hpp>
 #include <sisl/utility/enum.hpp>
 
-#include <iomgr/drive_interface.hpp>
+#include "io_device.hpp" // IODevice (members are dereferenced here)
+#include "drive_interface.hpp"
 
 namespace iomgr {
 using Clock = std::chrono::steady_clock;

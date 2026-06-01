@@ -38,8 +38,6 @@
 #include <sisl/utility/thread_buffer.hpp>
 
 #include <iomgr/iomgr_types.hpp>
-#include <iomgr/drive_interface.hpp>
-#include <iomgr/io_device.hpp>
 
 namespace iomgr {
 using timer_callback_t = std::function< void(void*) >;
@@ -238,7 +236,6 @@ public:
     int get_poll_interval() const;
 
     IOWatchDog* get_io_wd() const { return m_io_wd.get(); };
-    void drive_interface_submit_batch();
 
     IOThreadMetrics& this_thread_metrics();
 

@@ -37,6 +37,8 @@ set(IOMGR_OBJECTS
     iomgr.cpp
     iomgr_helper.cpp
     iomgr_timer.cpp
+    drive.cpp
+    timer.cpp
     watchdog.cpp
 )
 add_library(iomgr_config OBJECT)

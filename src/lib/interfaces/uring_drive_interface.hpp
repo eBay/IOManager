@@ -35,7 +35,7 @@
 
 #include "interfaces/kernel_drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
-#include <iomgr/drive_interface.hpp> // exec::task return type
+#include "drive_interface.hpp" // exec::task return type
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
@@ -79,21 +79,18 @@ public:
     io_device_ptr open_dev(const std::string& devname, drive_type dev_type, int oflags) override;
     void close_dev(const io_device_ptr& iodev) override;
 
-    exec::task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size, uint64_t offset,
-                                              bool part_of_batch = false) override;
+    exec::task< std::error_code > async_write(IODevice* iodev, const char* data, uint32_t size,
+                                              uint64_t offset) override;
     exec::task< std::error_code > async_writev(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                               uint64_t offset, bool part_of_batch = false) override;
-    exec::task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset,
-                                             bool part_of_batch = false) override;
+                                               uint64_t offset) override;
+    exec::task< std::error_code > async_read(IODevice* iodev, char* data, uint32_t size, uint64_t offset) override;
     exec::task< std::error_code > async_readv(IODevice* iodev, const iovec* iov, int iovcnt, uint32_t size,
-                                              uint64_t offset, bool part_of_batch = false) override;
-    exec::task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset,
-                                              bool part_of_batch = false) override;
+                                              uint64_t offset) override;
+    exec::task< std::error_code > async_unmap(IODevice* iodev, uint32_t size, uint64_t offset) override;
     exec::task< std::error_code > async_write_zero(IODevice* iodev, uint64_t size, uint64_t offset) override;
     exec::task< std::error_code > queue_fsync(IODevice* iodev) override;
 
     void on_event_notification(IODevice* iodev, void* cookie, int event);
-    void submit_batch() override; // no-op: the scheduler flushes queued SQEs in poll_once
 
     // Reactor sentinel: flush queued SQEs + reap completions (resuming suspended coroutines).
     void poll_completions();

@@ -14,7 +14,7 @@
 #include <sisl/fds/buffer.hpp>
 
 #include <iomgr/iomgr.hpp>
-#include <iomgr/coro.hpp>
+#include <iomgr/drive.hpp>
 #include "job.hpp"
 
 static constexpr uint64_t Ki{1024};
@@ -404,9 +404,9 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_write_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        detach(vol_dev->drive_interface()->async_write(vol_dev.get(), reinterpret_cast< const char* >(req->buffer),
-                                                       size, lba * req->vol_info->m_page_size),
-               [this, req](std::error_code) { on_completion(req); });
+        detach(
+            async_write(vol_dev, reinterpret_cast< const char* >(req->buffer), size, lba * req->vol_info->m_page_size),
+            [this, req](io_result) { on_completion(req); });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         return true;
     }
@@ -426,9 +426,8 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_read_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        detach(vol_dev->drive_interface()->async_read(vol_dev.get(), reinterpret_cast< char* >(req->buffer), size,
-                                                      lba * req->vol_info->m_page_size),
-               [this, req](std::error_code) { on_completion(req); });
+        detach(async_read(vol_dev, reinterpret_cast< char* >(req->buffer), size, lba * req->vol_info->m_page_size),
+               [this, req](io_result) { on_completion(req); });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);
         m_output.read_cnt.fetch_add(1, std::memory_order_relaxed);
         return true;
@@ -446,12 +445,13 @@ private:
         COUNTER_INCREMENT(m_metrics, iojob_unmap_count, 1);
         req->start_time = Clock::now();
         auto& vol_dev = req->vol_info->m_vol_dev;
-        detach(vol_dev->drive_interface()->async_unmap(vol_dev.get(), nlbas * req->vol_info->m_page_size,
-                                                       lba * req->vol_info->m_page_size),
-               [this, req](std::error_code ec) {
-                   // unmap is unsupported on the aio backend (typed not_supported); don't treat that as a
-                   // real failure, but surface any other error instead of silently dropping it.
-                   if (ec && ec != std::errc::not_supported) { LOGERROR("unmap failed: {}", ec.message()); }
+        detach(async_unmap(vol_dev, nlbas * req->vol_info->m_page_size, lba * req->vol_info->m_page_size),
+               [this, req](io_result r) {
+                   // unmap may be unsupported on a given backend/kernel (typed not_supported); don't treat
+                   // that as a real failure, but surface any other error instead of silently dropping it.
+                   if (!r && r.error() != std::errc::not_supported) {
+                       LOGERROR("unmap failed: {}", r.error().message());
+                   }
                    on_completion(req);
                });
         m_outstanding_ios.fetch_add(1, std::memory_order_acq_rel);

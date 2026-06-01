@@ -14,7 +14,7 @@
  **************************************************************************/
 
 #include <iomgr/iomgr.hpp>
-#include <iomgr/drive_interface.hpp>
+#include "drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
 
 namespace iomgr {

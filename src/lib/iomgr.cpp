@@ -213,12 +213,6 @@ void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_
 
 extern const version::Semver200_version get_version() { return version::Semver200_version(PACKAGE_VERSION); }
 
-void IOManager::drive_interface_submit_batch() {
-    for (auto& iface : m_drive_ifaces) {
-        iface->submit_batch();
-    }
-}
-
 void IOManager::add_interface(cshared< IOInterface >& iface, reactor_regex iface_scope) {
     LOGINFOMOD(iomgr, "Adding new interface={} to thread_scope={}", (void*)iface.get(), enum_name(iface_scope));
 

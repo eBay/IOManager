@@ -19,7 +19,7 @@
 #include <sisl/file_watcher/file_watcher.hpp>
 #include <sisl/auth_manager/token_verifier.hpp>
 #include <sisl/auth_manager/token_client.hpp>
-#include <iomgr/http_server.hpp>
+#include <sisl/http/http_server.hpp>
 
 namespace sisl {
 class sobject_manager;
@@ -47,7 +47,7 @@ public:
     IOEnvironment& with_token_client(std::shared_ptr< sisl::TokenClient >&& token_client);
     IOEnvironment& with_object_manager();
 
-    std::shared_ptr< iomgr::HttpServer > get_http_server() { return m_http_server; }
+    std::shared_ptr< sisl::HttpServer > get_http_server() { return m_http_server; }
     std::shared_ptr< sisl::TokenVerifier > get_token_verifier() { return m_token_verifier; }
     std::shared_ptr< sisl::TokenClient > get_token_client() { return m_token_client; }
     std::shared_ptr< sisl::FileWatcher > get_file_watcher() { return m_file_watcher; }
@@ -64,7 +64,7 @@ private:
     IOEnvironment();
     ~IOEnvironment();
 
-    std::shared_ptr< iomgr::HttpServer > m_http_server;
+    std::shared_ptr< sisl::HttpServer > m_http_server;
     std::shared_ptr< sisl::TokenVerifier > m_token_verifier;
     std::shared_ptr< sisl::TokenClient > m_token_client;
     std::shared_ptr< sisl::FileWatcher > m_file_watcher;

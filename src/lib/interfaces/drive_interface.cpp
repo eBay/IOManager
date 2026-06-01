@@ -34,7 +34,7 @@
 
 #include <iomgr/iomgr.hpp>
 #include <iomgr/iomgr_flip.hpp>
-#include <iomgr/drive_interface.hpp>
+#include "drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
 #include "interfaces/kernel_drive_interface.hpp"
 #include "iomgr_config.hpp"

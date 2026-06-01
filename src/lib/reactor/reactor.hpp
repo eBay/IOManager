@@ -20,6 +20,8 @@
 #include <sisl/utility/enum.hpp>
 #include <chrono>
 #include <iomgr/iomgr_types.hpp>
+#include "io_device.hpp"    // IODevice (internal core type)
+#include "io_interface.hpp" // IOInterface / GenericIOInterface (internal)
 #include "iomgr_timer_impl.hpp"
 
 namespace iomgr {

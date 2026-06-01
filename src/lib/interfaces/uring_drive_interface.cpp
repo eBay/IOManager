@@ -113,10 +113,6 @@ void UringDriveInterface::drain_outstanding_ios() {
     }
 }
 
-void UringDriveInterface::submit_batch() {
-    // No-op: the scheduler defers + batches submission in poll_once. Retained for API compatibility.
-}
-
 // --------- outstanding accounting + tight-poll while IO is in flight -----------------------
 namespace {
 inline void io_started() {
@@ -206,7 +202,7 @@ void UringDriveInterface::close_dev(const io_device_ptr& iodev) {
 // to own). The scheduler defers+batches submission and reaps in poll_completions().
 
 exec::task< std::error_code > UringDriveInterface::async_write(IODevice* iodev, const char* data, uint32_t size,
-                                                               uint64_t offset, bool) {
+                                                               uint64_t offset) {
     auto& sched = t_uring_ch->m_sched;
     auto iocb = std::make_unique< drive_iocb >(this, iodev, DriveOpType::WRITE, size, offset);
     io_op_scope scope{iocb.get()};
@@ -240,7 +236,7 @@ exec::task< std::error_code > UringDriveInterface::async_write(IODevice* iodev, 
 }
 
 exec::task< std::error_code > UringDriveInterface::async_writev(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                                uint32_t size, uint64_t offset, bool) {
+                                                                uint32_t size, uint64_t offset) {
     auto& sched = t_uring_ch->m_sched;
     auto iocb = std::make_unique< drive_iocb >(this, iodev, DriveOpType::WRITE, size, offset);
     io_op_scope scope{iocb.get()};
@@ -264,7 +260,7 @@ exec::task< std::error_code > UringDriveInterface::async_writev(IODevice* iodev,
 }
 
 exec::task< std::error_code > UringDriveInterface::async_read(IODevice* iodev, char* data, uint32_t size,
-                                                              uint64_t offset, bool) {
+                                                              uint64_t offset) {
     auto& sched = t_uring_ch->m_sched;
     auto iocb = std::make_unique< drive_iocb >(this, iodev, DriveOpType::READ, size, offset);
     io_op_scope scope{iocb.get()};
@@ -299,7 +295,7 @@ exec::task< std::error_code > UringDriveInterface::async_read(IODevice* iodev, c
 }
 
 exec::task< std::error_code > UringDriveInterface::async_readv(IODevice* iodev, const iovec* iov, int iovcnt,
-                                                               uint32_t size, uint64_t offset, bool) {
+                                                               uint32_t size, uint64_t offset) {
     auto& sched = t_uring_ch->m_sched;
     auto iocb = std::make_unique< drive_iocb >(this, iodev, DriveOpType::READ, size, offset);
     io_op_scope scope{iocb.get()};
@@ -325,7 +321,7 @@ exec::task< std::error_code > UringDriveInterface::async_readv(IODevice* iodev, 
     }
 }
 
-exec::task< std::error_code > UringDriveInterface::async_unmap(IODevice*, uint32_t, uint64_t, bool) {
+exec::task< std::error_code > UringDriveInterface::async_unmap(IODevice*, uint32_t, uint64_t) {
     co_return std::make_error_code(std::errc::not_supported);
 }
 

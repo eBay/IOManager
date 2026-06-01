@@ -18,7 +18,7 @@
 
 #include <iomgr/io_environment.hpp>
 #include <iomgr/iomgr.hpp>
-#include <iomgr/coro.hpp>
+#include <iomgr/drive.hpp>
 
 using namespace iomgr;
 using namespace std::chrono_literals;
@@ -81,14 +81,14 @@ public:
         ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
 
         int oflags{O_CREAT | O_RDWR};
-        m_iodev = iomgr::DriveInterface::open_dev(dev, oflags);
-        m_driveattr = iomgr::DriveInterface::get_attributes(dev);
+        m_drive = iomgr::open_drive(dev, oflags).value();
+        m_driveattr = iomgr::attributes_of(dev);
 
         s_runner.start();
     }
 
     void TearDown() override {
-        m_iodev->drive_interface()->close_dev(m_iodev);
+        m_drive.reset(); // RAII close
         iomanager.stop();
     }
 
@@ -112,9 +112,8 @@ public:
         m_start_time = Clock::now();
         while (remain_size > 0) {
             const auto this_sz = std::min(max_io_size, remain_size);
-            iomgr::detach(
-                m_iodev->drive_interface()->async_write(m_iodev.get(), (const char*)buf, (uint32_t)this_sz, cur_offset),
-                [this, buf, this_sz](std::error_code) { on_write_completion(buf, this_sz); });
+            iomgr::detach(iomgr::async_write(m_drive, (const char*)buf, (uint32_t)this_sz, cur_offset),
+                          [this, buf, this_sz](iomgr::io_result) { on_write_completion(buf, this_sz); });
             cur_offset += this_sz;
             remain_size -= this_sz;
         }
@@ -133,25 +132,22 @@ public:
 
     void write_zero_and_read() {
         m_start_time = Clock::now();
-        iomgr::detach(m_iodev->drive_interface()->async_write_zero(m_iodev.get(), m_total_size, m_start_offset),
-                      [this](std::error_code) {
-                          LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s",
-                                  m_total_size, get_elapsed_time_us(m_start_time));
+        iomgr::detach(iomgr::async_write_zero(m_drive, m_total_size, m_start_offset), [this](iomgr::io_result) {
+            LOGINFO("Write zeros of size={} completed in {} microseconds, reading it back to validate 0s", m_total_size,
+                    get_elapsed_time_us(m_start_time));
 
-                          m_start_time = Clock::now();
-                          auto read_remain_size = m_total_size;
-                          auto cur_offset = m_start_offset;
-                          while (read_remain_size > 0) {
-                              const auto this_sz = std::min(max_io_size, read_remain_size);
-                              auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
-                              iomgr::detach(
-                                  m_iodev->drive_interface()->async_read(m_iodev.get(), (char*)read_buf,
-                                                                         (uint32_t)this_sz, cur_offset),
-                                  [this, read_buf, this_sz](std::error_code) { validate_zeros(read_buf, this_sz); });
-                              cur_offset += this_sz;
-                              read_remain_size -= this_sz;
-                          }
-                      });
+            m_start_time = Clock::now();
+            auto read_remain_size = m_total_size;
+            auto cur_offset = m_start_offset;
+            while (read_remain_size > 0) {
+                const auto this_sz = std::min(max_io_size, read_remain_size);
+                auto read_buf = iomanager.iobuf_alloc(m_driveattr.align_size, max_io_size);
+                iomgr::detach(iomgr::async_read(m_drive, (char*)read_buf, (uint32_t)this_sz, cur_offset),
+                              [this, read_buf, this_sz](iomgr::io_result) { validate_zeros(read_buf, this_sz); });
+                cur_offset += this_sz;
+                read_remain_size -= this_sz;
+            }
+        });
     }
 
     void validate_zeros(uint8_t* buf, size_t size) {
@@ -192,7 +188,7 @@ protected:
     uint64_t m_start_offset;
     uint64_t m_filled_size{0};
     uint64_t m_validated_size{0};
-    io_device_ptr m_iodev;
+    iomgr::drive_handle m_drive;
     iomgr::drive_attributes m_driveattr;
     Clock::time_point m_start_time;
 };
