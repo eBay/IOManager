@@ -7,6 +7,7 @@
 
 #ifdef __linux__
 #include <linux/version.h>
+#include "open_how_compat.hpp" // complete struct open_how before <liburing.h> (Ubuntu 22.04 / gcc 13)
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #endif
