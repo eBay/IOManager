@@ -172,7 +172,6 @@ jobs:
         ./prepare_v2.sh
         conan export --user oss --channel ${{ inputs.conan-channel }} .
         popd
-        ./prepare_v2.sh
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Build Cache
