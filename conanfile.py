@@ -60,7 +60,7 @@ class IOMgrConan(ConanFile):
         self.test_requires("cpr/[^1.12]")
 
     def requirements(self):
-        self.requires("sisl/[^14.3]@oss/dev", transitive_headers=True)
+        self.requires("sisl/[^14.4]@oss/dev", transitive_headers=True)
         if self.settings.os in ["Linux"]:
             self.requires("liburing/[^2.1]", transitive_headers=True)
 
