@@ -16,7 +16,7 @@ find_package(zmarok-semver REQUIRED)
 list(APPEND COMMON_DEPS
       sisl::sisl
       sisl::http
-      STDEXEC::stdexec
+      stdexec::stdexec
     )
 if (${liburing_FOUND})
 list(APPEND COMMON_DEPS

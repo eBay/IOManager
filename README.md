@@ -285,7 +285,7 @@ conan build -s:h build_type=Debug -o iomgr/*:sanitize=thread  --build missing .
   `async` coroutine substrate (`disk_task`, the io_uring CQE bridge, the `io_uring_scheduler`).
 - **liburing** (2.1+) — `io_uring` access (Linux only).
 - **[NVIDIA stdexec](https://github.com/NVIDIA/stdexec)** — P2300 sender/receiver; the structured-concurrency
-  layer the drive path composes on (wired in via CMake FetchContent).
+  layer the drive path composes on (provided transitively via the sisl conan package).
 
 ### Test / Tooling
 
