@@ -88,24 +88,6 @@ ENUM(drive_type, uint8_t,
 // public IOManager::get_drive_interface() signature names it.
 ENUM(drive_interface_type, uint8_t, uring)
 
-#ifdef IOMGR_V12_FIBER_COMPAT
-// ----------------------------------------------------------------------------------------------------
-// v12 FIBER COMPATIBILITY SHIM (opt-in via -DIOMGR_V12_FIBER_COMPAT).
-// Fibers were removed in v13 -- a reactor is now a single stackless coroutine context. These declarations
-// keep a consumer that is still mid-migration (homestore) compiling: io_fiber_t is an opaque handle that
-// no longer maps to a real fiber (it is always null). Delete this block, iomgr/fiber_lib.hpp, and the
-// matching IOManager members once the consumer is fully on coroutines.
-// ----------------------------------------------------------------------------------------------------
-struct IOFiber;              // intentionally never defined -- fibers no longer exist
-using io_fiber_t = IOFiber*; // opaque; always null under v13
-ENUM(fiber_regex, uint8_t,
-     main_only,   // Run only on main fiber of the reactor
-     syncio_only, // Run only on the syncio capable fibers
-     random,      // Run on any fiber
-     round_robin  // Run in round robin manner
-)
-#endif
-
 } // namespace iomgr
 
 #define IOMGR_LOG_MODS iomgr, io_wd
