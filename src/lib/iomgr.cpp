@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <fstream>
 #include <functional>
+#include <latch>
 #include <random>
 #include <thread>
 #include <vector>
@@ -135,6 +136,11 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     // Notify all the reactors that they are ready to make callback about thread started
     iomanager.run_on_forget(reactor_regex::all_io, [this]() { iomanager.this_reactor()->notify_thread_state(true); });
 
+    // Dedicated reactor for blocking synchronous drive I/O (iomgr::sync_wait). Kept off the worker pool so it is
+    // never a sync_wait caller: a caller blocks on a future while THIS reactor issues + reaps the op, which can
+    // never deadlock since the reactor completing the op is never the blocked one. Replaces v12's sync-io fibers.
+    start_sync_reactor();
+
     m_io_wd = std::make_unique< IOWatchDog >();
 }
 
@@ -154,6 +160,14 @@ void IOManager::stop() {
 
     // Wait for all pending timers cancellation to finish
     timer::wait_for_pending();
+
+    // The dedicated sync reactor is hidden from reactor_regex broadcasts (see match_regex), so the all_io stop
+    // below cannot reach it. It incremented m_yet_to_stop_nreactors when it started, so it must relinquish here
+    // too or shutdown would hang waiting on it. Stop it explicitly by pointer.
+    if (m_sync_reactor != nullptr) {
+        run_on_wait(m_sync_reactor, []() { iomanager.this_reactor()->stop(); });
+        m_sync_reactor = nullptr;
+    }
 
     // Send all the threads to reliquish its io thread status
     run_on_wait(reactor_regex::all_io, [this]() { this_reactor()->stop(); });
@@ -204,6 +218,20 @@ void IOManager::create_worker_reactors() {
 
 void IOManager::create_reactor(const std::string& name, loop_type_t loop_type, thread_state_notifier_t&& notifier) {
     m_impl->create_reactor_impl(name, loop_type, -1, std::move(notifier));
+}
+
+void IOManager::start_sync_reactor() {
+    // A user reactor (not a worker) drive-capable like any other (the drive interface has all_io scope), used
+    // exclusively as the off-caller execution context for iomgr::sync_wait. INTERRUPT_LOOP keeps it idle until
+    // a blocking op is dispatched to it.
+    std::latch started{1};
+    create_reactor("iomgr_sync_io", INTERRUPT_LOOP, [this, &started](bool is_started) {
+        if (is_started) {
+            m_sync_reactor = iomanager.this_reactor();
+            started.count_down();
+        }
+    });
+    started.wait();
 }
 
 void IOManager::become_user_reactor(loop_type_t loop_type, const iodev_selector_t& iodev_selector,
@@ -297,6 +325,11 @@ void IOManager::reactor_stopped() {
 
 ////////////////////////////////// Message related section ////////////////////////////////
 static bool match_regex(reactor_regex r, const IOReactor* reactor) {
+    // The dedicated sync reactor (iomgr::sync_wait) is internal and must never be selected by a reactor_regex
+    // broadcast: a user closure dispatched to it could itself call sync_wait (-> self-deadlock), and counts
+    // like all_user/all_io would wrongly include it. It is addressed only directly by pointer (the sync_wait
+    // dispatch and the explicit shutdown stop), never via a regex.
+    if (reactor == iomanager.sync_io_reactor()) { return false; }
     if ((r == reactor_regex::all_io) || (r == reactor_regex::least_busy_io)) { return true; }
     if (r == reactor_regex::all_tloop) { return reactor->is_tight_loop_reactor(); }
     if (reactor->is_worker()) {

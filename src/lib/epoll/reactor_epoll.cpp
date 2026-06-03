@@ -180,6 +180,17 @@ int IOReactorEPoll::add_iodev_impl(const io_device_ptr& iodev) {
 
 int IOReactorEPoll::remove_iodev_impl(const io_device_ptr& iodev) {
     if (epoll_ctl(m_epollfd, EPOLL_CTL_DEL, iodev->fd(), nullptr) == -1) {
+        // ENOENT means this fd is already absent from this reactor's epoll, which is the desired post-state of a
+        // remove -- treat it as success rather than aborting. This is benign and expected on teardown: a scoped
+        // iodev (e.g. an all_user/all_worker global timer) lives in the generic interface's map but was only
+        // ever EPOLL_CTL_ADD'd to scope-matching reactors, whereas on_reactor_stop walks the whole map for every
+        // reactor; and a timer cancelled before iomanager::stop() has already been removed. epoll removal is
+        // idempotent, so only a non-ENOENT failure is a real error.
+        if (errno == ENOENT) {
+            REACTOR_LOG(DEBUG, "fd {} already absent from this thread's epoll fd {} on remove; ignoring", iodev->fd(),
+                        m_epollfd);
+            return 0;
+        }
         LOGDFATAL("Removing fd {} to this thread's epoll fd {} failed, error = {}", iodev->fd(), m_epollfd,
                   strerror(errno));
         return -1;
