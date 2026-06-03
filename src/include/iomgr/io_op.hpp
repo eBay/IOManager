@@ -51,6 +51,7 @@ public:
     io_result await_resume() const noexcept;
 
 private:
+    friend io_result sync_wait(io_op op);
     std::unique_ptr< impl > _impl;
 };
 
@@ -58,5 +59,13 @@ private:
 // launches `op` and invokes `on_done(result)` when it completes. `on_done` runs on the reactor thread
 // that reaped the completion -- keep it short, or re-dispatch. Equivalent to co_await-ing `op`.
 void detach(io_op op, std::function< void(io_result) > on_done);
+
+// Blocking variant for cold-path synchronous drive I/O (superblock / metadata reads & writes): runs `op` on
+// iomgr's dedicated sync reactor and blocks the calling thread until it completes, returning the io_result.
+// Safe to call from ANY thread, INCLUDING another reactor -- the op is issued and reaped on the sync reactor,
+// never on the (possibly blocked) caller's reactor, so the caller blocking cannot stall the reactor that must
+// drive the completion. This is the v13 stackless-coroutine replacement for v12's fiber-based
+// DriveInterface::sync_write/sync_read (a fiber could yield the reactor; a stackless reactor context cannot).
+io_result sync_wait(io_op op);
 
 } // namespace iomgr

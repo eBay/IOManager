@@ -16,8 +16,10 @@
 // io_uring backend. This is the ONLY place the public handle/awaitable meet DriveInterface / IODevice /
 // exec::task; nothing leaks into the public headers.
 
+#include <cassert>
 #include <coroutine>
 #include <exception>
+#include <future>
 
 #include <iomgr/drive.hpp>
 #include <iomgr/io_op.hpp>
@@ -96,6 +98,32 @@ ff_task run_detached(io_op op, std::function< void(io_result) > on_done) { on_do
 } // namespace
 
 void detach(io_op op, std::function< void(io_result) > on_done) { run_detached(std::move(op), std::move(on_done)); }
+
+// ----- blocking sync I/O: run the op on the dedicated sync reactor and wait for it -----------------
+io_result sync_wait(io_op op) {
+    io_op::impl* const p = op._impl.get();
+    IOReactor* const sync_reactor = iomanager.sync_io_reactor();
+    assert(sync_reactor != nullptr && "iomgr::sync_wait called before IOManager::start() or after stop()");
+    // The sync reactor cannot block-wait on itself: it must stay free to issue + reap the op. Callers must
+    // never be the sync reactor (nothing dispatched to it -- start_drive_task / io completions -- re-enters
+    // sync_wait, so this only fires on genuine misuse).
+    assert(iomanager.this_reactor() != sync_reactor && "iomgr::sync_wait must not be called on the sync reactor");
+
+    std::promise< void > comp;
+    auto fut = comp.get_future();
+    // Issue + reap the op on the dedicated sync reactor (never the caller). We block on `fut` until on_done has
+    // run, so the by-reference capture of `comp` (and the raw `p`, which lives in `op` on this frame) stays
+    // valid throughout. The op completing on the sync reactor -- which is never itself a sync_wait caller -- is
+    // exactly what makes blocking the caller here deadlock-free, even when the caller is another reactor.
+    iomanager.run_on_forget(sync_reactor, [p, &comp]() {
+        detail::start_drive_task(std::move(p->task), [p, &comp](std::error_code ec) {
+            p->result = ec ? io_result{std::unexpected(ec.default_error_condition())} : io_result{p->nbytes};
+            comp.set_value();
+        });
+    });
+    fut.get();
+    return p->result;
+}
 
 // ----- open / query -------------------------------------------------------------------------------
 std::expected< drive_handle, std::error_condition > open_drive(const std::string& dev_name, int oflags) noexcept {

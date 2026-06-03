@@ -199,6 +199,11 @@ public:
     void set_my_reactor_adaptive(bool adaptive);
     IOReactor* this_reactor() const;
 
+    // Dedicated reactor for blocking synchronous drive I/O (see iomgr::sync_wait). It is deliberately NOT part
+    // of the worker pool, so it is never itself a sync_wait caller: the op a caller waits on is issued + reaped
+    // here, never on the (possibly blocked) caller's reactor, which is what makes blocking sync I/O deadlock-free.
+    IOReactor* sync_io_reactor() const { return m_sync_reactor; }
+
     /******** IO Buffer related ********/
     uint8_t* iobuf_alloc(size_t align, size_t size, const sisl::buftag tag = sisl::buftag::common);
     void iobuf_free(uint8_t* buf, const sisl::buftag tag = sisl::buftag::common);
@@ -236,6 +241,7 @@ private:
 
     void foreach_interface(const std::function< void(const cshared< IOInterface >&) >& iface_cb);
     void create_worker_reactors();
+    void start_sync_reactor(); // create the dedicated blocking-sync-I/O reactor (sets m_sync_reactor)
     void _run_io_loop(int iomgr_slot_num, loop_type_t loop_type, const std::string& name,
                       const iodev_selector_t& iodev_selector, thread_state_notifier_t&& addln_notifier);
 
@@ -326,6 +332,11 @@ private:
     std::vector< std::shared_ptr< IOReactor > > m_worker_reactors;
     std::vector< std::thread > m_worker_threads;
     std::uniform_int_distribution< size_t > m_rand_worker_distribution;
+
+    // Dedicated reactor for blocking synchronous drive I/O (iomgr::sync_wait). A user reactor (not in the
+    // worker pool); owned by its own thread-local slot in m_reactors, raw pointer cached here for the duration
+    // it is alive (between start() and stop()).
+    IOReactor* m_sync_reactor{nullptr};
 
     std::unique_ptr< timer_epoll > m_global_user_timer;
     std::unique_ptr< timer > m_global_worker_timer;
