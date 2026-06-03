@@ -8,5 +8,5 @@ list(APPEND INTERFACE_SRC
         )
 add_library(iomgr_interfaces OBJECT)
 target_sources(iomgr_interfaces PRIVATE ${INTERFACE_SRC})
-target_link_libraries(iomgr_interfaces ${COMMON_DEPS} STDEXEC::stdexec)
+target_link_libraries(iomgr_interfaces ${COMMON_DEPS} stdexec::stdexec)
 add_dependencies(iomgr_interfaces iomgr_config)

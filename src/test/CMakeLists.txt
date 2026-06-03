@@ -10,7 +10,7 @@ set (TEST_DEPS
         iomgr
         sisl::sisl
         GTest::gmock
-        STDEXEC::stdexec
+        stdexec::stdexec
     )
 
 if (("${CMAKE_TEST_TARGET}" STREQUAL "full") OR ("${CMAKE_TEST_TARGET}" STREQUAL "epoll_mode"))

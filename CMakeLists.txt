@@ -31,41 +31,12 @@ endif ()
 
 enable_testing()
 
-# --- stdexec (NVIDIA std::execution reference impl) ---
-# Header-only; the drive layer uses it via sisl's io_uring scheduler senders. Provided by FetchContent
-# (mirrors ublkpp/billet; a Conan recipe may replace this later). stdexec's own top-level CMakeLists
-# needs rapids-cmake, so we download the source tree only and expose the headers as an INTERFACE target.
-# Pass -DSTDEXEC_SOURCE_DIR=<path> to use a pre-fetched tree and avoid network at configure time.
-if(POLICY CMP0169)
-    cmake_policy(SET CMP0169 OLD)
-endif()
-if(NOT STDEXEC_SOURCE_DIR)
-    include(FetchContent)
-    FetchContent_Declare(
-        stdexec
-        GIT_REPOSITORY https://github.com/NVIDIA/stdexec.git
-        GIT_TAG        ea0d8788da51a1671daa00b88bf238725f0844a8  # nvhpc-25.09
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_GetProperties(stdexec)
-    if(NOT stdexec_POPULATED)
-        FetchContent_Populate(stdexec)  # download only — do not run stdexec's CMakeLists.txt
-    endif()
-    set(STDEXEC_SOURCE_DIR ${stdexec_SOURCE_DIR})
-endif()
-add_library(stdexec_iface INTERFACE)
-target_include_directories(stdexec_iface INTERFACE ${STDEXEC_SOURCE_DIR}/include)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    # -Wno-empty-body: stdexec internals. -Wno-subobject-linkage: stdexec coroutine frames legitimately
-    # embed local lambda-closure types (no linkage); each TU's instantiation is unique so there is no
-    # real ODR hazard, but GCC's heuristic flags it.
-    target_compile_options(stdexec_iface INTERFACE -Wno-empty-body -Wno-subobject-linkage)
-endif()
-# stdexec's <execution> include drags in libstdc++'s PSTL, which defaults to the TBB backend and emits
-# unresolved tbb::detail::r1::* symbols; force the serial backend.
-target_compile_options(stdexec_iface INTERFACE -U_PSTL_PAR_BACKEND_TBB)
-target_compile_definitions(stdexec_iface INTERFACE _PSTL_PAR_BACKEND_SERIAL)
-add_library(STDEXEC::stdexec ALIAS stdexec_iface)
+# --- stdexec (NVIDIA std::execution) ---
+# Provided by the conan package now (sisl ships it transitively; see sisl/3rd_party/stdexec). The drive
+# layer uses stdexec only internally via sisl's io_uring scheduler senders -- io_op stays an opaque PIMPL,
+# so stdexec never leaks into iomgr's public headers. The stdexec::stdexec target carries the include
+# dirs, the _PSTL_PAR_BACKEND_SERIAL define, and (on gcc) the -Wno-empty-body/-Wno-subobject-linkage flags.
+find_package(stdexec REQUIRED)
 
 add_subdirectory(src/)
 
