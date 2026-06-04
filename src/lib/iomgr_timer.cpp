@@ -143,13 +143,13 @@ void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
         return; // Nothing is expired. TODO: Update some spurious counter
     }
 
-    // Call the corresponding timer that timer is armed for number of times it has expired
-    for (uint64_t i{0}; i < exp_count; ++i) {
-        ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev);
+    if (exp_count > 1) {
+        LOGWARN("Timer fd={} expired {} times without being processed, invoking callback once", iodev->fd(), exp_count);
     }
+    ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev, exp_count);
 }
 
-void timer_epoll::on_timer_armed(IODevice* iodev) {
+void timer_epoll::on_timer_armed(IODevice* iodev, uint64_t exp_count) {
     if (iodev == m_common_timer_io_dev.get()) {
         // This is a non-recurring timer, loop in all timers in heap and call which are expired
         LOCK_IF_GLOBAL();
@@ -159,7 +159,7 @@ void timer_epoll::on_timer_armed(IODevice* iodev) {
             if (tinfo.expiry_time <= time_now) {
                 m_timer_list.pop();
                 UNLOCK_IF_GLOBAL();
-                tinfo.cb(tinfo.context);
+                tinfo.cb(tinfo.context, 1);
                 LOCK_IF_GLOBAL();
             } else {
                 break;
@@ -167,7 +167,7 @@ void timer_epoll::on_timer_armed(IODevice* iodev) {
         }
         UNLOCK_IF_GLOBAL();
     } else {
-        if (!m_stop_pending) { iodev->tinfo->cb(iodev->tinfo->context); }
+        if (!m_stop_pending) { iodev->tinfo->cb(iodev->tinfo->context, exp_count); }
     }
 }
 
@@ -324,7 +324,7 @@ bool spdk_thread_timer_info::call_timer_cb_once() {
     if (!st_info->is_multi_threaded ||
         st_info->cur_term_num.compare_exchange_strong(cur_term_num, term_num, std::memory_order_acq_rel)) {
         ++(iomanager.this_thread_metrics().timer_wakeup_count);
-        st_info->cb(st_info->context);
+        st_info->cb(st_info->context, 1);
         ret = true;
     }
     // NOTE: Do not access this pointer or tinfo from this point, as once callback is called, it could
@@ -344,7 +344,7 @@ void timer_spdk::check_and_call_expired_timers() {
         if (tinfo.expiry_time <= time_now) {
             m_timer_list.pop();
             UNLOCK_IF_GLOBAL();
-            tinfo.cb(tinfo.context);
+            tinfo.cb(tinfo.context, 1);
             LOCK_IF_GLOBAL();
         } else {
             break;

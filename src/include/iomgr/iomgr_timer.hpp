@@ -23,7 +23,7 @@
 
 struct spdk_poller;
 namespace iomgr {
-typedef std::function< void(void*) > timer_callback_t;
+typedef std::function< void(void*, uint64_t) > timer_callback_t;
 
 class timer;
 struct timer_info {
@@ -184,7 +184,7 @@ public:
 
 private:
     std::shared_ptr< IODevice > setup_timer_fd(bool is_recurring, bool wait_to_setup = false);
-    void on_timer_armed(IODevice* iodev);
+    void on_timer_armed(IODevice* iodev, uint64_t exp_count);
 
 private:
     std::shared_ptr< IODevice > m_common_timer_io_dev;                // fd_info for the common timer fd
