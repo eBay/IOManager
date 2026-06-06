@@ -100,7 +100,7 @@ public:
     void stop() override;
 
     static void on_timer_fd_notification(IODevice* iodev);
-    void on_timer_armed(IODevice* iodev);
+    void on_timer_armed(IODevice* iodev, uint64_t exp_count);
 
 private:
     shared< IODevice > setup_timer_fd(bool recurring, bool wait_to_add);

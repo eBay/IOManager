@@ -24,9 +24,12 @@
 namespace iomgr {
 
 namespace {
-// Adapt a no-arg timer_callback to IOManager's void(void*) cookie-style callback.
+// Adapt a no-arg timer_callback to IOManager's void(void*, uint64_t) cookie-style callback.
+// The expiration count is intentionally ignored: a high-level recurring callback fires once per
+// notification rather than bursting N times if the reactor fell behind (SDSTOR-22330's "invoke
+// once" default). Callers that need catch-up semantics should use schedule_*_timer directly.
 inline timer_callback_t adapt(timer_callback&& cb) {
-    return [cb = std::move(cb)](void*) { cb(); };
+    return [cb = std::move(cb)](void*, uint64_t) { cb(); };
 }
 inline uint64_t to_nanos(std::chrono::nanoseconds d) { return static_cast< uint64_t >(d.count()); }
 } // namespace
