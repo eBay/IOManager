@@ -40,7 +40,7 @@
 #include <iomgr/iomgr_types.hpp>
 
 namespace iomgr {
-using timer_callback_t = std::function< void(void*) >;
+using timer_callback_t = std::function< void(void*, uint64_t) >;
 using timer_handle_t = std::shared_ptr< void >;  // opaque; null == no active timer
 inline const timer_handle_t null_timer_handle{}; // sentinel for "no timer"
 
@@ -219,6 +219,35 @@ public:
                                          timer_callback_t&& timer_fn);
     timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, reactor_regex r,
                                          timer_callback_t&& timer_fn, bool wait_to_schedule = false);
+
+    // Overloads for legacy void(void*) callbacks: wrap to call fn N times (once per expiration).
+    // SFINAE excludes callables already convertible to timer_callback_t (e.g. std::bind results,
+    // which std::bind makes callable with extra args and thus convertible to the 2-param type).
+    template < typename Fn,
+               std::enable_if_t< !std::is_convertible_v< std::decay_t< Fn >, timer_callback_t >, int > = 0 >
+    timer_handle_t schedule_thread_timer(uint64_t nanos_after, bool recurring, void* cookie, Fn&& timer_fn) {
+        return schedule_thread_timer(
+            nanos_after, recurring, cookie,
+            timer_callback_t{[fn = std::forward< Fn >(timer_fn)](void* ctx, uint64_t exp_count) mutable {
+                for (uint64_t i{0}; i < exp_count; ++i) {
+                    fn(ctx);
+                }
+            }});
+    }
+
+    template < typename Fn,
+               std::enable_if_t< !std::is_convertible_v< std::decay_t< Fn >, timer_callback_t >, int > = 0 >
+    timer_handle_t schedule_global_timer(uint64_t nanos_after, bool recurring, void* cookie, reactor_regex r,
+                                         Fn&& timer_fn, bool wait_to_schedule = false) {
+        return schedule_global_timer(
+            nanos_after, recurring, cookie, r,
+            timer_callback_t{[fn = std::forward< Fn >(timer_fn)](void* ctx, uint64_t exp_count) mutable {
+                for (uint64_t i{0}; i < exp_count; ++i) {
+                    fn(ctx);
+                }
+            }},
+            wait_to_schedule);
+    }
     void cancel_timer(timer_handle_t thdl, bool wait_to_cancel = false);
     void set_poll_interval(const int interval);
     int get_poll_interval() const;

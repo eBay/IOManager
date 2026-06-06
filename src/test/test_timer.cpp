@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -224,6 +225,63 @@ TEST_F(TimerTest, raii_token_lifecycle) {
     EXPECT_FALSE(b.active());
     b.cancel(); // idempotent
     EXPECT_FALSE(b.active());
+}
+
+// Tests for 2-param void(void*, uint64_t) callbacks that receive exp_count directly.
+TEST_F(TimerTest, thread_timer_2param_cb) {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::atomic< uint64_t > total_exp_count{0};
+    std::atomic< int > call_count{0};
+    constexpr int target_calls{5};
+
+    // Schedule, run, and cancel all on the same reactor to avoid cross-thread cancel issues.
+    timer_handle_t hdl;
+    IOReactor* timer_reactor{nullptr};
+    iomanager.run_on(true /* wait */, reactor_regex::random_worker, [&]() {
+        timer_reactor = iomanager.this_reactor();
+        hdl = iomanager.schedule_thread_timer(5 * 1000 * 1000 /* 5ms */, true /* recurring */, nullptr,
+                                              [&](void*, uint64_t exp_count) {
+                                                  EXPECT_GE(exp_count, 1u);
+                                                  total_exp_count.fetch_add(exp_count, std::memory_order_relaxed);
+                                                  if (++call_count >= target_calls) { cv.notify_one(); }
+                                              });
+    });
+
+    {
+        std::unique_lock< std::mutex > lk{mtx};
+        cv.wait_for(lk, 2s, [&] { return call_count.load() >= target_calls; });
+    }
+    EXPECT_GE(call_count.load(), target_calls);
+    EXPECT_GE(total_exp_count.load(), static_cast< uint64_t >(target_calls));
+
+    // Cancel on the owning reactor.
+    iomanager.run_on(true /* wait */, timer_reactor, [&]() { iomanager.cancel_timer(hdl, false); });
+}
+
+TEST_F(TimerTest, global_timer_2param_cb) {
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::atomic< uint64_t > total_exp_count{0};
+    std::atomic< int > call_count{0};
+    constexpr int target_calls{5};
+
+    auto hdl = iomanager.schedule_global_timer(
+        5 * 1000 * 1000 /* 5ms */, true /* recurring */, nullptr, reactor_regex::all_worker,
+        [&](void*, uint64_t exp_count) {
+            EXPECT_GE(exp_count, 1u);
+            total_exp_count.fetch_add(exp_count, std::memory_order_relaxed);
+            if (++call_count >= target_calls) { cv.notify_one(); }
+        },
+        true /* wait */);
+
+    {
+        std::unique_lock< std::mutex > lk{mtx};
+        cv.wait_for(lk, 2s, [&] { return call_count.load() >= target_calls; });
+    }
+    EXPECT_GE(call_count.load(), target_calls);
+    EXPECT_GE(total_exp_count.load(), static_cast< uint64_t >(target_calls));
+    iomanager.cancel_timer(hdl, true /* wait */);
 }
 
 /* NOTE: Make sure this is the last test case, so that iomanager stop is running in parallel to timer test */
