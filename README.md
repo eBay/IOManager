@@ -7,7 +7,7 @@
 > An asynchronous I/O reactor for Linux storage applications — C++20/23 coroutines over `io_uring`, with an epoll / tight-loop hybrid reactor.
 
 IOManager multiplexes storage and event sources onto a small pool of reactor threads and lets an
-application do **run-to-completion** async I/O without handing work off to a separate thread pool. As
+application do async I/O **on the reactor threads themselves — non-blocking, never handed off to a separate thread pool.** As
 of **v13** the drive path is built on C++20/23 stackless coroutines driven by `io_uring`; the older
 Folly-futures, stackful-fiber, SPDK and libaio machinery has been removed.
 
@@ -19,7 +19,7 @@ Folly-futures, stackful-fiber, SPDK and libaio machinery has been removed.
 - **Hybrid reactor model** — interrupt (epoll) and tight-loop (polling) reactors run side by side, plus
   an *adaptive* mode that backs off to interrupt mode under no load.
 - **Coroutine I/O** — drive operations are awaitables; `co_await` returns an `io_result`. Built on the
-  [sisl](https://github.com/eBay/sisl) `async` substrate (CQE-driven `disk_task`) and
+  [sisl](https://github.com/eBay/sisl) `async` substrate (`exec::task` driven over its `io_uring_scheduler`) and
   [NVIDIA stdexec](https://github.com/NVIDIA/stdexec) (P2300 sender/receiver).
 - **`io_uring` drive backend** — the single, lock-free-submission drive backend; a per-loop reactor
   *sentinel* flushes queued SQEs and reaps CQEs, resuming suspended coroutines with no thread hops.
@@ -186,8 +186,8 @@ detach(async_write(drv, buf, 4096, off), [](io_result r) {
 });
 ```
 
-The underlying coroutine / `io_uring` scheduler machinery (sisl `disk_task`, stdexec senders) is fully
-hidden behind the `io_op` PIMPL — consumers never see, or need to depend on, stdexec.
+The underlying coroutine / `io_uring` scheduler machinery (sisl's `io_uring_scheduler` driving `exec::task`,
+stdexec senders) is fully hidden behind the `io_op` PIMPL — consumers never see, or need to depend on, stdexec.
 
 ## 🖥️ Usage
 
@@ -282,7 +282,7 @@ conan build -s:h build_type=Debug -o iomgr/*:sanitize=thread  --build missing .
 ### Core
 
 - **[sisl](https://github.com/eBay/sisl)** (v14+) — logging, options, metrics, HTTP server, and the
-  `async` coroutine substrate (`disk_task`, the io_uring CQE bridge, the `io_uring_scheduler`).
+  `async` coroutine substrate (`exec::task` and the `io_uring_scheduler` io_uring CQE bridge).
 - **liburing** (2.1+) — `io_uring` access (Linux only).
 - **[NVIDIA stdexec](https://github.com/NVIDIA/stdexec)** — P2300 sender/receiver; the structured-concurrency
   layer the drive path composes on (provided transitively via the sisl conan package).
