@@ -59,7 +59,7 @@ public:
     void TearDown() override {}
 
     void msg_sender_thread(bool is_wait, const thread_specifier& dest, const run_method_t& receiver) {
-        static thread_local uint64_t this_thread_sent_count{0};
+        [[maybe_unused]] static thread_local uint64_t this_thread_sent_count{0};
         for (uint64_t i{0}; i < g_iters; ++i) {
             int count{0};
             if (std::holds_alternative< IOReactor* >(dest)) {
