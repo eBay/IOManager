@@ -187,6 +187,16 @@ public:
         }
     }
 
+    // Post an IORING_OP_MSG_RING SQE from the CURRENT reactor's io_uring to an EXTERNAL io_uring identified by
+    // target_ring_fd (e.g. another thread's ring). That ring receives a CQE carrying `user_data` (its
+    // cqe->user_data) and `cqe_res` (its cqe->res) -- handing a completion directly to another thread's io_uring
+    // with no shared queue or lock: the caller fills the target CQE's payload, the kernel delivers it. Useful for
+    // a reactor to wake a foreign single-issuer ring (e.g. a ublk queue) and resume a coroutine waiting there.
+    // MUST be called on a uring-capable reactor. Fire-and-forget: the op's own (source-side) CQE is reaped and
+    // discarded by this reactor's drive scheduler. Returns 0 on success, -ENODEV if this thread has no io_uring
+    // drive channel, -EAGAIN if the submission queue is full.
+    int post_msg_ring(int target_ring_fd, uint64_t user_data, int32_t cqe_res);
+
     ///////////////////////////// Access related methods /////////////////////////////
     uint32_t num_workers() const { return m_num_workers; }
     bool is_uring_capable() const { return m_is_uring_capable; }

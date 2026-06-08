@@ -387,6 +387,35 @@ int IOManager::send_msg_and_wait(IOReactor* reactor, iomgr_waitable_msg* msg) {
     return 1;
 }
 
+int IOManager::post_msg_ring(int target_ring_fd, uint64_t user_data, int32_t cqe_res) {
+    // Must be on a reactor that has an io_uring drive channel; otherwise we have no ring to issue from.
+    auto* const ch = UringDriveInterface::this_channel();
+    if (ch == nullptr) { return -ENODEV; }
+
+    auto* const ring = &ch->m_ring;
+    ::io_uring_sqe* sqe = ::io_uring_get_sqe(ring);
+    if (sqe == nullptr) {
+        // SQ momentarily full: flush what's queued to the kernel and retry once.
+        ::io_uring_submit(ring);
+        sqe = ::io_uring_get_sqe(ring);
+        if (sqe == nullptr) { return -EAGAIN; }
+    }
+    // For IORING_OP_MSG_RING the `len` arg becomes the target CQE's res and the `data` arg its user_data, so the
+    // foreign ring's reaper sees exactly (cqe->user_data == user_data, cqe->res == cqe_res).
+    ::io_uring_prep_msg_ring(sqe, target_ring_fd, static_cast< unsigned >(cqe_res), user_data, 0);
+    // The op posts a CQE to OUR ring too (the send result). Tag it managed-null so the drive scheduler's
+    // poll_once reaps and discards it instead of treating it as a coroutine completion.
+    ::io_uring_sqe_set_data64(sqe, sisl::async::encode_managed_user_data(nullptr));
+    // Submit NOW rather than deferring to the next poll_once. Deferring would batch the submit syscall, but the
+    // completing reactor may be busy/blocking (e.g. the journal flush reactor blocks on sync_pwritev), so the
+    // queued SQE -- and thus the target ring's wakeup -- would stall behind that reactor's loop, adding latency to
+    // every posted completion. One submit per post is cheap (and dwarfed by whatever the reactor is already
+    // doing); prompt delivery matters more for a completion-wakeup path. (Co-located posts still coalesce: submit
+    // only sends SQEs queued since the last submit.)
+    ::io_uring_submit(ring);
+    return 0;
+}
+
 static void append_future_if_needed(iomgr_msg* msg, std::vector< std::future< bool > >& out_future_list) {
     if (msg->need_reply()) { out_future_list.push_back((r_cast< iomgr_waitable_msg* >(msg))->m_promise.get_future()); }
 }
