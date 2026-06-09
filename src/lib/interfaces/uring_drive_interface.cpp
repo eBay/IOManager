@@ -35,10 +35,32 @@ thread_local uring_drive_channel* UringDriveInterface::t_uring_ch{nullptr};
 using namespace std::chrono;
 
 uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) : m_sched{&m_ring} {
-    int ret = io_uring_queue_init(IM_DYNAMIC_CONFIG(drive.uring_per_thread_qdepth), &m_ring, 0);
+    auto const qdepth = IM_DYNAMIC_CONFIG(drive.uring_per_thread_qdepth);
+
+    // Assemble optional io_uring setup flags. Each reactor owns its own ring and is the sole submitter
+    // (t_uring_ch is thread_local), so SINGLE_ISSUER is always legal here and simply lets the kernel drop
+    // submit-path locking. These require a new-enough kernel; if it rejects them we fall back to a default
+    // ring rather than fail creation over an optional optimization.
+    io_uring_params params{};
+#ifdef IORING_SETUP_SINGLE_ISSUER
+    if (IM_DYNAMIC_CONFIG(drive.uring_single_issuer) != 0) { params.flags |= IORING_SETUP_SINGLE_ISSUER; }
+#endif
+#ifdef IORING_SETUP_CQSIZE
+    if (auto const cq_mult = IM_DYNAMIC_CONFIG(drive.uring_cq_size_multiple); cq_mult > 0) {
+        params.flags |= IORING_SETUP_CQSIZE;
+        params.cq_entries = qdepth * cq_mult;
+    }
+#endif
+
+    int ret = io_uring_queue_init_params(qdepth, &m_ring, &params);
+    if ((ret == -EINVAL) && (params.flags != 0)) {
+        LOGWARN("io_uring setup flags {:#x} unsupported by this kernel; retrying ring with defaults", params.flags);
+        params = io_uring_params{};
+        ret = io_uring_queue_init_params(qdepth, &m_ring, &params);
+    }
     if (ret) {
-        throw std::system_error{errno, std::system_category(),
-                                fmt::format("Unable to create uring queue created ret={}", ret)};
+        throw std::system_error{-ret, std::system_category(),
+                                fmt::format("Unable to create uring queue ret={}", ret)};
     }
 
     int ev_fd = eventfd(0, EFD_NONBLOCK);

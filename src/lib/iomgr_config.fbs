@@ -30,6 +30,14 @@ table DriveInterface {
     disable_io_uring: bool = false; // flag to not use io uring even if the env supports it
 
     uring_per_thread_qdepth: uint32 = 256; // IMPORTANT: do not make this hotswap
+
+    // io_uring setup flags, applied once at ring creation (IMPORTANT: do not make these hotswap).
+    // Every iomgr uring ring is per-reactor (thread_local), i.e. a single submitter, so SINGLE_ISSUER
+    // is always legal here. If the running kernel rejects a flag, ring creation falls back to a default
+    // ring rather than failing over an optional optimization.
+    uring_single_issuer: uint32 = 1;    // IORING_SETUP_SINGLE_ISSUER (kernel 6.0+). Default ON: A/B neutral at normal
+                                         // load, ~+2% iops / -4% rd p99 when submit-bound (brd ramdisk, ~160k IOPS).
+    uring_cq_size_multiple: uint32 = 0; // >0 => IORING_SETUP_CQSIZE with cq_entries = qdepth * this (0 = kernel default)
 }
 
 table PoolEntry {
