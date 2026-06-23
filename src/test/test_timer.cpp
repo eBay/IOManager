@@ -3,6 +3,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <sys/resource.h>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -67,6 +68,15 @@ static bool g_need_time_check{false};
 static std::vector< timer_handle_t > g_thdls;
 
 void glob_setup() {
+    // Each recurring timer holds its own timerfd; raise the soft limit so 1000 concurrent
+    // timers don't exhaust the default ulimit -n (1024) on Linux CI runners.
+    struct rlimit rl;
+    getrlimit(RLIMIT_NOFILE, &rl);
+    rl.rlim_cur = std::min(rl.rlim_max, static_cast< rlim_t >(65536));
+    if (setrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        LOGWARN("Failed to raise RLIMIT_NOFILE to {}: {}", rl.rlim_cur, strerror(errno));
+    }
+
     g_is_spdk = SISL_OPTIONS["spdk"].as< bool >();
     g_io_threads = SISL_OPTIONS["io_threads"].as< uint32_t >();
     if ((SISL_OPTIONS.count("io_threads") == 0) && g_is_spdk) { g_io_threads = 2; }
