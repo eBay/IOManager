@@ -83,10 +83,16 @@ struct io_uring_sqe* uring_drive_channel::get_sqe_or_enqueue(drive_iocb* iocb) {
 void uring_drive_channel::submit_ios() {
     if (m_prepared_ios != 0) {
         const auto ret = io_uring_submit(&m_ring);
+        if (ret <= 0) {
+            LOGERRORMOD(iomgr, "io_uring_submit failed ret={} prepared_ios={} in_flight_ios={}", ret, m_prepared_ios,
+                        m_in_flight_ios);
+            DEBUG_ASSERT_GT(ret, 0, "Facing an error in io_uring_submit ret={}", ret);
+            return;
+        }
         if (static_cast< int >(m_prepared_ios) < ret) {
+            LOGERRORMOD(iomgr, "io_uring_submit returned more ios ({}) than prepared ({})", ret, m_prepared_ios);
             DEBUG_ASSERT(false, "prepared ios must be always equal or greater than just-submitted ios");
         }
-        DEBUG_ASSERT_GT(ret, 0, "Facing an error in io_uring_submit");
         m_in_flight_ios += ret;
 
         m_prepared_ios -= ret;
@@ -135,6 +141,10 @@ void uring_drive_channel::drain_waitq() {
         if (!can_submit()) { break; };
         struct io_uring_sqe* sqe = io_uring_get_sqe(&m_ring);
         if (sqe == nullptr) {
+            LOGERRORMOD(iomgr,
+                        "Unexpected unavailable sqe while draining waitq, waitq_size={} prepared_ios={} "
+                        "in_flight_ios={}",
+                        m_iocb_waitq.size(), m_prepared_ios, m_in_flight_ios);
             DEBUG_ASSERT(false, "Don't expect sqe to be full or unavailable");
             return;
         };
@@ -469,6 +479,9 @@ void UringDriveInterface::handle_completions() {
         if (sisl_unlikely(*(t_uring_ch->m_ring.cq.koverflow))) {
             COUNTER_INCREMENT(m_metrics, overflow_errors, 1);
             COUNTER_INCREMENT(m_metrics, num_of_drops, *(t_uring_ch->m_ring.cq.koverflow));
+            LOGERRORMOD(iomgr, "CQ overflow - dropped io requests={} waitq_size={} prepared_ios={} in_flight_ios={}",
+                        *(t_uring_ch->m_ring.cq.koverflow), t_uring_ch->waitq_size(), t_uring_ch->m_prepared_ios,
+                        t_uring_ch->m_in_flight_ios);
             folly::throwSystemError(fmt::format("CQ overflow - number of dropped io requests : {} - {}",
                                                 *(t_uring_ch->m_ring.cq.koverflow), strerror(errno)));
             break;
@@ -476,6 +489,7 @@ void UringDriveInterface::handle_completions() {
         if (sisl_unlikely(ret < 0)) {
             if (ret != -EAGAIN) {
                 COUNTER_INCREMENT(m_metrics, completion_errors, 1);
+                LOGERRORMOD(iomgr, "io_uring_peek_cqe failed ret={} error={}", ret, strerror(errno));
                 folly::throwSystemError(fmt::format("io_uring_wait_cqe throw error={}", strerror(errno)));
             } else {
                 LOGTRACEMOD(iomgr, "Received EAGAIN on uring peek cqe");
@@ -499,6 +513,9 @@ void UringDriveInterface::handle_completions() {
                 LOGDEBUGMOD(iomgr, "Received completion event with partial result, iocb={} size={} Result={}, retry={}",
                             (void*)iocb, iocb->size, iocb->result, iocb->resubmit_cnt);
                 if (iocb->part_read_resubmit_cnt++ > IM_DYNAMIC_CONFIG(drive.partial_read_max_resubmit_cnt)) {
+                    LOGERRORMOD(iomgr, "Partial read exceeded retry limit={}, iocb={} size={} result={} retry_cnt={}",
+                                IM_DYNAMIC_CONFIG(drive.partial_read_max_resubmit_cnt), iocb->to_string(), iocb->size,
+                                iocb->result, iocb->part_read_resubmit_cnt);
                     LOGMSG_ASSERT(false, "Don't expect partial read to exceed retry limit={}",
                                   IM_DYNAMIC_CONFIG(drive.partial_read_max_resubmit_cnt));
                     // in production, keep retrying until we get all the data;
@@ -514,6 +531,9 @@ void UringDriveInterface::handle_completions() {
                         iocb->resubmit_cnt);
             if ((iocb->result != -EAGAIN) && iocb->resubmit_cnt++ > IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt)) {
                 // EAGAIN won't increase resubmit_cnt;
+                LOGERRORMOD(iomgr, "IO retry exceeded limit={}, completing with error, iocb={} result={} retry_cnt={}",
+                            IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt), iocb->to_string(), iocb->result,
+                            iocb->resubmit_cnt);
                 DEBUG_ASSERT(false, "Don't expect op={} retry exceed limit={}", iocb->op_type,
                              IM_DYNAMIC_CONFIG(drive.max_resubmit_cnt));
                 complete_io(iocb);
