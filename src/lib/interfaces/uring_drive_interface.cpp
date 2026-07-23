@@ -86,8 +86,7 @@ void uring_drive_channel::submit_ios() {
         if (ret <= 0) {
             LOGERRORMOD(iomgr, "io_uring_submit failed ret={} prepared_ios={} in_flight_ios={}", ret, m_prepared_ios,
                         m_in_flight_ios);
-            DEBUG_ASSERT_GT(ret, 0, "Facing an error in io_uring_submit ret={}", ret);
-            return;
+            DEBUG_ASSERT(false, "Facing an error in io_uring_submit ret={}", ret);
         }
         if (static_cast< int >(m_prepared_ios) < ret) {
             LOGERRORMOD(iomgr, "io_uring_submit returned more ios ({}) than prepared ({})", ret, m_prepared_ios);
