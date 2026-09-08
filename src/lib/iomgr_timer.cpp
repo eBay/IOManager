@@ -46,18 +46,15 @@ timer_epoll::~timer_epoll() {
 void timer_epoll::stop() {
     // Remove all timers in the non-recurring timer list
     while (!m_timer_list.empty()) {
-        // auto& tinfo = m_timer_list.top(); // TODO: Check if we need to make upcall that timer is cancelled
         m_timer_list.pop();
     }
-    // Now close the common timer
+    // remove_io_device with wait=true calls post_remove -> iodev->close() which closes the fd;
+    // do NOT call close(iodev->fd()) afterwards or the fd is double-closed.
     if (m_common_timer_io_dev && (m_common_timer_io_dev->fd() != -1)) {
         iomanager.generic_interface()->remove_io_device(m_common_timer_io_dev, true /* wait */);
-        close(m_common_timer_io_dev->fd());
     }
-    // Now iterate over recurring timer list and remove them
     for (auto& iodev : m_recurring_timer_iodevs) {
         iomanager.generic_interface()->remove_io_device(iodev, true /* wait */);
-        close(iodev->fd());
     }
     m_stopped = true;
 }
