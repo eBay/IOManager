@@ -149,6 +149,14 @@ jobs:
         testing: ${{ inputs.testing }}
         key_prefix: IOMgrDeps-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}
 
+    - name: Retrieve Dependencies
+      uses: actions/checkout@v4
+      with:
+        repository: eBay/sisl
+        path: import/sisl
+        ref: dev/v14.x
+      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
+
     - name: Load Sisl Cache
       uses: eBay/sisl/.github/actions/load_conan2@dev/v14.x
       with:
@@ -156,14 +164,6 @@ jobs:
         path: import/sisl
         key_prefix: SislDeps14-${{ inputs.platform }}-${{ inputs.build-type }}-${{ inputs.malloc-impl }}-${{ inputs.compiler }}
         fail_on_cache_miss: true
-      if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
-
-    - name: Retrieve Dependencies
-      uses: actions/checkout@v4
-      with:
-        repository: eBay/sisl
-        path: import/sisl
-        ref: dev/v14.x
       if: ${{ inputs.testing == 'True' || steps.restore-cache.outputs.cache-hit != 'true' }}
 
     - name: Prepare Recipes
