@@ -5,11 +5,11 @@ from conan.tools.cmake import CMakeToolchain, CMakeDeps, CMake
 from conan.tools.files import copy
 from os.path import join, exists
 
-required_conan_version = ">=1.60.0"
+required_conan_version = ">=2.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "13.0.1"
+    version = "13.0.2"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -60,7 +60,7 @@ class IOMgrConan(ConanFile):
         self.test_requires("cpr/[^1.12]")
 
     def requirements(self):
-        self.requires("sisl/[^14.4]@oss/dev", transitive_headers=True)
+        self.requires("sisl/[^14.9]@oss/dev", transitive_headers=True)
         if self.settings.os in ["Linux"]:
             self.requires("liburing/[^2.1]", transitive_headers=True)
 
@@ -93,7 +93,7 @@ class IOMgrConan(ConanFile):
         tc.variables["BUILD_COVERAGE"] = "OFF"
         tc.variables["PRERELEASE_ON"] = "OFF"
         tc.variables["CMAKE_TEST_TARGET"] = self.options.testing
-        if self.options.get_safe("prerelease"):
+        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
             tc.variables["PRERELEASE_ON"] = "ON"
         if self.settings.build_type == "Debug":
             if self.options.get_safe("coverage"):
