@@ -13,6 +13,8 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 
+#include <utility>
+
 #include <iomgr/iomgr.hpp>
 #include "drive_interface.hpp"
 #include "interfaces/drive_iocb.hpp"
@@ -45,7 +47,8 @@ const uint8_t* zero_buffer(size_t size) {
 
 void IODevice::close() {
     m_metrics.reset();
-    ::close(fd());
+    const auto owned_fd = std::exchange(dev, -1);
+    if (owned_fd != -1) { ::close(owned_fd); }
 }
 
 void IODevice::enable_metrics(std::string group_name) {

@@ -9,7 +9,7 @@ required_conan_version = ">=2.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "13.0.2"
+    version = "13.0.3"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"

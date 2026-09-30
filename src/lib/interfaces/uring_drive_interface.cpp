@@ -59,8 +59,7 @@ uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) : m_sched{&
         ret = io_uring_queue_init_params(qdepth, &m_ring, &params);
     }
     if (ret) {
-        throw std::system_error{-ret, std::system_category(),
-                                fmt::format("Unable to create uring queue ret={}", ret)};
+        throw std::system_error{-ret, std::system_category(), fmt::format("Unable to create uring queue ret={}", ret)};
     }
 
     int ev_fd = eventfd(0, EFD_NONBLOCK);
@@ -85,8 +84,7 @@ uring_drive_channel::~uring_drive_channel() {
     io_uring_queue_exit(&m_ring);
     if (m_ring_ev_iodev != nullptr) {
         iomanager.this_reactor()->detach_iomgr_sentinel_cb();
-        iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev);
-        close(m_ring_ev_iodev->fd());
+        iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev, true /* wait_to_remove */);
     }
 }
 
