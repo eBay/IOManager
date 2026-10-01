@@ -60,7 +60,7 @@ class IOMgrConan(ConanFile):
         self.requires("spdk/nbi.21.07.y")
         self.requires("pistache/nbi.0.0.5.1")
 
-        self.requires("openssl/1.1.1s", override=True)
+        self.requires("openssl/1.1.1w", override=True)
 
     def layout(self):
         self.folders.source = "."
