@@ -7,7 +7,7 @@ from os.path import join
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "8.8.6"
+    version = "8.8.7"
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
     topics = ("ebay", "nublox", "aio")
@@ -48,19 +48,19 @@ class IOMgrConan(ConanFile):
         self.test_requires("gtest/1.15.0")
 
     def requirements(self):
-        self.requires("sisl/8.9.7")
+        self.requires("sisl/8.9.8")
 
         self.requires("boost/1.79.0")
         self.requires("folly/2022.01.31.00")
         self.requires("grpc/1.54.3")
         self.requires("grpc_internal/1.48.0")
         self.requires("liburing/2.1")
-        self.requires("nlohmann_json/3.12.0")
+        self.requires("nlohmann_json/[^3.11]")
         self.requires("libevent/2.1.12")
         self.requires("spdk/nbi.21.07.y")
         self.requires("pistache/nbi.0.0.5.1")
 
-        self.requires("openssl/1.1.1s", override=True)
+        self.requires("openssl/1.1.1w", override=True)
 
     def layout(self):
         self.folders.source = "."
