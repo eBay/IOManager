@@ -9,7 +9,7 @@ required_conan_version = ">=2.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "13.0.3"
+    version = "13.1.0"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -128,7 +128,8 @@ class IOMgrConan(ConanFile):
         copy(self, "*.dll", self.build_folder, join(self.package_folder, "lib"), keep_path=False)
 
     def package_info(self):
-        if self.options.get_safe("prerelease"):
+        # Debug builds are always prerelease (see generate()); consumers must see the same headers iomgr was built with
+        if self.options.get_safe("prerelease") or (self.settings.build_type == "Debug"):
             self.cpp_info.defines.append("_PRERELEASE=1")
         if self.options.get_safe("sanitize") and self.options.sanitize != "False":
             if self.options.sanitize == "thread":
