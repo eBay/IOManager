@@ -38,6 +38,7 @@ set(IOMGR_OBJECTS
     iomgr_helper.cpp
     iomgr_timer.cpp
     drive.cpp
+    net_op.cpp
     timer.cpp
     watchdog.cpp
 )
