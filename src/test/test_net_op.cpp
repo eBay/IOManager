@@ -171,6 +171,38 @@ TEST_F(NetOpTest, RecvSuspendsUntilDataArrives) {
     ::close(fd1);
 }
 
+TEST_F(NetOpTest, SendSuspendsUntilPeerDrains) {
+    auto const [fd0, fd1] = make_connected_pair();
+    // Shrink both ends of the pipe's effective capacity so a send_all of a comfortably larger payload is
+    // guaranteed to exhaust it and genuinely park, regardless of this host's default socket buffer sizes.
+    int const small_buf_size = 4096;
+    ::setsockopt(fd0, SOL_SOCKET, SO_SNDBUF, &small_buf_size, sizeof(small_buf_size));
+    ::setsockopt(fd1, SOL_SOCKET, SO_RCVBUF, &small_buf_size, sizeof(small_buf_size));
+
+    auto* const reactor = pick_a_worker_reactor();
+    socket_handle sock(fd0, thread_specifier{reactor});
+
+    std::vector< uint8_t > payload(1024 * 1024);
+    for (size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast< uint8_t >(i); }
+
+    auto fut = start< io_result >(reactor, [&]() { return send_all(sock, std::span< uint8_t const >(payload)); });
+    ASSERT_EQ(fut.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
+
+    std::vector< uint8_t > received(payload.size());
+    size_t total_read{0};
+    while (total_read < received.size()) {
+        ssize_t const n = ::read(fd1, received.data() + total_read, received.size() - total_read);
+        ASSERT_GT(n, 0);
+        total_read += static_cast< size_t >(n);
+    }
+
+    auto const result = fut.get();
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, payload.size());
+    EXPECT_EQ(received, payload);
+    ::close(fd1);
+}
+
 TEST_F(NetOpTest, SocketTeardownFailsParkedRecv) {
     auto const [fd0, fd1] = make_connected_pair();
     auto* const reactor = pick_a_worker_reactor();
@@ -195,6 +227,53 @@ TEST_F(NetOpTest, SocketTeardownFailsParkedRecv) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), std::make_error_condition(std::errc::connection_aborted));
     ::close(fd1);
+}
+
+TEST_F(NetOpTest, MoveAssignTearsDownPreviousConnection) {
+    auto const [fd0, fd1] = make_connected_pair();
+    auto const [fd2, fd3] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+
+    socket_handle old_sock(fd0, thread_specifier{reactor});
+    socket_handle new_sock(fd2, thread_specifier{reactor});
+
+    io_result old_result{0};
+    bool old_completed{false};
+    std::array< uint8_t, 5 > old_read_buf{};
+
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle& s, std::span< uint8_t > buf, io_result& out, bool& done) -> sisl::async::light_task< void > {
+            out = co_await async_recv(s, buf);
+            done = true;
+        }(old_sock, std::span< uint8_t >(old_read_buf), old_result, old_completed).detach();
+    });
+    ASSERT_FALSE(old_completed); // nothing written to fd0's peer yet; the recv is parked
+
+    // Move-assigning over old_sock while its recv is still parked must tear down its previous connection
+    // (fail the parked waiter, close fd0) before taking ownership of new_sock's.
+    old_sock = std::move(new_sock);
+
+    ASSERT_TRUE(old_completed);
+    ASSERT_FALSE(old_result.has_value());
+    EXPECT_EQ(old_result.error(), std::make_error_condition(std::errc::connection_aborted));
+
+    // old_sock now owns what was new_sock's connection and should work normally.
+    std::array< uint8_t, 4 > const payload{'p', 'i', 'n', 'g'};
+    ASSERT_EQ(::write(fd3, payload.data(), payload.size()), static_cast< ssize_t >(payload.size()));
+
+    std::array< uint8_t, 4 > read_buf{};
+    io_result recv_result{0};
+    iomanager.run_on_wait(reactor, [&]() {
+        recv_result = sisl::async::sync_get(
+            [](socket_handle& s, std::span< uint8_t > buf) -> sisl::async::light_task< io_result > {
+                co_return co_await recv_exact(s, buf);
+            }(old_sock, std::span< uint8_t >(read_buf)));
+    });
+
+    ASSERT_TRUE(recv_result.has_value());
+    EXPECT_EQ(read_buf, payload);
+    ::close(fd1);
+    ::close(fd3);
 }
 
 TEST_F(NetOpTest, ListenerTeardownFailsParkedAccept) {
