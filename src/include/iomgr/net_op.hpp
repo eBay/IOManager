@@ -26,16 +26,11 @@ namespace iomgr {
 
 class net_op;
 
-// Owns one fd's reactor registration (one make_io_device call, for the fd's whole life) and its
-// parked-waiter state -- long-lived, constructed once per socket, never per operation. Holds at most one
-// parked recv waiter and one parked send waiter at a time (see the caller contract below and
-// iomgr_net_op_design.md point 1); callers must serialize their own recv loop and their own send loop.
-//
-// Every net_op issued against a handle must run on the single reactor thread the handle was constructed
-// on, for the handle's entire lifetime -- never from any other thread. Construction and destruction are
-// the one exception: they may be called from any thread (the constructor/destructor hop onto the target
-// reactor themselves if not already there), since a handle's teardown may legitimately be triggered from
-// outside its own reactor (e.g. a forced connection close), unlike the per-operation calls.
+// Owns one fd's reactor registration for its whole life; construct once per socket, never per operation.
+// Holds at most one parked recv waiter and one parked send waiter -- serialize your own recv loop and your
+// own send loop. Every net_op call on a handle must run on the reactor it was constructed on, for the
+// handle's whole life, except construction and destruction: those may run on any thread (they hop onto the
+// target/owning reactor themselves), since teardown can legitimately be triggered from another thread.
 class socket_handle {
 public:
     struct impl;
@@ -57,21 +52,16 @@ private:
     std::unique_ptr< impl > _impl;
 };
 
-// Opaque awaitable for a single asynchronous socket recv or send. co_await it to get the io_result, exactly
-// like iomgr::io_op:
+// Opaque awaitable for a single asynchronous socket recv or send. `co_await` it to get the io_result,
+// exactly like iomgr::io_op:
 //
 //     iomgr::io_result r = co_await iomgr::async_recv(sock, buf);
-//     iomgr::io_result r = co_await iomgr::async_send(sock, buf);
 //
-// `await_ready()` always attempts the non-blocking recv/send syscall itself before ever touching the
-// handle's parked-waiter state; only EAGAIN/EWOULDBLOCK suspends. A recv that completes with zero bytes is
-// the peer's orderly shutdown, surfaced as an ordinary io_result{0} -- never as an error, and never
-// confused with "not ready yet" (which never reaches await_resume() as a value at all). Partial transfer
-// is the caller's job: a net_op can complete having moved fewer bytes than asked for, same as a raw
-// non-blocking socket always can.
-//
-// Must be driven (await_ready/await_suspend/await_resume) entirely on the socket_handle's own owning
-// reactor thread -- see the caller contract on socket_handle.
+// `await_ready()` retries the syscall itself before touching any parked-waiter state, so an already-ready
+// fd never suspends. A recv returning zero bytes is the peer's orderly shutdown, an ordinary io_result{0}
+// -- distinct from EAGAIN, which suspends and never reaches await_resume() as a value. May complete having
+// moved fewer bytes than requested, same as a raw non-blocking socket always can. Must be driven entirely
+// on the handle's owning reactor thread.
 class net_op {
 public:
     struct impl;
@@ -94,9 +84,10 @@ private:
 net_op async_recv(socket_handle& sock, std::span< uint8_t > buf);
 net_op async_send(socket_handle& sock, std::span< uint8_t const > buf);
 
-// Fire-and-forget launcher for callers that are not themselves coroutines -- same semantics as
-// iomgr::detach(io_op, ...): launches `op` and invokes `on_done(result)` when it completes. `on_done` runs
-// on sock's owning reactor thread. Deliberately no sync_wait(net_op) -- see iomgr_net_op_design.md point 5.
+// Fire-and-forget launcher for non-coroutine callers: launches `op` and invokes `on_done(result)` on sock's
+// owning reactor thread when it completes. No sync_wait(net_op): a socket_handle is pinned to one reactor
+// for its life, so there's no second reactor to block-wait through without risking deadlocking the one
+// thread that has to make the operation progress.
 void detach(net_op op, std::function< void(io_result) > on_done);
 
 } // namespace iomgr

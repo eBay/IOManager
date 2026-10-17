@@ -69,10 +69,9 @@ void set_nonblocking(int fd) {
     DEBUG_ASSERT_EQ(r, 0, "fcntl(F_SETFL, O_NONBLOCK) failed on fd {}: {}", fd, strerror(errno));
 }
 
-// Runs fn() on `reactor` -- inline if the calling thread is already that reactor, else dispatched via
-// run_on_wait (blocks the calling thread until fn() has run there). socket_handle's construction and
-// destruction use this so they're safe to call from any thread; the per-operation net_op calls are not
-// (see the caller contract in net_op.hpp) -- marshaling every recv/send would defeat the point of this API.
+// Runs fn() on `reactor` -- inline if already there, else dispatched via run_on_wait (blocking). Lets
+// socket_handle's construction/destruction be called from any thread without making every recv/send pay
+// for a dispatch too.
 void run_on_reactor(IOReactor* reactor, const auto& fn) {
     if (iomanager.this_reactor() == reactor) {
         fn();
@@ -113,9 +112,7 @@ struct net_op::impl {
 
 namespace {
 
-// Clears the parked slot and resumes its waiter with `r`. The resume happens on whatever thread calls
-// this -- for ev_callback that's always the owning reactor (by the caller contract); for teardown,
-// run_on_reactor above already ensures the same.
+// Clears the parked slot and resumes its waiter with `r`.
 void complete_parked(net_op::impl*& slot, io_result r) {
     auto* const op = std::exchange(slot, nullptr);
     op->result = std::move(r);
