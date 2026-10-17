@@ -51,6 +51,23 @@ std::pair< int, int > make_connected_pair() {
     return {fds[0], fds[1]};
 }
 
+// A bound, listening AF_UNIX socket -- distinct from make_connected_pair(): listen() requires a socket
+// that was bound and never connected, which a socketpair() endpoint already is not.
+std::pair< int, std::string > make_listening_socket() {
+    int const fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    RELEASE_ASSERT_GE(fd, 0, "socket() failed: {}", strerror(errno));
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::string const path = "/tmp/iomgr_net_op_test_" + std::to_string(::getpid()) + "_" + std::to_string(fd);
+    RELEASE_ASSERT_LT(path.size(), sizeof(addr.sun_path), "unix socket path too long: {}", path);
+    ::unlink(path.c_str());
+    std::copy(path.begin(), path.end(), addr.sun_path);
+    RELEASE_ASSERT_EQ(::bind(fd, reinterpret_cast< sockaddr* >(&addr), sizeof(addr)), 0, "bind() failed: {}",
+                      strerror(errno));
+    RELEASE_ASSERT_EQ(::listen(fd, 1), 0, "listen() failed: {}", strerror(errno));
+    return {fd, path};
+}
+
 IOReactor* pick_a_worker_reactor() {
     IOReactor* reactor{nullptr};
     iomanager.run_on_wait(reactor_regex::random_worker, [&reactor]() { reactor = iomanager.this_reactor(); });
@@ -181,9 +198,7 @@ TEST_F(NetOpTest, SocketTeardownFailsParkedRecv) {
 }
 
 TEST_F(NetOpTest, ListenerTeardownFailsParkedAccept) {
-    auto const [fd0, fd1] = make_connected_pair();
-    ::close(fd1); // only need a listenable fd; this test never actually connects
-    ASSERT_EQ(::listen(fd0, 1), 0);
+    auto const [fd0, path] = make_listening_socket();
     auto* const reactor = pick_a_worker_reactor();
     std::optional< listener_handle > listener;
     listener.emplace(fd0, thread_specifier{reactor});
@@ -204,6 +219,7 @@ TEST_F(NetOpTest, ListenerTeardownFailsParkedAccept) {
     ASSERT_TRUE(completed);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), std::make_error_condition(std::errc::connection_aborted));
+    ::unlink(path.c_str());
 }
 
 TEST_F(NetOpTest, RecvExactAcrossTwoWrites) {
@@ -276,16 +292,10 @@ TEST_F(NetOpTest, AcceptThenPlaceOnDifferentReactor) {
     IOReactor* const accepting_reactor = reactors[0];
     IOReactor* const placement_reactor = reactors[1];
 
-    int listen_sock = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    ASSERT_GE(listen_sock, 0);
+    auto const [listen_sock, path] = make_listening_socket();
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::string const path = "/tmp/iomgr_net_op_test_" + std::to_string(::getpid());
-    RELEASE_ASSERT_LT(path.size(), sizeof(addr.sun_path), "unix socket path too long: {}", path);
-    ::unlink(path.c_str());
     std::copy(path.begin(), path.end(), addr.sun_path);
-    ASSERT_EQ(::bind(listen_sock, reinterpret_cast< sockaddr* >(&addr), sizeof(addr)), 0);
-    ASSERT_EQ(::listen(listen_sock, 1), 0);
 
     listener_handle listener(listen_sock, thread_specifier{accepting_reactor});
     auto accepted_fut = start< accept_result >(accepting_reactor, [&]() { return async_accept(listener); });
