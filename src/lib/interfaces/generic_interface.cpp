@@ -20,6 +20,18 @@
 
 namespace iomgr {
 
+namespace {
+// iodev->global_scope()/reactor_scope() each only hold the alternative matching how the iodev itself is
+// scoped; dispatch to whichever run_on_wait/run_on_forget overload (reactor_regex vs IOReactor*) applies,
+// rather than assuming every non-local iodev is regex-scoped.
+int dispatch_on_scope(const io_device_ptr& iodev, bool wait, const auto& fn) {
+    if (iodev->is_global()) {
+        return wait ? iomanager.run_on_wait(iodev->global_scope(), fn) : iomanager.run_on_forget(iodev->global_scope(), fn);
+    }
+    return wait ? iomanager.run_on_wait(iodev->reactor_scope(), fn) : iomanager.run_on_forget(iodev->reactor_scope(), fn);
+}
+} // namespace
+
 IOInterface::IOInterface() = default;
 IOInterface::~IOInterface() = default;
 
@@ -56,11 +68,11 @@ int IOInterface::add_io_device(const io_device_ptr& iodev, bool wait_to_add) {
             m_iodev_map.insert(std::pair< int, io_device_ptr >(iodev->dev, iodev));
         }
         if (wait_to_add) {
-            added_count = iomanager.run_on_wait(iodev->global_scope(), add_to_reactor);
+            added_count = dispatch_on_scope(iodev, true, add_to_reactor);
             post_add(iodev.get());
         } else {
             iodev->post_add_remove_cb = post_add;
-            added_count = iomanager.run_on_forget(iodev->global_scope(), add_to_reactor);
+            added_count = dispatch_on_scope(iodev, false, add_to_reactor);
             iodev->increment_pending(added_count);
         }
     }
@@ -110,11 +122,11 @@ int IOInterface::remove_io_device(const io_device_ptr& iodev, bool wait_to_remov
         }
 
         if (wait_to_remove) {
-            removed_count = iomanager.run_on_wait(iodev->global_scope(), remove_from_reactor);
+            removed_count = dispatch_on_scope(iodev, true, remove_from_reactor);
             post_remove(iodev.get());
         } else {
             iodev->post_add_remove_cb = post_remove;
-            removed_count = iomanager.run_on_forget(iodev->global_scope(), remove_from_reactor);
+            removed_count = dispatch_on_scope(iodev, false, remove_from_reactor);
             iodev->increment_pending(removed_count);
         }
     }
