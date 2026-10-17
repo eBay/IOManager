@@ -56,7 +56,8 @@ class IOThreadMetrics;
 class GenericIOInterface;
 class timer;         // defined in iomgr_timer_impl.hpp (internal)
 class timer_epoll;   // defined in iomgr_timer_impl.hpp (internal)
-class socket_handle; // defined in iomgr/net_op.hpp (public, but reaches generic_interface() as a friend below)
+class socket_handle;   // defined in iomgr/net_op.hpp (public, but reaches generic_interface() as a friend below)
+class listener_handle; // ditto
 
 // Internal lifecycle state — not part of the public API contract.
 ENUM(iomgr_state, uint16_t, stopped, interface_init, reactor_init, sys_init, running, stopping);
@@ -85,6 +86,7 @@ public:
     friend class uring_drive_channel; // per-reactor uring queue: registers its eventfd iodevice
     friend class timer_epoll;         // arms/cancels its timer fds
     friend class socket_handle;       // registers/closes its fd via GenericIOInterface::make_io_device
+    friend class listener_handle;     // ditto, for a listening fd
 
     static IOManager& instance() {
         static IOManager inst;
