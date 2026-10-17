@@ -195,8 +195,6 @@ void teardown(listener_handle::impl& s) {
 
 } // namespace
 
-// Must run before the owning reactor stops: run_on_reactor's dispatch has nothing to deliver the message
-// to once that reactor's thread has exited, and would block forever.
 socket_handle::socket_handle(int fd, thread_specifier const& reactor) : _impl{std::make_unique< impl >()} {
     DEBUG_ASSERT(std::holds_alternative< IOReactor* >(reactor),
                  "socket_handle must be pinned to a specific reactor, not a reactor_regex");
@@ -209,6 +207,8 @@ socket_handle::socket_handle(int fd, thread_specifier const& reactor) : _impl{st
     });
 }
 
+// Must run before the owning reactor stops: run_on_reactor's dispatch has nothing to deliver the message
+// to once that reactor's thread has exited, and would block forever.
 socket_handle::~socket_handle() {
     if (!_impl) { return; } // moved-from
     impl* const p = _impl.get();
@@ -363,5 +363,28 @@ ff_task run_detached(net_op op, std::function< void(io_result) > on_done) { on_d
 } // namespace
 
 void detach(net_op op, std::function< void(io_result) > on_done) { run_detached(std::move(op), std::move(on_done)); }
+
+// ----- full-buffer composition helpers --------------------------------------------------------------
+sisl::async::light_task< io_result > recv_exact(socket_handle& sock, std::span< uint8_t > buf) {
+    size_t total{0};
+    while (total < buf.size()) {
+        auto r = co_await async_recv(sock, buf.subspan(total));
+        if (!r) { co_return std::move(r); }
+        if (*r == 0) { co_return io_result{std::unexpected(std::make_error_condition(std::errc::connection_aborted))}; }
+        total += *r;
+    }
+    co_return io_result{total};
+}
+
+sisl::async::light_task< io_result > send_all(socket_handle& sock, std::span< uint8_t const > buf) {
+    size_t total{0};
+    while (total < buf.size()) {
+        auto r = co_await async_send(sock, buf.subspan(total));
+        if (!r) { co_return std::move(r); }
+        if (*r == 0) { co_return io_result{std::unexpected(std::make_error_condition(std::errc::connection_aborted))}; }
+        total += *r;
+    }
+    co_return io_result{total};
+}
 
 } // namespace iomgr

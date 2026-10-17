@@ -21,6 +21,8 @@
 #include <span>
 #include <system_error>
 
+#include <sisl/async/light_task.hpp>
+
 #include <iomgr/io_op.hpp> // io_result
 #include <iomgr/iomgr_types.hpp> // thread_specifier
 
@@ -92,6 +94,13 @@ net_op async_send(socket_handle& sock, std::span< uint8_t const > buf);
 // for its life, so there's no second reactor to block-wait through without risking deadlocking the one
 // thread that has to make the operation progress.
 void detach(net_op op, std::function< void(io_result) > on_done);
+
+// Loops async_recv/async_send until buf is fully consumed. A short read (peer closed before buf filled) or
+// a short write (send() returning zero for a non-empty buffer) surfaces as connection_aborted rather than
+// a silently-partial success -- callers that need the partial count should loop on async_recv/async_send
+// directly instead.
+sisl::async::light_task< io_result > recv_exact(socket_handle& sock, std::span< uint8_t > buf);
+sisl::async::light_task< io_result > send_all(socket_handle& sock, std::span< uint8_t const > buf);
 
 // Owns one listening fd's reactor registration for its whole life, mirroring socket_handle. Holds at most
 // one parked accept waiter; construction and destruction may run on any thread, same as socket_handle.
