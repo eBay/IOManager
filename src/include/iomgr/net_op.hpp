@@ -15,9 +15,11 @@
 
 #include <coroutine>
 #include <cstdint>
+#include <expected>
 #include <functional>
 #include <memory>
 #include <span>
+#include <system_error>
 
 #include <iomgr/io_op.hpp> // io_result
 #include <iomgr/iomgr_types.hpp> // thread_specifier
@@ -25,6 +27,7 @@
 namespace iomgr {
 
 class net_op;
+class accept_op;
 
 // Owns one fd's reactor registration for its whole life; construct once per socket, never per operation.
 // Holds at most one parked recv waiter and one parked send waiter -- serialize your own recv loop and your
@@ -89,5 +92,51 @@ net_op async_send(socket_handle& sock, std::span< uint8_t const > buf);
 // for its life, so there's no second reactor to block-wait through without risking deadlocking the one
 // thread that has to make the operation progress.
 void detach(net_op op, std::function< void(io_result) > on_done);
+
+// Owns one listening fd's reactor registration for its whole life, mirroring socket_handle. Holds at most
+// one parked accept waiter; construction and destruction may run on any thread, same as socket_handle.
+class listener_handle {
+public:
+    struct impl;
+
+    listener_handle(int listen_fd, thread_specifier const& reactor);
+    ~listener_handle();
+    listener_handle(listener_handle&&) noexcept;
+    listener_handle& operator=(listener_handle&&) noexcept;
+    listener_handle(listener_handle const&) = delete;
+    listener_handle& operator=(listener_handle const&) = delete;
+
+    int fd() const noexcept;
+
+private:
+    friend accept_op async_accept(listener_handle& listener);
+    std::unique_ptr< impl > _impl;
+};
+
+// accept has no partial-transfer case, so it gets its own result type rather than overloading io_result's
+// byte count to mean "the accepted fd". The returned fd is unregistered: wrap it in its own socket_handle
+// on whichever reactor it should be placed on.
+using accept_result = std::expected< int, std::error_condition >;
+
+class accept_op {
+public:
+    struct impl;
+
+    explicit accept_op(std::unique_ptr< impl > p) noexcept;
+    accept_op(accept_op&&) noexcept;
+    accept_op& operator=(accept_op&&) noexcept;
+    accept_op(accept_op const&) = delete;
+    accept_op& operator=(accept_op const&) = delete;
+    ~accept_op();
+
+    bool await_ready() const noexcept;
+    void await_suspend(std::coroutine_handle<> h) noexcept;
+    accept_result await_resume() const noexcept;
+
+private:
+    std::unique_ptr< impl > _impl;
+};
+
+accept_op async_accept(listener_handle& listener);
 
 } // namespace iomgr
