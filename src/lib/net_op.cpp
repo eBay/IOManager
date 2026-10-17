@@ -46,6 +46,17 @@ io_result try_recv(int fd, std::span< uint8_t > buf) {
     }
 }
 
+io_result try_send(int fd, std::span< uint8_t const > buf) {
+    for (;;) {
+        // MSG_NOSIGNAL: a peer that already RST/closed its read side must surface as an error result, not
+        // SIGPIPE taking the process down.
+        ssize_t const n = ::send(fd, buf.data(), buf.size(), MSG_NOSIGNAL);
+        if (n >= 0) { return io_result{static_cast< size_t >(n)}; }
+        if (errno == EINTR) { continue; }
+        return io_result{std::unexpected(std::error_code{errno, std::system_category()}.default_error_condition())};
+    }
+}
+
 bool is_retryable(io_result const& r) {
     return !r.has_value() && (r.error() == std::errc::resource_unavailable_try_again ||
                               r.error() == std::errc::operation_would_block);
@@ -76,20 +87,25 @@ void run_on_reactor(IOReactor* reactor, const auto& fn) {
 struct socket_handle::impl {
     io_device_ptr iodev;
     net_op::impl* parked_recv{nullptr};
+    net_op::impl* parked_send{nullptr};
 };
 
-// ----- net_op: opaque awaitable wrapping a single recv -----------------------------------------------
+// ----- net_op: opaque awaitable wrapping a single recv or send ----------------------------------------
 struct net_op::impl {
     socket_handle::impl* owner{nullptr};
-    std::span< uint8_t > buf;
+    bool is_send{false};
+    std::span< uint8_t > recv_buf;       // valid when !is_send
+    std::span< uint8_t const > send_buf; // valid when is_send
     io_result result{0};
     bool done{false};
     std::coroutine_handle<> waiter{};
 
-    io_result try_once() const { return try_recv(owner->iodev->fd(), buf); }
+    io_result try_once() const {
+        return is_send ? try_send(owner->iodev->fd(), send_buf) : try_recv(owner->iodev->fd(), recv_buf);
+    }
 
     ~impl() {
-        DEBUG_ASSERT(owner->parked_recv != this,
+        DEBUG_ASSERT(owner->parked_recv != this && owner->parked_send != this,
                      "net_op destroyed while still parked waiting on its socket_handle -- would leave a "
                      "dangling pointer the next ev_callback fire would touch");
     }
@@ -120,10 +136,13 @@ void fail_parked(net_op::impl*& slot, std::error_condition const& ec) {
 void socket_ev_callback(IODevice*, void* cookie, int events) {
     auto* const self = static_cast< socket_handle::impl* >(cookie);
     if (self->parked_recv && (events & (EPOLLIN | EPOLLHUP | EPOLLERR))) { retry_parked(self->parked_recv); }
+    if (self->parked_send && (events & (EPOLLOUT | EPOLLHUP | EPOLLERR))) { retry_parked(self->parked_send); }
 }
 
 void teardown(socket_handle::impl& s) {
-    fail_parked(s.parked_recv, std::make_error_condition(std::errc::connection_aborted));
+    auto const ec = std::make_error_condition(std::errc::connection_aborted);
+    fail_parked(s.parked_recv, ec);
+    fail_parked(s.parked_send, ec);
     s.iodev->io_interface->close_dev(s.iodev);
 }
 
@@ -136,7 +155,7 @@ socket_handle::socket_handle(int fd, thread_specifier const& reactor) : _impl{st
     set_nonblocking(fd);
     impl* const p = _impl.get();
     run_on_reactor(target, [fd, target, p]() {
-        p->iodev = iomanager.generic_interface()->make_io_device(fd, EPOLLIN, 1 /* pri */, p,
+        p->iodev = iomanager.generic_interface()->make_io_device(fd, EPOLLIN | EPOLLOUT, 1 /* pri */, p,
                                                                   thread_specifier{target}, socket_ev_callback);
     });
 }
@@ -181,11 +200,13 @@ bool net_op::await_ready() const noexcept {
 
 void net_op::await_suspend(std::coroutine_handle<> h) noexcept {
     impl* const p = _impl.get();
-    DEBUG_ASSERT(p->owner->parked_recv == nullptr,
-                 "a second recv is already parked on this socket_handle -- callers must serialize their own "
-                 "recv loop");
+    net_op::impl*& slot = p->is_send ? p->owner->parked_send : p->owner->parked_recv;
+    DEBUG_ASSERT(slot == nullptr,
+                 "a second {} is already parked on this socket_handle -- callers must serialize their own "
+                 "{} loop",
+                 p->is_send ? "send" : "recv", p->is_send ? "send" : "recv");
     p->waiter = h;
-    p->owner->parked_recv = p;
+    slot = p;
 }
 
 io_result net_op::await_resume() const noexcept { return _impl->result; }
@@ -196,7 +217,16 @@ net_op async_recv(socket_handle& sock, std::span< uint8_t > buf) {
                  "from EOF");
     auto p = std::make_unique< net_op::impl >();
     p->owner = sock._impl.get();
-    p->buf = buf;
+    p->recv_buf = buf;
+    return net_op{std::move(p)};
+}
+
+net_op async_send(socket_handle& sock, std::span< uint8_t const > buf) {
+    DEBUG_ASSERT(!buf.empty(), "async_send called with an empty buffer");
+    auto p = std::make_unique< net_op::impl >();
+    p->owner = sock._impl.get();
+    p->is_send = true;
+    p->send_buf = buf;
     return net_op{std::move(p)};
 }
 
