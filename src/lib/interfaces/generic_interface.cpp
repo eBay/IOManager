@@ -26,9 +26,11 @@ namespace {
 // rather than assuming every non-local iodev is regex-scoped.
 int dispatch_on_scope(const io_device_ptr& iodev, bool wait, const auto& fn) {
     if (iodev->is_global()) {
-        return wait ? iomanager.run_on_wait(iodev->global_scope(), fn) : iomanager.run_on_forget(iodev->global_scope(), fn);
+        return wait ? iomanager.run_on_wait(iodev->global_scope(), fn)
+                    : iomanager.run_on_forget(iodev->global_scope(), fn);
     }
-    return wait ? iomanager.run_on_wait(iodev->reactor_scope(), fn) : iomanager.run_on_forget(iodev->reactor_scope(), fn);
+    return wait ? iomanager.run_on_wait(iodev->reactor_scope(), fn)
+                : iomanager.run_on_forget(iodev->reactor_scope(), fn);
 }
 } // namespace
 

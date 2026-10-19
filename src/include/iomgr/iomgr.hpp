@@ -54,8 +54,8 @@ class DriveInterface;
 class IOManagerImpl;
 class IOThreadMetrics;
 class GenericIOInterface;
-class timer;         // defined in iomgr_timer_impl.hpp (internal)
-class timer_epoll;   // defined in iomgr_timer_impl.hpp (internal)
+class timer;           // defined in iomgr_timer_impl.hpp (internal)
+class timer_epoll;     // defined in iomgr_timer_impl.hpp (internal)
 class socket_handle;   // defined in iomgr/net_op.hpp (public, but reaches generic_interface() as a friend below)
 class listener_handle; // ditto
 

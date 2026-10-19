@@ -70,8 +70,8 @@ accept_result try_accept(int fd) {
 
 template < typename T >
 bool is_retryable(std::expected< T, std::error_condition > const& r) {
-    return !r.has_value() && (r.error() == std::errc::resource_unavailable_try_again ||
-                              r.error() == std::errc::operation_would_block);
+    return !r.has_value() &&
+        (r.error() == std::errc::resource_unavailable_try_again || r.error() == std::errc::operation_would_block);
 }
 
 void set_nonblocking(int fd) {
@@ -117,8 +117,8 @@ struct net_op::impl {
 
     ~impl() {
         RELEASE_ASSERT(owner->parked_recv != this && owner->parked_send != this,
-                     "net_op destroyed while still parked waiting on its socket_handle -- would leave a "
-                     "dangling pointer the next ev_callback fire would touch");
+                       "net_op destroyed while still parked waiting on its socket_handle -- would leave a "
+                       "dangling pointer the next ev_callback fire would touch");
     }
 };
 
@@ -139,8 +139,8 @@ struct accept_op::impl {
 
     ~impl() {
         RELEASE_ASSERT(owner->parked_accept != this,
-                     "accept_op destroyed while still parked waiting on its listener_handle -- would leave "
-                     "a dangling pointer the next ev_callback fire would touch");
+                       "accept_op destroyed while still parked waiting on its listener_handle -- would leave "
+                       "a dangling pointer the next ev_callback fire would touch");
     }
 };
 
@@ -197,13 +197,13 @@ void teardown(listener_handle::impl& s) {
 
 socket_handle::socket_handle(int fd, thread_specifier const& reactor) : _impl{std::make_unique< impl >()} {
     RELEASE_ASSERT(std::holds_alternative< IOReactor* >(reactor),
-                 "socket_handle must be pinned to a specific reactor, not a reactor_regex");
+                   "socket_handle must be pinned to a specific reactor, not a reactor_regex");
     auto* const target = std::get< IOReactor* >(reactor);
     set_nonblocking(fd);
     impl* const p = _impl.get();
     run_on_reactor(target, [fd, target, p]() {
         p->iodev = iomanager.generic_interface()->make_io_device(fd, EPOLLIN | EPOLLOUT, 1 /* pri */, p,
-                                                                  thread_specifier{target}, socket_ev_callback);
+                                                                 thread_specifier{target}, socket_ev_callback);
     });
 }
 
@@ -230,16 +230,15 @@ socket_handle& socket_handle::operator=(socket_handle&& o) noexcept {
 
 int socket_handle::fd() const noexcept { return _impl->iodev->fd(); }
 
-listener_handle::listener_handle(int listen_fd, thread_specifier const& reactor) :
-        _impl{std::make_unique< impl >()} {
+listener_handle::listener_handle(int listen_fd, thread_specifier const& reactor) : _impl{std::make_unique< impl >()} {
     RELEASE_ASSERT(std::holds_alternative< IOReactor* >(reactor),
-                 "listener_handle must be pinned to a specific reactor, not a reactor_regex");
+                   "listener_handle must be pinned to a specific reactor, not a reactor_regex");
     auto* const target = std::get< IOReactor* >(reactor);
     set_nonblocking(listen_fd);
     impl* const p = _impl.get();
     run_on_reactor(target, [listen_fd, target, p]() {
         p->iodev = iomanager.generic_interface()->make_io_device(listen_fd, EPOLLIN, 1 /* pri */, p,
-                                                                  thread_specifier{target}, listener_ev_callback);
+                                                                 thread_specifier{target}, listener_ev_callback);
     });
 }
 
@@ -273,7 +272,7 @@ net_op::~net_op() = default;
 bool net_op::await_ready() const noexcept {
     impl* const p = _impl.get();
     RELEASE_ASSERT(iomanager.this_reactor() == p->owner->iodev->reactor_scope(),
-                 "net_op driven from a thread other than its socket_handle's owning reactor");
+                   "net_op driven from a thread other than its socket_handle's owning reactor");
     auto r = p->try_once();
     if (is_retryable(r)) { return false; } // park in await_suspend
     p->result = std::move(r);
@@ -285,9 +284,9 @@ void net_op::await_suspend(std::coroutine_handle<> h) noexcept {
     impl* const p = _impl.get();
     net_op::impl*& slot = p->is_send ? p->owner->parked_send : p->owner->parked_recv;
     RELEASE_ASSERT(slot == nullptr,
-                 "a second {} is already parked on this socket_handle -- callers must serialize their own "
-                 "{} loop",
-                 p->is_send ? "send" : "recv", p->is_send ? "send" : "recv");
+                   "a second {} is already parked on this socket_handle -- callers must serialize their own "
+                   "{} loop",
+                   p->is_send ? "send" : "recv", p->is_send ? "send" : "recv");
     p->waiter = h;
     slot = p;
 }
@@ -296,8 +295,8 @@ io_result net_op::await_resume() const noexcept { return _impl->result; }
 
 net_op async_recv(socket_handle& sock, std::span< uint8_t > buf) {
     RELEASE_ASSERT(!buf.empty(),
-                 "async_recv called with an empty buffer -- a zero-byte recv() return is indistinguishable "
-                 "from EOF");
+                   "async_recv called with an empty buffer -- a zero-byte recv() return is indistinguishable "
+                   "from EOF");
     auto p = std::make_unique< net_op::impl >();
     p->owner = sock._impl.get();
     p->recv_buf = buf;
@@ -322,7 +321,7 @@ accept_op::~accept_op() = default;
 bool accept_op::await_ready() const noexcept {
     impl* const p = _impl.get();
     RELEASE_ASSERT(iomanager.this_reactor() == p->owner->iodev->reactor_scope(),
-                 "accept_op driven from a thread other than its listener_handle's owning reactor");
+                   "accept_op driven from a thread other than its listener_handle's owning reactor");
     auto r = p->try_once();
     if (is_retryable(r)) { return false; }
     p->result = std::move(r);
@@ -333,8 +332,8 @@ bool accept_op::await_ready() const noexcept {
 void accept_op::await_suspend(std::coroutine_handle<> h) noexcept {
     impl* const p = _impl.get();
     RELEASE_ASSERT(p->owner->parked_accept == nullptr,
-                 "a second accept is already parked on this listener_handle -- callers must serialize "
-                 "their own accept loop");
+                   "a second accept is already parked on this listener_handle -- callers must serialize "
+                   "their own accept loop");
     p->waiter = h;
     p->owner->parked_accept = p;
 }

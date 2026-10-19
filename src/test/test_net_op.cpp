@@ -94,7 +94,8 @@ std::future< T > start(IOReactor* reactor, Fn&& fn) {
     iomanager.run_on_forget(reactor, [fn = std::forward< Fn >(fn), done]() mutable {
         [](auto fn, std::shared_ptr< std::promise< T > > done) -> sisl::async::light_task< void > {
             done->set_value(co_await fn());
-        }(std::move(fn), std::move(done)).detach();
+        }(std::move(fn), std::move(done))
+                                                                      .detach();
     });
     return fut;
 }
@@ -183,7 +184,9 @@ TEST_F(NetOpTest, SendSuspendsUntilPeerDrains) {
     socket_handle sock(fd0, thread_specifier{reactor});
 
     std::vector< uint8_t > payload(1024 * 1024);
-    for (size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast< uint8_t >(i); }
+    for (size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast< uint8_t >(i);
+    }
 
     auto fut = start< io_result >(reactor, [&]() { return send_all(sock, std::span< uint8_t const >(payload)); });
     ASSERT_EQ(fut.wait_for(std::chrono::milliseconds(100)), std::future_status::timeout);
@@ -217,7 +220,8 @@ TEST_F(NetOpTest, SocketTeardownFailsParkedRecv) {
         [](socket_handle& s, std::span< uint8_t > buf, io_result& out, bool& done) -> sisl::async::light_task< void > {
             out = co_await async_recv(s, buf);
             done = true;
-        }(*sock, std::span< uint8_t >(read_buf), result, completed).detach();
+        }(*sock, std::span< uint8_t >(read_buf), result, completed)
+                                                                                          .detach();
     });
     ASSERT_FALSE(completed); // nothing written yet; the recv is parked
 
@@ -245,7 +249,8 @@ TEST_F(NetOpTest, MoveAssignTearsDownPreviousConnection) {
         [](socket_handle& s, std::span< uint8_t > buf, io_result& out, bool& done) -> sisl::async::light_task< void > {
             out = co_await async_recv(s, buf);
             done = true;
-        }(old_sock, std::span< uint8_t >(old_read_buf), old_result, old_completed).detach();
+        }(old_sock, std::span< uint8_t >(old_read_buf), old_result, old_completed)
+                                                                                          .detach();
     });
     ASSERT_FALSE(old_completed); // nothing written to fd0's peer yet; the recv is parked
 
@@ -289,7 +294,8 @@ TEST_F(NetOpTest, ListenerTeardownFailsParkedAccept) {
         [](listener_handle& l, accept_result& out, bool& done) -> sisl::async::light_task< void > {
             out = co_await async_accept(l);
             done = true;
-        }(*listener, result, completed).detach();
+        }(*listener, result, completed)
+                                                                      .detach();
     });
     ASSERT_FALSE(completed);
 
@@ -344,20 +350,21 @@ TEST_F(NetOpTest, RecvExactShortEofIsError) {
 TEST_F(NetOpTest, SendAllThenRecvExactRoundTrip) {
     auto const [fd0, fd1] = make_connected_pair();
     std::vector< uint8_t > payload(4096);
-    for (size_t i = 0; i < payload.size(); ++i) { payload[i] = static_cast< uint8_t >(i); }
+    for (size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast< uint8_t >(i);
+    }
     std::vector< uint8_t > read_buf(payload.size());
     io_result result{0};
 
     iomanager.run_on_wait(reactor_regex::random_worker, [&]() {
         socket_handle a(fd0, thread_specifier{iomanager.this_reactor()});
         socket_handle b(fd1, thread_specifier{iomanager.this_reactor()});
-        result = sisl::async::sync_get(
-            [](socket_handle& snd, socket_handle& rcv, std::span< uint8_t const > out,
-               std::span< uint8_t > in) -> sisl::async::light_task< io_result > {
-                auto sr = co_await send_all(snd, out);
-                if (!sr) { co_return sr; }
-                co_return co_await recv_exact(rcv, in);
-            }(a, b, std::span< uint8_t const >(payload), std::span< uint8_t >(read_buf)));
+        result = sisl::async::sync_get([](socket_handle& snd, socket_handle& rcv, std::span< uint8_t const > out,
+                                          std::span< uint8_t > in) -> sisl::async::light_task< io_result > {
+            auto sr = co_await send_all(snd, out);
+            if (!sr) { co_return sr; }
+            co_return co_await recv_exact(rcv, in);
+        }(a, b, std::span< uint8_t const >(payload), std::span< uint8_t >(read_buf)));
     });
 
     ASSERT_TRUE(result.has_value());
