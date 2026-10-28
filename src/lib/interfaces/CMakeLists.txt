@@ -4,6 +4,7 @@ list(APPEND INTERFACE_SRC
         drive_interface.cpp
         generic_interface.cpp
         uring_drive_interface.cpp
+        uring_net_interface.cpp
         drive_iocb.cpp
         )
 add_library(iomgr_interfaces OBJECT)

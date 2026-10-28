@@ -27,12 +27,14 @@ endif ()
 add_subdirectory(interfaces)
 add_subdirectory(epoll)
 add_subdirectory(reactor)
+add_subdirectory(net)
 
 set(IOMGR_OBJECTS
     $<TARGET_OBJECTS:iomgr_config>
     $<TARGET_OBJECTS:iomgr_interfaces>
     $<TARGET_OBJECTS:iomgr_epoll>
     $<TARGET_OBJECTS:iomgr_reactor>
+    $<TARGET_OBJECTS:iomgr_net>
     io_environment.cpp
     iomgr.cpp
     iomgr_helper.cpp
