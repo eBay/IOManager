@@ -83,9 +83,10 @@ uring_net_channel::uring_net_channel(UringNetInterface* iface) : m_sched{&m_ring
         ::io_uring_submit(&m_ring);
         if (::io_uring_cqe* cqe = nullptr; ::io_uring_wait_cqe(&m_ring, &cqe) == 0) {
             if (cqe->res == -EINVAL) {
-                LOGWARNMOD(iomgr, "kernel does not support io_uring cancel-any/all (needs 5.19+) -- a socket "
-                                 "still in flight at reactor stop can stall for the drain deadline and leak "
-                                 "this reactor's net channel instead of being cancelled");
+                LOGWARNMOD(iomgr,
+                           "kernel does not support io_uring cancel-any/all (needs 5.19+) -- a socket "
+                           "still in flight at reactor stop can stall for the drain deadline and leak "
+                           "this reactor's net channel instead of being cancelled");
             }
             ::io_uring_cqe_seen(&m_ring, cqe);
         }
