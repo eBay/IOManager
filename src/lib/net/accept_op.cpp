@@ -86,8 +86,10 @@ exec::task< void > run_uring_accept(accept_op::impl* self) {
             if (completed) { return; }
             accept_op::impl*& slot = self->owner->parked_accept;
             if (slot == self) {
-                complete_parked(
-                    slot, accept_result{std::unexpected(std::make_error_condition(std::errc::connection_aborted))});
+                // operation_canceled lets a caller tell reactor shutdown apart from a transient error.
+                auto const ec = UringNetInterface::this_channel()->m_stopping ? std::errc::operation_canceled
+                                                                              : std::errc::connection_aborted;
+                complete_parked(slot, accept_result{std::unexpected(std::make_error_condition(ec))});
             }
         }
     } guard{self};
@@ -169,7 +171,15 @@ bool accept_op::await_ready() const noexcept {
     RELEASE_ASSERT(iomanager.this_reactor() == p->owner->reactor,
                    "accept_op driven from a thread other than its listener_handle's owning reactor");
     auto r = p->try_once();
-    if (is_retryable(r)) { return false; }
+    if (is_retryable(r)) {
+        auto* const ch = UringNetInterface::this_channel();
+        if (ch->m_stopping) {
+            p->result = accept_result{std::unexpected(std::make_error_condition(std::errc::operation_canceled))};
+            p->done = true;
+            return true;
+        }
+        return false;
+    }
     p->result = std::move(r);
     p->done = true;
     return true;

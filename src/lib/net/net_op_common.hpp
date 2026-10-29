@@ -17,10 +17,8 @@
 // src/lib/net/.
 
 #include <cerrno>
-#include <chrono>
 #include <cstring>
 #include <expected>
-#include <memory>
 #include <system_error>
 #include <utility>
 
@@ -102,31 +100,15 @@ void complete_parked(Impl*& slot, Result r) {
     if (auto w = op->waiter) { w.resume(); }
 }
 
-// Far longer than any normal cancellation takes -- a "something is wrong" signal, not a budget.
-constexpr uint64_t kTeardownWarnAfterNs = std::chrono::nanoseconds{std::chrono::minutes{5}}.count();
-
 // Frees p only once p->scope (request_stop()'d by teardown()) is actually empty -- fires immediately
 // if nothing was parked. net_io_scope folds this into m_outstanding so drain_outstanding_ops's own
 // wait-at-reactor-stop covers it too.
 template < typename ImplT >
-exec::task< void > close_once_drained(ImplT* p, std::shared_ptr< bool > drained) {
+exec::task< void > close_once_drained(ImplT* p) {
     net_io_scope io_scope;
     co_await p->scope.on_empty();
-    *drained = true;
     ::close(p->fd);
     delete p;
-}
-
-// Uses iomgr's own timer rather than the channel's scope/ring, so a still-pending diagnostic timer
-// can never trip async_scope's "nothing left running" invariant at reactor stop.
-inline void warn_if_teardown_stuck(int fd, std::shared_ptr< bool > drained) {
-    iomanager.schedule_thread_timer(kTeardownWarnAfterNs, false /* recurring */, nullptr, [fd, drained](void*) {
-        if (*drained) { return; }
-        LOGERRORMOD(iomgr,
-                    "net teardown for fd {} has not drained after the warn deadline -- its last op(s) may be "
-                    "stuck in the kernel; fd stays open until they resolve",
-                    fd);
-    });
 }
 
 // request_stop() alone drives kernel-level cancellation (each nested op's own submit_op::on_stop
@@ -135,12 +117,8 @@ inline void warn_if_teardown_stuck(int fd, std::shared_ptr< bool > drained) {
 // re-enter that same reap.
 template < typename ImplT >
 void teardown(ImplT* s) {
-    int const fd = s->fd; // captured before spawn(), which may free `s` inline if nothing was parked
     s->scope.request_stop();
-    auto* const ch = UringNetInterface::this_channel();
-    auto drained = std::make_shared< bool >(false);
-    ch->m_scope.spawn(close_once_drained(s, drained));
-    if (!*drained) { warn_if_teardown_stuck(fd, drained); }
+    UringNetInterface::this_channel()->m_teardown_scope.spawn(close_once_drained(s));
 }
 
 } // namespace iomgr

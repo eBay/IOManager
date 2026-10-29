@@ -73,8 +73,11 @@ exec::task< void > run_uring_connect(connect_op::impl* self, int fd, sockaddr_st
         ~cancel_guard() {
             if (completed) { return; }
             bool const timed_out = deadline.has_value() && (std::chrono::steady_clock::now() >= *deadline);
-            self->result = std::unexpected(
-                std::make_error_condition(timed_out ? std::errc::timed_out : std::errc::connection_aborted));
+            // operation_canceled lets a caller tell reactor shutdown apart from a transient peer error.
+            auto const ec = timed_out                                   ? std::errc::timed_out
+                : UringNetInterface::this_channel()->m_stopping ? std::errc::operation_canceled
+                                                                 : std::errc::connection_aborted;
+            self->result = std::unexpected(std::make_error_condition(ec));
             self->done = true;
             if (auto w = self->waiter) { w.resume(); }
         }
@@ -150,10 +153,17 @@ connect_op::~connect_op() = default;
 // only connect() call ever made on this fd; go straight to uring submission every time.
 bool connect_op::await_ready() const noexcept { return false; }
 
-void connect_op::await_suspend(std::coroutine_handle<> h) noexcept {
+bool connect_op::await_suspend(std::coroutine_handle<> h) noexcept {
     impl* const p = _impl.get();
+    auto* const ch = UringNetInterface::this_channel();
+    if (ch->m_stopping) {
+        p->result = std::unexpected(std::make_error_condition(std::errc::operation_canceled));
+        p->done = true;
+        return false;
+    }
     p->waiter = h;
-    UringNetInterface::this_channel()->m_scope.spawn(run_uring_connect(p, p->fd, p->addr, p->addrlen, p->timeout));
+    ch->m_scope.spawn(run_uring_connect(p, p->fd, p->addr, p->addrlen, p->timeout));
+    return true;
 }
 
 std::expected< void, std::error_condition > connect_op::await_resume() const noexcept { return _impl->result; }

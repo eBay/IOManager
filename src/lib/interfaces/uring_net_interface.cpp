@@ -146,6 +146,7 @@ void UringNetInterface::clear_iface_reactor_context(IOReactor*) {
 
 bool UringNetInterface::drain_outstanding_ops() {
     auto* const ch = t_uring_net_ch;
+    ch->m_stopping = true;
     ch->m_scope.request_stop(); // propagates to run_uring_connect / close_once_drained / anything else nested in it
 
     if (ch->m_outstanding == 0) { return true; }

@@ -114,8 +114,10 @@ exec::task< void > run_uring_op(net_op::impl* self) {
             if (completed) { return; }
             net_op::impl*& slot = self->is_send ? self->owner->parked_send : self->owner->parked_recv;
             if (slot == self) {
-                complete_parked(slot,
-                                io_result{std::unexpected(std::make_error_condition(std::errc::connection_aborted))});
+                // operation_canceled lets a caller tell reactor shutdown apart from a transient peer error.
+                auto const ec = UringNetInterface::this_channel()->m_stopping ? std::errc::operation_canceled
+                                                                              : std::errc::connection_aborted;
+                complete_parked(slot, io_result{std::unexpected(std::make_error_condition(ec))});
             }
         }
     } guard{self};
@@ -194,7 +196,15 @@ bool net_op::await_ready() const noexcept {
     RELEASE_ASSERT(iomanager.this_reactor() == p->owner->reactor,
                    "net_op driven from a thread other than its socket_handle's owning reactor");
     auto r = p->try_once();
-    if (is_retryable(r)) { return false; } // park in await_suspend
+    if (is_retryable(r)) {
+        auto* const ch = UringNetInterface::this_channel();
+        if (ch->m_stopping) {
+            p->result = io_result{std::unexpected(std::make_error_condition(std::errc::operation_canceled))};
+            p->done = true;
+            return true;
+        }
+        return false; // park in await_suspend
+    }
     p->result = std::move(r);
     p->done = true;
     return true;
