@@ -25,6 +25,10 @@
 #include <linux/version.h>
 #endif
 
+extern "C" {
+#include <unistd.h>
+}
+
 #include <sisl/fds/utils.hpp>
 #include <sisl/logging/logging.h>
 #include "epoll/reactor_epoll.hpp"
@@ -62,28 +66,48 @@ uring_drive_channel::uring_drive_channel(UringDriveInterface* iface) : m_sched{&
         throw std::system_error{-ret, std::system_category(), fmt::format("Unable to create uring queue ret={}", ret)};
     }
 
+    // From here, anything that throws must still release m_ring: the destructor never runs for a
+    // constructor that didn't finish.
+    struct ring_guard {
+        ::io_uring* ring;
+        bool dismissed{false};
+        ~ring_guard() {
+            if (!dismissed) { io_uring_queue_exit(ring); }
+        }
+    } ring_cleanup{&m_ring};
+
     int ev_fd = eventfd(0, EFD_NONBLOCK);
     if (ev_fd == -1) {
         throw std::system_error{errno, std::system_category(),
                                 "Unable to create eventfd to listen for uring queue events"};
     }
+    struct fd_guard {
+        int fd;
+        bool dismissed{false};
+        ~fd_guard() {
+            if (!dismissed) { ::close(fd); }
+        }
+    } fd_cleanup{ev_fd};
 
+    // io_uring_register_eventfd() is a liburing wrapper: returns 0 or -errno, not -1/errno like a raw
+    // syscall.
     ret = io_uring_register_eventfd(&m_ring, ev_fd);
-    if (ret == -1) {
-        throw std::system_error{errno, std::system_category(), "Unable to register event fd to uring queue"};
-    }
+    if (ret) { throw std::system_error{-ret, std::system_category(), "Unable to register event fd to uring queue"}; }
 
     // Create io device and add it to the local thread; the sentinel reaps completions every loop.
     using namespace std::placeholders;
     m_ring_ev_iodev = iomanager.generic_interface()->make_io_device(
         ev_fd, EPOLLIN, 0, nullptr, true, std::bind(&UringDriveInterface::on_event_notification, iface, _1, _2, _3));
-    iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->poll_completions(); });
+    m_sentinel_idx = iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->poll_completions(); });
+
+    fd_cleanup.dismissed = true;
+    ring_cleanup.dismissed = true;
 }
 
 uring_drive_channel::~uring_drive_channel() {
     io_uring_queue_exit(&m_ring);
     if (m_ring_ev_iodev != nullptr) {
-        iomanager.this_reactor()->detach_iomgr_sentinel_cb();
+        iomanager.this_reactor()->detach_iomgr_sentinel_cb(m_sentinel_idx);
         iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev, true /* wait_to_remove */);
     }
 }
@@ -137,15 +161,13 @@ void UringDriveInterface::drain_outstanding_ios() {
 namespace {
 inline void io_started() {
     auto* const ch = UringDriveInterface::this_channel();
-    if (ch->m_outstanding++ == 0) {
-        // tight-poll so queued SQEs flush promptly; restore the reactor's prior interval when drained.
-        ch->m_saved_poll_interval = iomanager.this_reactor()->get_poll_interval();
-        iomanager.this_reactor()->set_poll_interval(0);
-    }
+    // Tight-poll while IO drains; see IOReactor::enter_tight_poll for why this is a shared refcount
+    // rather than a local save/restore here.
+    if (ch->m_outstanding++ == 0) { iomanager.this_reactor()->enter_tight_poll(); }
 }
 inline void io_finished() {
     auto* const ch = UringDriveInterface::this_channel();
-    if (--ch->m_outstanding == 0) { iomanager.this_reactor()->set_poll_interval(ch->m_saved_poll_interval); }
+    if (--ch->m_outstanding == 0) { iomanager.this_reactor()->exit_tight_poll(); }
 }
 // Advance an iovec list past `done` consumed bytes (drops fully-consumed entries, trims the first
 // partially-consumed one). Used for partial readv/writev re-issue.

@@ -26,6 +26,7 @@
 
 namespace iomgr {
 using poll_cb_idx_t = uint32_t;
+using sentinel_cb_idx_t = uint32_t;
 using can_backoff_cb_t = std::function< bool(class IOReactor*) >;
 
 #define REACTOR_LOG(level, __l, ...)                                                                                   \
@@ -162,14 +163,35 @@ public:
     virtual uint32_t get_num_iodevs() const { return m_n_iodevices; }
     virtual const char* loop_type() const = 0;
 
+    // A call made while enter_tight_poll's refcount is active is overwritten by whatever exit_tight_poll
+    // later restores -- it only takes effect once no tight-poll request is outstanding.
     void set_poll_interval(const int interval) { m_poll_interval = interval; }
     int get_poll_interval() const { return m_poll_interval; }
+
+    // Ref-counted "run this reactor in a tight (0ms) poll while uring-backed I/O is outstanding" request,
+    // shared by every uring interface on this reactor (drive, net, ...). Two independent save/restore
+    // pairs against the same m_poll_interval can corrupt it: whichever drops to zero last may restore the
+    // value it observed on entry, which can itself already be the tight-poll 0, leaving the reactor
+    // spinning forever. A single shared refcount fixes this: first caller in saves, last caller out
+    // restores, regardless of how many interfaces share it or how they interleave.
+    void enter_tight_poll() {
+        if (m_tight_poll_refcount++ == 0) {
+            m_poll_interval_before_tight = m_poll_interval;
+            m_poll_interval = 0;
+        }
+    }
+    void exit_tight_poll() {
+        if (--m_tight_poll_refcount == 0) { m_poll_interval = m_poll_interval_before_tight; }
+    }
     poll_cb_idx_t register_poll_interval_cb(std::function< void(void) >&& cb);
     void unregister_poll_interval_cb(const poll_cb_idx_t idx);
     IOThreadMetrics& thread_metrics() { return *(m_metrics.get()); }
     void add_backoff_cb(can_backoff_cb_t&& cb);
-    void attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb);
-    void detach_iomgr_sentinel_cb();
+    // Multiple interfaces (drive, net, ...) can each attach their own per-tick sentinel; every attached
+    // callback fires once per reactor loop iteration. Keep the returned idx and pass it to
+    // detach_iomgr_sentinel_cb to remove only that one registration.
+    sentinel_cb_idx_t attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb);
+    void detach_iomgr_sentinel_cb(const sentinel_cb_idx_t idx);
     virtual void handle_msg(iomgr_msg* msg);
 
 protected:
@@ -207,12 +229,14 @@ protected:
     uint32_t m_n_iodevices = 0;
 
     int m_poll_interval{-1};
+    uint32_t m_tight_poll_refcount{0};
+    int m_poll_interval_before_tight{-1};
     uint64_t m_total_op = 0;
 
     std::vector< std::function< void(void) > > m_poll_interval_cbs;
     std::vector< can_backoff_cb_t > m_can_backoff_cbs;
     uint64_t m_cur_backoff_delay_us{0};
     uint64_t m_backoff_delay_min_us{0};
-    listen_sentinel_cb_t m_iomgr_sentinel_cb;
+    std::vector< listen_sentinel_cb_t > m_iomgr_sentinel_cbs;
 };
 } // namespace iomgr

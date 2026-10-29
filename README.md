@@ -26,7 +26,7 @@ Folly-futures, stackful-fiber, SPDK and libaio machinery has been removed.
 - **RAII everywhere** — `drive_handle` closes the device on last reference; `timer_token` cancels its
   timer when dropped; no manual `close_dev`/`cancel_timer` bookkeeping.
 - **One error type** — `io_result = std::expected<size_t, std::error_condition>` across the public API.
-- **Minimal PIMPL surface** — 7 installed headers; backend types (`DriveInterface`, `IODevice`, …) are
+- **Minimal PIMPL surface** — 10 installed headers; backend types (`DriveInterface`, `IODevice`, …) are
   internal and never leak into consumer builds.
 - **Worker & user reactors** — iomgr-managed worker threads plus the ability for an application thread to
   *become* a reactor; cross-reactor work via `run_on_forget` / `run_on_wait`.

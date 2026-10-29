@@ -40,6 +40,18 @@ table DriveInterface {
     uring_cq_size_multiple: uint32 = 0; // >0 => IORING_SETUP_CQSIZE with cq_entries = qdepth * this (0 = kernel default)
 }
 
+table NetInterface {
+    uring_per_thread_qdepth: uint32 = 256; // IMPORTANT: do not make this hotswap
+
+    // io_uring setup flags, applied once at ring creation (IMPORTANT: do not make these hotswap). Every
+    // net uring ring is per-reactor with a single submitter, so SINGLE_ISSUER is always legal here. If the
+    // running kernel rejects a flag, ring creation falls back to a default ring instead of failing. Kept
+    // separate from DriveInterface's config: different queue-depth needs, and sockets may run on reactors
+    // with no drive interface attached at all.
+    uring_single_issuer: uint32 = 1;    // IORING_SETUP_SINGLE_ISSUER (kernel 6.0+)
+    uring_cq_size_multiple: uint32 = 0; // >0 => IORING_SETUP_CQSIZE with cq_entries = qdepth * this (0 = kernel default)
+}
+
 table PoolEntry {
     // Size of each mempool entry
     size : uint64; 
@@ -120,6 +132,7 @@ table IomgrSettings {
     iomem: IOMemory;
     thread: Thread;
     drive: DriveInterface;
+    net: NetInterface;
     poll: Poll;
     message: Message;
     io_env: IoEnv;

@@ -101,7 +101,9 @@ bool IOReactor::listen_once() {
     if (m_keep_running) {
         auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
         if (sentinel_cb) { sentinel_cb(); }
-        if (m_iomgr_sentinel_cb) { m_iomgr_sentinel_cb(); }
+        for (const auto& cb : m_iomgr_sentinel_cbs) {
+            if (cb) { cb(); }
+        }
 
         bool need_backoff{false};
         for (const auto& backoff_cb : m_can_backoff_cbs) {
@@ -208,7 +210,24 @@ void IOReactor::unregister_poll_interval_cb(const poll_cb_idx_t idx) {
 
 void IOReactor::add_backoff_cb(can_backoff_cb_t&& cb) { m_can_backoff_cbs.push_back(std::move(cb)); }
 
-void IOReactor::attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb) { m_iomgr_sentinel_cb = cb; }
-void IOReactor::detach_iomgr_sentinel_cb() { m_iomgr_sentinel_cb = nullptr; }
+sentinel_cb_idx_t IOReactor::attach_iomgr_sentinel_cb(const listen_sentinel_cb_t& cb) {
+    // Reuse a freed slot rather than always appending: detach_iomgr_sentinel_cb only nulls a slot (never
+    // erases it), since outstanding sentinel_cb_idx_t handles elsewhere can't be renumbered if one moved.
+    for (size_t i = 0; i < m_iomgr_sentinel_cbs.size(); ++i) {
+        if (!m_iomgr_sentinel_cbs[i]) {
+            m_iomgr_sentinel_cbs[i] = cb;
+            return static_cast< sentinel_cb_idx_t >(i);
+        }
+    }
+    m_iomgr_sentinel_cbs.emplace_back(cb);
+    return static_cast< sentinel_cb_idx_t >(m_iomgr_sentinel_cbs.size() - 1);
+}
+
+void IOReactor::detach_iomgr_sentinel_cb(const sentinel_cb_idx_t idx) {
+    DEBUG_ASSERT(idx < m_iomgr_sentinel_cbs.size(), "Invalid sentinel cb idx {} to unregister", idx);
+    DEBUG_ASSERT(m_iomgr_sentinel_cbs[idx] != nullptr, "Sentinel cb idx {} already unregistered or never registered",
+                 idx);
+    m_iomgr_sentinel_cbs[idx] = nullptr;
+}
 
 } // namespace iomgr

@@ -63,8 +63,8 @@ struct uring_drive_channel {
     ::io_uring m_ring{};
     sisl::async::io_uring_scheduler m_sched; // wraps &m_ring; non-movable
     io_device_ptr m_ring_ev_iodev;
-    uint64_t m_outstanding{0};     // in-flight drive coroutines on this reactor
-    int m_saved_poll_interval{-1}; // reactor poll interval captured while tight-polling outstanding IO
+    uint32_t m_sentinel_idx{0};
+    uint64_t m_outstanding{0}; // in-flight drive coroutines on this reactor
 
     uring_drive_channel(UringDriveInterface* iface);
     ~uring_drive_channel();

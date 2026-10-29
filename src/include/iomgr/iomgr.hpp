@@ -63,6 +63,11 @@ ENUM(iomgr_state, uint16_t, stopped, interface_init, reactor_init, sys_init, run
 struct iomgr_params {
     size_t num_threads{0};
     uint32_t app_mem_size_mb{0};
+
+    // Per-reactor io_uring queue depth for net_op's socket ops. 0 = use net.uring_per_thread_qdepth from
+    // dynamic config. Each socket_handle can hold one recv and one send outstanding, so required depth
+    // scales with connections per reactor thread, not total connection count.
+    uint32_t net_uring_qdepth{0};
 };
 
 /**
@@ -82,6 +87,7 @@ public:
     // Reach the internal generic_interface() through the iomanager singleton (friendship isn't inherited,
     // so DriveInterface's friendship doesn't cover these):
     friend class uring_drive_channel; // per-reactor uring queue: registers its eventfd iodevice
+    friend class uring_net_channel;   // per-reactor net uring queue: registers its eventfd iodevice
     friend class timer_epoll;         // arms/cancels its timer fds
 
     static IOManager& instance() {
@@ -354,6 +360,9 @@ private:
     sisl::atomic_counter< int16_t > m_yet_to_start_nreactors{0}; // Total number of iomanager threads yet to start
     sisl::atomic_counter< int16_t > m_yet_to_stop_nreactors{0};
     uint32_t m_num_workers{0};
+    // 0 = unset, falls back to the net.uring_per_thread_qdepth dynamic config default. Kept as separate
+    // per-instance state, set fresh on every start(), rather than mutating that process-wide config.
+    uint32_t m_net_uring_qdepth{0};
 
     std::unique_ptr< IOManagerImpl > m_impl;
 
@@ -362,6 +371,7 @@ private:
     std::vector< std::shared_ptr< DriveInterface > > m_drive_ifaces;
 
     std::shared_ptr< GenericIOInterface > m_default_general_iface;
+    std::shared_ptr< IOInterface > m_default_net_iface;
 
     sisl::ActiveOnlyThreadBuffer< std::shared_ptr< IOReactor > > m_reactors;
 

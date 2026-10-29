@@ -35,6 +35,7 @@
 #include "epoll/iomgr_impl_epoll.hpp"
 #include "interfaces/drive_iocb.hpp"
 #include "interfaces/uring_drive_interface.hpp"
+#include "interfaces/uring_net_interface.hpp"
 #include "iomgr_helper.hpp"
 #include "iomgr_config.hpp"
 #include "iomgr_timer_impl.hpp"
@@ -72,6 +73,7 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
         m_num_workers = params.num_threads;
     }
     m_mem_size_limit = ((params.app_mem_size_mb == 0) ? get_app_mem_limit() : params.app_mem_size_mb) * Mi;
+    m_net_uring_qdepth = params.net_uring_qdepth;
 
     // Setup the app memory throttling
     m_mem_soft_threshold_size = IM_DYNAMIC_CONFIG(iomem.soft_mem_release_threshold) * m_mem_size_limit / 100;
@@ -104,6 +106,15 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
     m_default_general_iface = std::make_shared< GenericIOInterface >();
     add_interface(m_default_general_iface);
 
+    // net_op has no non-uring backend, so this check runs unconditionally here rather than only inside
+    // the `else` below, which a custom iface_adder would bypass.
+    if (!m_is_uring_capable) {
+        throw std::runtime_error(
+            "iomgr requires io_uring for net_op: the system is not io_uring-capable (or drive.disable_io_uring "
+            "is set)");
+    }
+    m_default_net_iface = std::make_shared< UringNetInterface >();
+
     if (iface_adder) {
         iface_adder();
     } else {
@@ -117,6 +128,11 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
         add_drive_interface(std::dynamic_pointer_cast< DriveInterface >(
             std::make_shared< UringDriveInterface >(new_interface_supported)));
     }
+
+    // Must stay after the drive interface (or a custom iface_adder's interfaces): add order is reactor
+    // sentinel-attach order (IOReactor::listen_once), and net is the one piece that doesn't tight-poll --
+    // it needs to run last so it catches any SQE an earlier sentinel's resumed coroutine just queued.
+    add_interface(m_default_net_iface);
 
     // Start all reactor threads
     set_state(iomgr_state::reactor_init);
@@ -195,6 +211,7 @@ void IOManager::stop() {
         m_yet_to_start_nreactors.set(0);
         // m_expected_ifaces = inbuilt_interface_count;
         m_default_general_iface.reset();
+        m_default_net_iface.reset();
         m_drive_ifaces.clear();
         m_iface_list.clear();
     } catch (const std::exception& e) { LOGCRITICAL_AND_FLUSH("Caught exception {} during clear lists", e.what()); }
