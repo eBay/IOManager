@@ -74,6 +74,8 @@ struct socket_handle::impl {
     exec::async_scope scope;
     net_op::impl* parked_recv{nullptr};
     net_op::impl* parked_send{nullptr};
+
+    bool has_parked() const { return (parked_recv != nullptr) || (parked_send != nullptr); }
 };
 
 // ----- net_op: opaque awaitable wrapping a single recv or send ----------------------------------------
@@ -83,16 +85,14 @@ struct net_op::impl {
     std::span< uint8_t > recv_buf;       // valid when !is_send
     std::span< uint8_t const > send_buf; // valid when is_send
     io_result result{0};
-    bool done{false};
+    bool parked{false};
     std::coroutine_handle<> waiter{};
 
     io_result try_once() const { return is_send ? try_send(owner->fd, send_buf) : try_recv(owner->fd, recv_buf); }
 
-    // done implies not parked (complete_parked clears the slot before setting done, and the
-    // await_ready fast path never parks at all) -- checked first so a done op never dereferences
-    // owner, which may already be freed if it outlived the handle (e.g. via detach()).
+    // Never dereferences owner: an op that was never awaited, or that completed, may outlive its handle.
     ~impl() {
-        RELEASE_ASSERT(done || (owner->parked_recv != this && owner->parked_send != this),
+        RELEASE_ASSERT(!parked,
                        "net_op destroyed while still parked waiting on its socket_handle -- would leave a "
                        "dangling pointer the next completion would touch");
     }
@@ -114,9 +114,7 @@ exec::task< void > run_uring_op(net_op::impl* self) {
             if (completed) { return; }
             net_op::impl*& slot = self->is_send ? self->owner->parked_send : self->owner->parked_recv;
             if (slot == self) {
-                // operation_canceled lets a caller tell reactor shutdown apart from a transient peer error.
-                auto const ec = UringNetInterface::this_channel()->m_stopping ? std::errc::operation_canceled
-                                                                              : std::errc::connection_aborted;
+                auto const ec = net_stopping() ? std::errc::operation_canceled : std::errc::connection_aborted;
                 complete_parked(slot, io_result{std::unexpected(std::make_error_condition(ec))});
             }
         }
@@ -125,6 +123,11 @@ exec::task< void > run_uring_op(net_op::impl* self) {
     auto& sched = UringNetInterface::this_channel()->m_sched;
     int res = 0;
     for (;;) {
+        // A resubmit after the drain's one-shot bulk cancel would never be cancelled.
+        if (net_stopping()) {
+            res = -ECANCELED;
+            break;
+        }
         try {
             res = co_await sched.async_submit([self](::io_uring_sqe* sqe) {
                 if (self->is_send) {
@@ -155,35 +158,31 @@ socket_handle::socket_handle(int fd, thread_specifier const& reactor) : _impl{st
                    "socket_handle must be pinned to a specific reactor, not a reactor_regex");
     auto* const target = std::get< IOReactor* >(reactor);
     set_nonblocking(fd);
-    impl* const p = _impl.get();
-    run_on_reactor(target, [fd, target, p]() {
-        p->fd = fd;
-        p->reactor = target;
-    });
+    _impl->fd = fd;
+    _impl->reactor = target;
 }
 
 // Must run before the owning reactor stops; see net_op.hpp's class comment. release() rather than let
 // _impl's own destruction race teardown(), which frees `p` itself once drained.
 socket_handle::~socket_handle() {
     if (!_impl) { return; } // moved-from
-    impl* const p = _impl.release();
-    run_on_reactor(p->reactor, [p]() { teardown(p); });
+    teardown_on_owner(_impl.release());
 }
 
 socket_handle::socket_handle(socket_handle&&) noexcept = default;
 
 socket_handle& socket_handle::operator=(socket_handle&& o) noexcept {
     if (this != &o) {
-        if (_impl) {
-            impl* const p = _impl.release();
-            run_on_reactor(p->reactor, [p]() { teardown(p); });
-        }
+        if (_impl) { teardown_on_owner(_impl.release()); }
         _impl = std::move(o._impl);
     }
     return *this;
 }
 
-int socket_handle::fd() const noexcept { return _impl->fd; }
+int socket_handle::fd() const noexcept {
+    DEBUG_ASSERT(_impl, "fd() called on a moved-from socket_handle");
+    return _impl->fd;
+}
 
 // ----- net_op -------------------------------------------------------------------------------------
 net_op::net_op(std::unique_ptr< impl > p) noexcept : _impl{std::move(p)} {}
@@ -197,16 +196,13 @@ bool net_op::await_ready() const noexcept {
                    "net_op driven from a thread other than its socket_handle's owning reactor");
     auto r = p->try_once();
     if (is_retryable(r)) {
-        auto* const ch = UringNetInterface::this_channel();
-        if (ch->m_stopping) {
+        if (net_stopping()) {
             p->result = io_result{std::unexpected(std::make_error_condition(std::errc::operation_canceled))};
-            p->done = true;
             return true;
         }
         return false; // park in await_suspend
     }
     p->result = std::move(r);
-    p->done = true;
     return true;
 }
 
@@ -218,6 +214,7 @@ void net_op::await_suspend(std::coroutine_handle<> h) noexcept {
                    "{} loop",
                    p->is_send ? "send" : "recv", p->is_send ? "send" : "recv");
     p->waiter = h;
+    p->parked = true;
     slot = p;
     p->owner->scope.spawn(run_uring_op(p));
 }
@@ -228,6 +225,7 @@ net_op async_recv(socket_handle& sock, std::span< uint8_t > buf) {
     RELEASE_ASSERT(!buf.empty(),
                    "async_recv called with an empty buffer -- a zero-byte recv() return is indistinguishable "
                    "from EOF");
+    DEBUG_ASSERT(sock._impl, "async_recv called on a moved-from socket_handle");
     auto p = std::make_unique< net_op::impl >();
     p->owner = sock._impl.get();
     p->recv_buf = buf;
@@ -236,6 +234,7 @@ net_op async_recv(socket_handle& sock, std::span< uint8_t > buf) {
 
 net_op async_send(socket_handle& sock, std::span< uint8_t const > buf) {
     RELEASE_ASSERT(!buf.empty(), "async_send called with an empty buffer");
+    DEBUG_ASSERT(sock._impl, "async_send called on a moved-from socket_handle");
     auto p = std::make_unique< net_op::impl >();
     p->owner = sock._impl.get();
     p->is_send = true;

@@ -58,6 +58,8 @@ struct uring_net_channel {
 
     uring_net_channel(UringNetInterface* iface);
     ~uring_net_channel();
+
+    void detach_from_reactor();
 };
 
 class UringNetInterface : public IOInterface {
@@ -70,6 +72,9 @@ public:
 
     // Reactor sentinel: flush queued SQEs + reap completions (resuming suspended coroutines).
     void poll_completions();
+
+    // Called by the reactor right before it blocks.
+    static void submit_queued();
 
     static uring_net_channel* this_channel() { return t_uring_net_ch; }
 

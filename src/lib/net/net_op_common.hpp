@@ -49,16 +49,6 @@ inline void set_nonblocking(int fd) {
     RELEASE_ASSERT_EQ(r, 0, "fcntl(F_SETFL, O_NONBLOCK) failed on fd {}: {}", fd, strerror(errno));
 }
 
-// Runs fn() on `reactor` -- inline if already there, else dispatched via run_on_wait (blocking). Lets a
-// handle's construction/destruction be called from any thread without making every op pay for a dispatch.
-void run_on_reactor(IOReactor* reactor, const auto& fn) {
-    if (iomanager.this_reactor() == reactor) {
-        fn();
-    } else {
-        iomanager.run_on_wait(reactor, fn);
-    }
-}
-
 // io_uring_scheduler::async_submit's sender completes via set_error(exception_ptr), not a negative `res`,
 // when the ring is exhausted even after its internal flush-and-retry. exec::async_scope::spawn isn't
 // built to handle a spawned sender that fails this way, so every submission coroutine wraps its co_await
@@ -66,6 +56,13 @@ void run_on_reactor(IOReactor* reactor, const auto& fn) {
 inline std::error_condition exception_to_error_condition(std::exception const& e) {
     if (auto const* se = dynamic_cast< std::system_error const* >(&e)) { return se->code().default_error_condition(); }
     return std::make_error_condition(std::errc::not_enough_memory);
+}
+
+// True once this reactor's net channel has begun its stop drain, or is already gone. Ops failed or cancelled
+// then report operation_canceled, so a caller can tell reactor shutdown apart from a peer error.
+inline bool net_stopping() {
+    auto* const ch = UringNetInterface::this_channel();
+    return (ch == nullptr) || ch->m_stopping;
 }
 
 // No tight-poll here unlike UringDriveInterface's io_started()/io_finished(): a net op can sit parked
@@ -91,12 +88,12 @@ struct net_io_scope {
 };
 
 // Clears the parked slot and resumes its waiter with `r`. Shared by net_op::impl (io_result) and
-// accept_op::impl (accept_result) -- both have the same owner/result/done/waiter shape.
+// accept_op::impl (accept_result) -- both have the same owner/result/parked/waiter shape.
 template < typename Impl, typename Result >
 void complete_parked(Impl*& slot, Result r) {
     auto* const op = std::exchange(slot, nullptr);
     op->result = std::move(r);
-    op->done = true;
+    op->parked = false;
     if (auto w = op->waiter) { w.resume(); }
 }
 
@@ -118,7 +115,30 @@ exec::task< void > close_once_drained(ImplT* p) {
 template < typename ImplT >
 void teardown(ImplT* s) {
     s->scope.request_stop();
-    UringNetInterface::this_channel()->m_teardown_scope.spawn(close_once_drained(s));
+    auto* const ch = UringNetInterface::this_channel();
+    if (ch != nullptr) {
+        ch->m_teardown_scope.spawn(close_once_drained(s));
+        return;
+    }
+    // Net already stopped on this reactor. A successful drain completed every op, so nothing can still be
+    // parked unless the drain timed out and leaked the ring -- then leak this too, since its ops never resolve.
+    if (s->has_parked()) {
+        LOGERRORMOD(iomgr, "Leaking fd {}: torn down after a timed-out net drain with an op still parked", s->fd);
+        return;
+    }
+    ::close(s->fd);
+    delete s;
+}
+
+// Off the owning reactor this only queues the teardown: blocking here would deadlock two reactors that drop
+// each other's handles.
+template < typename ImplT >
+void teardown_on_owner(ImplT* s) {
+    if (iomanager.this_reactor() == s->reactor) {
+        teardown(s);
+    } else {
+        iomanager.run_on_forget(s->reactor, [s]() { teardown(s); });
+    }
 }
 
 } // namespace iomgr

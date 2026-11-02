@@ -41,16 +41,32 @@ struct connect_op::impl {
     using connect_result = std::expected< void, std::error_condition >;
 
     int fd{-1};
+    IOReactor* reactor{nullptr};
     sockaddr_storage addr{};
     socklen_t addrlen{0};
     std::optional< std::chrono::milliseconds > timeout;
 
     connect_result result{};
     bool done{false};
+    bool in_flight{false};
     std::coroutine_handle<> waiter{};
+
+    ~impl() {
+        RELEASE_ASSERT(!in_flight,
+                       "connect_op destroyed while its connect is still in flight -- the completion would write "
+                       "into freed memory and resume a dead coroutine");
+    }
 };
 
 namespace {
+
+void complete(connect_op::impl* self, connect_op::impl::connect_result r) {
+    if (self->done) { return; }
+    self->result = std::move(r);
+    self->done = true;
+    self->in_flight = false;
+    if (auto w = self->waiter) { w.resume(); }
+}
 
 // One-shot IORING_OP_CONNECT, optionally linked (IOSQE_IO_LINK) to an IORING_OP_LINK_TIMEOUT so the
 // kernel cancels the connect if it fires first, rather than racing a second sender against `self` after
@@ -73,13 +89,10 @@ exec::task< void > run_uring_connect(connect_op::impl* self, int fd, sockaddr_st
         ~cancel_guard() {
             if (completed) { return; }
             bool const timed_out = deadline.has_value() && (std::chrono::steady_clock::now() >= *deadline);
-            // operation_canceled lets a caller tell reactor shutdown apart from a transient peer error.
-            auto const ec = timed_out                                   ? std::errc::timed_out
-                : UringNetInterface::this_channel()->m_stopping ? std::errc::operation_canceled
-                                                                 : std::errc::connection_aborted;
-            self->result = std::unexpected(std::make_error_condition(ec));
-            self->done = true;
-            if (auto w = self->waiter) { w.resume(); }
+            auto const ec = timed_out ? std::errc::timed_out
+                : net_stopping()      ? std::errc::operation_canceled
+                                      : std::errc::connection_aborted;
+            complete(self, std::unexpected(std::make_error_condition(ec)));
         }
     } guard{self, deadline};
 
@@ -97,9 +110,7 @@ exec::task< void > run_uring_connect(connect_op::impl* self, int fd, sockaddr_st
         // stop it going out unbounded.
         if (::io_uring_sq_space_left(ch->m_sched.ring()) < 2) { ::io_uring_submit(ch->m_sched.ring()); }
         if (::io_uring_sq_space_left(ch->m_sched.ring()) < 2) {
-            self->result = std::unexpected(std::make_error_condition(std::errc::not_enough_memory));
-            self->done = true;
-            if (auto w = self->waiter) { w.resume(); }
+            complete(self, std::unexpected(std::make_error_condition(std::errc::not_enough_memory)));
             guard.completed = true;
             co_return;
         }
@@ -121,22 +132,14 @@ exec::task< void > run_uring_connect(connect_op::impl* self, int fd, sockaddr_st
     } catch (std::exception const& e) {
         // Not retried: a second connect() on an already-mid-handshake fd risks EALREADY; see
         // connect_op::await_ready below for why there's no raw-syscall fast path either.
-        if (!self->done) {
-            self->result = std::unexpected(exception_to_error_condition(e));
-            self->done = true;
-            if (auto w = self->waiter) { w.resume(); }
-        }
+        complete(self, std::unexpected(exception_to_error_condition(e)));
         guard.completed = true;
         co_return;
     }
 
-    if (!self->done) {
-        self->result = (res < 0)
-            ? std::unexpected(std::error_code{-res, std::system_category()}.default_error_condition())
-            : connect_op::impl::connect_result{};
-        self->done = true;
-        if (auto w = self->waiter) { w.resume(); }
-    }
+    complete(self,
+             (res < 0) ? std::unexpected(std::error_code{-res, std::system_category()}.default_error_condition())
+                       : connect_op::impl::connect_result{});
     guard.completed = true;
 }
 
@@ -155,13 +158,16 @@ bool connect_op::await_ready() const noexcept { return false; }
 
 bool connect_op::await_suspend(std::coroutine_handle<> h) noexcept {
     impl* const p = _impl.get();
+    RELEASE_ASSERT(iomanager.this_reactor() == p->reactor,
+                   "connect_op awaited on a thread other than the reactor async_connect was called with");
     auto* const ch = UringNetInterface::this_channel();
-    if (ch->m_stopping) {
+    if (net_stopping()) {
         p->result = std::unexpected(std::make_error_condition(std::errc::operation_canceled));
         p->done = true;
         return false;
     }
     p->waiter = h;
+    p->in_flight = true;
     ch->m_scope.spawn(run_uring_connect(p, p->fd, p->addr, p->addrlen, p->timeout));
     return true;
 }
@@ -179,6 +185,7 @@ connect_op async_connect(int fd, sockaddr const* addr, socklen_t addrlen, thread
     set_nonblocking(fd);
     auto p = std::make_unique< connect_op::impl >();
     p->fd = fd;
+    p->reactor = std::get< IOReactor* >(reactor);
     std::memcpy(&p->addr, addr, addrlen);
     p->addrlen = addrlen;
     p->timeout = timeout;

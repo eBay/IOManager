@@ -129,9 +129,9 @@ void IOManager::start(const iomgr_params& params, const thread_state_notifier_t&
             std::make_shared< UringDriveInterface >(new_interface_supported)));
     }
 
-    // Must stay after the drive interface (or a custom iface_adder's interfaces): add order is reactor
-    // sentinel-attach order (IOReactor::listen_once), and net is the one piece that doesn't tight-poll --
-    // it needs to run last so it catches any SQE an earlier sentinel's resumed coroutine just queued.
+    // After the drive interface so net's sentinel runs last in a tick and submits an SQE queued by an earlier
+    // sentinel's resumed coroutine within the same tick. Correctness doesn't depend on this:
+    // IOReactor::listen_once submits anything still queued before it blocks.
     add_interface(m_default_net_iface);
 
     // Start all reactor threads
