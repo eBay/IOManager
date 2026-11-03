@@ -116,18 +116,27 @@ uring_net_channel::uring_net_channel(UringNetInterface* iface) : m_sched{&m_ring
     using namespace std::placeholders;
     m_ring_ev_iodev = iomanager.generic_interface()->make_io_device(
         ev_fd, EPOLLIN, 0, nullptr, true, std::bind(&UringNetInterface::on_event_notification, iface, _1, _2, _3));
-    m_sentinel_idx = iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->poll_completions(); });
+    fd_cleanup.dismissed = true; // the iodev owns ev_fd now; remove_io_device closes it
+    try {
+        m_sentinel_idx = iomanager.this_reactor()->attach_iomgr_sentinel_cb([iface]() { iface->poll_completions(); });
+    } catch (...) {
+        iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev, true /* wait_to_remove */);
+        throw;
+    }
 
-    fd_cleanup.dismissed = true;
     ring_cleanup.dismissed = true;
 }
 
 uring_net_channel::~uring_net_channel() {
+    detach_from_reactor();
     io_uring_queue_exit(&m_ring);
-    if (m_ring_ev_iodev != nullptr) {
-        iomanager.this_reactor()->detach_iomgr_sentinel_cb(m_sentinel_idx);
-        iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev, true /* wait_to_remove */);
-    }
+}
+
+void uring_net_channel::detach_from_reactor() {
+    if (m_ring_ev_iodev == nullptr) { return; }
+    iomanager.this_reactor()->detach_iomgr_sentinel_cb(m_sentinel_idx);
+    iomanager.generic_interface()->remove_io_device(m_ring_ev_iodev, true /* wait_to_remove */);
+    m_ring_ev_iodev = nullptr;
 }
 
 void UringNetInterface::init_iface_reactor_context(IOReactor*) {
@@ -137,15 +146,19 @@ void UringNetInterface::init_iface_reactor_context(IOReactor*) {
 void UringNetInterface::clear_iface_reactor_context(IOReactor*) {
     if (t_uring_net_ch != nullptr) {
         // m_scope asserts nothing is outstanding at destruction; only delete once drain confirms that.
+        // Otherwise leak the ring and scopes, but still unhook them from the reactor and the thread-local.
         if (drain_outstanding_ops()) {
             delete t_uring_net_ch;
-            t_uring_net_ch = nullptr;
+        } else {
+            t_uring_net_ch->detach_from_reactor();
         }
+        t_uring_net_ch = nullptr;
     }
 }
 
 bool UringNetInterface::drain_outstanding_ops() {
     auto* const ch = t_uring_net_ch;
+    ch->m_stopping = true;
     ch->m_scope.request_stop(); // propagates to run_uring_connect / close_once_drained / anything else nested in it
 
     if (ch->m_outstanding == 0) { return true; }
@@ -154,10 +167,17 @@ bool UringNetInterface::drain_outstanding_ops() {
     // request regardless of key, and IORING_ASYNC_CANCEL_ALL cancels all of them, not just the first. The
     // cancel SQE's own user_data is left 0 ("unmanaged") so poll_once's reap loop ignores its CQE; each
     // cancelled op's own CQE still arrives as -ECANCELED and completes normally.
-    if (auto* const sqe = ::io_uring_get_sqe(ch->m_sched.ring())) {
+    auto* sqe = ::io_uring_get_sqe(ch->m_sched.ring());
+    if (sqe == nullptr) {
+        ::io_uring_submit(ch->m_sched.ring());
+        sqe = ::io_uring_get_sqe(ch->m_sched.ring());
+    }
+    if (sqe != nullptr) {
         ::io_uring_prep_cancel64(sqe, 0, IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_ALL);
         ::io_uring_sqe_set_data64(sqe, 0);
         ::io_uring_submit(ch->m_sched.ring()); // don't wait for poll_once's own first iteration to flush this
+    } else {
+        LOGERRORMOD(iomgr, "No SQE available for the reactor-stop bulk cancel; parked net ops won't be cancelled");
     }
 
     using namespace std::chrono;
@@ -176,7 +196,14 @@ bool UringNetInterface::drain_outstanding_ops() {
     return true;
 }
 
+void UringNetInterface::submit_queued() {
+    if (auto* const ch = t_uring_net_ch; ch && (::io_uring_sq_ready(ch->m_sched.ring()) > 0)) {
+        ::io_uring_submit(ch->m_sched.ring());
+    }
+}
+
 void UringNetInterface::poll_completions() {
+    if (t_uring_net_ch == nullptr) { return; }
     // Flush any SQEs queued since the last poll and reap available completions, resuming the suspended
     // coroutines inline on this reactor thread. Non-blocking: the reactor's epoll_wait (woken by the
     // ring eventfd) provides the actual wait.

@@ -43,7 +43,7 @@ public:
     ~connect_op();
 
     bool await_ready() const noexcept;
-    void await_suspend(std::coroutine_handle<> h) noexcept;
+    bool await_suspend(std::coroutine_handle<> h) noexcept;
     std::expected< void, std::error_condition > await_resume() const noexcept;
 
 private:

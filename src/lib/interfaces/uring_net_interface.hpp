@@ -45,13 +45,21 @@ struct uring_net_channel {
     io_device_ptr m_ring_ev_iodev;
     uint32_t m_sentinel_idx{0};
     uint64_t m_outstanding{0}; // in-flight net ops on this reactor
+    // The drain's bulk cancel only reaches ops already in flight, so once it has run, new ops must fail
+    // fast instead of parking where nothing will ever cancel them.
+    bool m_stopping{false};
     // connect_op has no persistent owner to host its own per-call scope, so run_uring_connect spawns into
     // this long-lived, channel-level scope instead -- avoids racing a connect's resume (which may
     // immediately destroy the connect_op) against the scope's own destruction.
     exec::async_scope m_scope;
+    // Never stopped, so close_once_drained doesn't depend on a task spawned after m_scope.request_stop()
+    // still running its body.
+    exec::async_scope m_teardown_scope;
 
     uring_net_channel(UringNetInterface* iface);
     ~uring_net_channel();
+
+    void detach_from_reactor();
 };
 
 class UringNetInterface : public IOInterface {
@@ -64,6 +72,9 @@ public:
 
     // Reactor sentinel: flush queued SQEs + reap completions (resuming suspended coroutines).
     void poll_completions();
+
+    // Called by the reactor right before it blocks.
+    static void submit_queued();
 
     static uring_net_channel* this_channel() { return t_uring_net_ch; }
 

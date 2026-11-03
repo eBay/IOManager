@@ -24,6 +24,7 @@ extern "C" {
 #include "iomgr_msg.hpp"
 #include "reactor/reactor.hpp"
 #include "iomgr_config.hpp"
+#include "interfaces/uring_net_interface.hpp"
 
 #define likely(x) __builtin_expect((x), 1)
 #define unlikely(x) __builtin_expect((x), 0)
@@ -97,6 +98,9 @@ void IOReactor::init() {
 }
 
 bool IOReactor::listen_once() {
+    // Net doesn't tight-poll, so an SQE queued outside its own sentinel (thread-start notifier, another
+    // interface's completion) would otherwise sit unsubmitted while listen() blocks.
+    UringNetInterface::submit_queued();
     listen();
     if (m_keep_running) {
         auto& sentinel_cb = iomanager.generic_interface()->get_listen_sentinel_cb();
@@ -129,13 +133,22 @@ void IOReactor::stop() {
     m_keep_running = false;
 
     uint32_t removed_iface{0};
-    iomanager.foreach_interface([this, &removed_iface](cshared< IOInterface >& iface) {
+    auto const stop_iface = [this, &removed_iface](cshared< IOInterface >& iface) {
         if (can_add_iface(iface)) {
             iface->on_reactor_stop(this);
             ++removed_iface;
         } else {
             REACTOR_LOG(INFO, "{} with scope={} ignored to remove", iface->name(), iface->scope());
         }
+    };
+    // Net first: its drain resumes coroutines that may still issue drive I/O, which needs the drive channel
+    // alive. The reverse direction is safe: a net op issued after net stopped fails fast.
+    auto const& net_iface = iomanager.m_default_net_iface;
+    iomanager.foreach_interface([&](cshared< IOInterface >& iface) {
+        if (iface == net_iface) { stop_iface(iface); }
+    });
+    iomanager.foreach_interface([&](cshared< IOInterface >& iface) {
+        if (iface != net_iface) { stop_iface(iface); }
     });
     REACTOR_LOG(INFO, "Reactor stop removed {} interfaces", removed_iface);
 

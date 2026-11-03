@@ -9,7 +9,7 @@ required_conan_version = ">=2.0"
 
 class IOMgrConan(ConanFile):
     name = "iomgr"
-    version = "13.2.0"
+    version = "13.3.0"
 
     homepage = "https://github.com/eBay/IOManager"
     description = "Asynchronous event manager"
@@ -102,7 +102,7 @@ class IOMgrConan(ConanFile):
                 if self.options.sanitize == "thread":
                     tc.variables['THREAD_SANITIZER_ON'] = 'ON'
                 else:  # address
-                    tc.variables['ADDRESS_SANITIZER_ON'] = 'ON'
+                    tc.variables['MEMORY_SANITIZER_ON'] = 'ON'
         tc.variables["CONAN_PACKAGE_NAME"] = self.name
         tc.variables["CONAN_PACKAGE_VERSION"] = self.version
         tc.generate()

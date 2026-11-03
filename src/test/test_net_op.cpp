@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <latch>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -28,9 +30,9 @@
 #include <vector>
 
 extern "C" {
-#include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -50,8 +52,11 @@ extern "C" {
 #include <iomgr/drive.hpp>
 #include <iomgr/io_environment.hpp>
 #include <iomgr/iomgr.hpp>
+#include <iomgr/iomgr_flip.hpp>
 #include <iomgr/net_op.hpp>
-#include "reactor/reactor.hpp" // internal: whitebox check of IOReactor::get_poll_interval() below
+#include <iomgr/timer.hpp>
+#include "interfaces/uring_net_interface.hpp" // internal: liburing with this repo's compat workarounds
+#include "reactor/reactor.hpp"                // internal: whitebox check of IOReactor::get_poll_interval() below
 
 using namespace iomgr;
 
@@ -99,6 +104,80 @@ sockaddr_un make_addr(std::string const& path) {
     std::copy(path.begin(), path.end(), addr.sun_path);
     return addr;
 }
+
+// A loopback TCP listener whose backlog-0 accept queue is already full: the kernel drops any further SYN
+// without replying, so a connect to it stays pending without depending on any outside network.
+struct unresponsive_listener {
+    int listen_fd{-1};
+    int queued_fd{-1};
+    sockaddr_in addr{};
+};
+
+unresponsive_listener make_unresponsive_listener() {
+    unresponsive_listener l;
+    l.listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    RELEASE_ASSERT_GE(l.listen_fd, 0, "socket() failed: {}", strerror(errno));
+    l.addr.sin_family = AF_INET;
+    l.addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    RELEASE_ASSERT_EQ(::bind(l.listen_fd, reinterpret_cast< sockaddr* >(&l.addr), sizeof(l.addr)), 0,
+                      "bind() failed: {}", strerror(errno));
+    RELEASE_ASSERT_EQ(::listen(l.listen_fd, 0), 0, "listen() failed: {}", strerror(errno));
+    socklen_t len = sizeof(l.addr);
+    RELEASE_ASSERT_EQ(::getsockname(l.listen_fd, reinterpret_cast< sockaddr* >(&l.addr), &len), 0,
+                      "getsockname() failed: {}", strerror(errno));
+
+    l.queued_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    RELEASE_ASSERT_GE(l.queued_fd, 0, "socket() failed: {}", strerror(errno));
+    RELEASE_ASSERT_EQ(::connect(l.queued_fd, reinterpret_cast< sockaddr* >(&l.addr), sizeof(l.addr)), 0,
+                      "connect() failed: {}", strerror(errno));
+    pollfd p{.fd = l.listen_fd, .events = POLLIN, .revents = 0};
+    RELEASE_ASSERT_EQ(::poll(&p, 1, 1000), 1, "pre-filled connection never reached the accept queue");
+    return l;
+}
+
+void close_unresponsive_listener(unresponsive_listener const& l) {
+    ::close(l.queued_fd);
+    ::close(l.listen_fd);
+}
+
+// Same probe the net channel runs at startup: the reactor-stop drain's bulk cancel needs kernel 5.19+.
+bool kernel_supports_cancel_any() {
+    static bool const supported = [] {
+        ::io_uring ring{};
+        if (::io_uring_queue_init(2, &ring, 0) != 0) { return false; }
+        bool ok{false};
+        if (auto* const sqe = ::io_uring_get_sqe(&ring)) {
+            ::io_uring_prep_cancel64(sqe, 0, IORING_ASYNC_CANCEL_ANY | IORING_ASYNC_CANCEL_ALL);
+            ::io_uring_submit(&ring);
+            if (::io_uring_cqe* cqe = nullptr; ::io_uring_wait_cqe(&ring, &cqe) == 0) {
+                ok = (cqe->res != -EINVAL);
+                ::io_uring_cqe_seen(&ring, cqe);
+            }
+        }
+        ::io_uring_queue_exit(&ring);
+        return ok;
+    }();
+    return supported;
+}
+
+std::string make_temp_drive_file(std::string const& tag) {
+    std::string const path = "/tmp/iomgr_net_op_test_" + tag + "_" + std::to_string(::getpid());
+    int const fd = ::open(path.c_str(), O_RDWR | O_CREAT, 0666);
+    RELEASE_ASSERT_GE(fd, 0, "open({}) failed: {}", path, strerror(errno));
+    ::close(fd);
+    std::filesystem::resize_file(path, 1024 * 1024);
+    return path;
+}
+
+// Waits for the peer of `fd` to be closed: socket teardown off the owning reactor is asynchronous.
+bool peer_sees_eof(int fd, std::chrono::milliseconds timeout) {
+    pollfd p{.fd = fd, .events = POLLIN, .revents = 0};
+    if (::poll(&p, 1, static_cast< int >(timeout.count())) != 1) { return false; }
+    std::array< uint8_t, 1 > b{};
+    return ::recv(fd, b.data(), b.size(), MSG_DONTWAIT) == 0;
+}
+
+bool is_cloexec(int fd) { return (::fcntl(fd, F_GETFD) & FD_CLOEXEC) != 0; }
 
 IOReactor* pick_a_worker_reactor() {
     IOReactor* reactor{nullptr};
@@ -222,34 +301,31 @@ public:
     void TearDown() override { iomanager.stop(); }
 };
 
-// Confirms iomgr_params::net_uring_qdepth is wired through to the net channel's ring and that a small
-// override doesn't break ordinary operation. Does not exercise genuine ring exhaustion -- an ordinary
-// burst self-heals via acquire_sqe's own flush-and-retry; see net_op.cpp's exception_to_error_condition
-// for the exhaustion path itself, which is verified by reading the code.
+// Confirms iomgr_params::net_uring_qdepth reaches the net ring and that a recv parked on that ring still
+// completes.
 TEST(NetOpCustomQdepthTest, ExplicitOverrideStillWorks) {
     ioenvironment.with_iomgr(iomgr_params{.num_threads = 2, .net_uring_qdepth = 8});
+    auto* const reactor = pick_a_worker_reactor();
+
+    unsigned sq_entries{0};
+    iomanager.run_on_wait(reactor, [&]() { sq_entries = *UringNetInterface::this_channel()->m_ring.sq.kring_entries; });
+    EXPECT_EQ(sq_entries, 8u);
+
     auto const [fd0, fd1] = make_connected_pair();
-    std::array< uint8_t, 5 > const payload{'h', 'e', 'l', 'l', 'o'};
-    std::array< uint8_t, 5 > read_buf{};
-    io_result send_result{0};
-    io_result recv_result{0};
+    {
+        socket_handle sock(fd0, thread_specifier{reactor});
+        std::array< uint8_t, 5 > read_buf{};
+        auto fut = start< io_result >(reactor, [&]() { return async_recv(sock, std::span< uint8_t >(read_buf)); });
+        ASSERT_EQ(fut.wait_for(std::chrono::milliseconds{100}), std::future_status::timeout); // parked on the ring
 
-    iomanager.run_on_wait(reactor_regex::random_worker, [&]() {
-        socket_handle a(fd0, thread_specifier{iomanager.this_reactor()});
-        socket_handle b(fd1, thread_specifier{iomanager.this_reactor()});
-        send_result = sisl::async::sync_get(
-            [](socket_handle& s, std::span< uint8_t const > buf) -> sisl::async::light_task< io_result > {
-                co_return co_await async_send(s, buf);
-            }(a, std::span< uint8_t const >(payload)));
-        recv_result = sisl::async::sync_get(
-            [](socket_handle& s, std::span< uint8_t > buf) -> sisl::async::light_task< io_result > {
-                co_return co_await async_recv(s, buf);
-            }(b, std::span< uint8_t >(read_buf)));
-    });
-
-    ASSERT_TRUE(send_result.has_value());
-    ASSERT_TRUE(recv_result.has_value());
-    EXPECT_EQ(read_buf, payload);
+        std::array< uint8_t, 5 > const payload{'h', 'e', 'l', 'l', 'o'};
+        ASSERT_EQ(::write(fd1, payload.data(), payload.size()), static_cast< ssize_t >(payload.size()));
+        auto const result = fut.get();
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(*result, payload.size());
+        EXPECT_EQ(read_buf, payload);
+    }
+    ::close(fd1);
     iomanager.stop();
 }
 
@@ -664,15 +740,20 @@ TEST_F(NetOpTest, ConnectSucceedsAndRoundTrips) {
 
     // connect() can complete as soon as the kernel enqueues the pending connection into the listener's
     // backlog -- it doesn't need to race an in-flight accept, so issuing them sequentially is deterministic.
+    // run_on_wait returns at the coroutine's first suspension, so wait for it to finish separately.
+    std::promise< void > done;
+    auto done_fut = done.get_future();
     iomanager.run_on_wait(reactor, [&]() {
         [](listener_handle& l, int cfd, sockaddr_un a, IOReactor* r, std::expected< void, std::error_condition >& cres,
-           accept_result& ares) -> sisl::async::light_task< void > {
+           accept_result& ares, std::promise< void >& d) -> sisl::async::light_task< void > {
             cres = co_await async_connect(cfd, reinterpret_cast< sockaddr* >(&a), sizeof(a), thread_specifier{r});
             ares = co_await async_accept(l);
-        }(listener, client_fd, addr, reactor, connect_result, accept_res)
-                                       .detach();
+            d.set_value();
+        }(listener, client_fd, addr, reactor, connect_result, accept_res, done)
+                                                                .detach();
     });
 
+    ASSERT_EQ(done_fut.wait_for(std::chrono::seconds{5}), std::future_status::ready);
     ASSERT_TRUE(connect_result.has_value());
     ASSERT_TRUE(accept_res.has_value());
 
@@ -715,20 +796,14 @@ TEST_F(NetOpTest, ConnectToNonexistentPathFails) {
 }
 
 TEST_F(NetOpTest, ConnectTimesOut) {
-    // 192.0.2.0/24 is RFC 5737 TEST-NET-1: reserved, never assigned or routable. A connect() to it starts
-    // a real handshake that never gets a SYN-ACK or RST, so it stays pending deterministically.
     auto* const reactor = pick_a_worker_reactor();
+    auto target = make_unresponsive_listener();
     int const client_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(client_fd, 0);
 
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(80);
-    ASSERT_EQ(::inet_pton(AF_INET, "192.0.2.1", &addr.sin_addr), 1);
-
     auto fut = start< std::expected< void, std::error_condition > >(reactor, [&]() {
-        return async_connect(client_fd, reinterpret_cast< sockaddr* >(&addr), sizeof(addr), thread_specifier{reactor},
-                             std::chrono::milliseconds(50));
+        return async_connect(client_fd, reinterpret_cast< sockaddr* >(&target.addr), sizeof(target.addr),
+                             thread_specifier{reactor}, std::chrono::milliseconds(50));
     });
 
     auto const result = fut.get();
@@ -736,6 +811,7 @@ TEST_F(NetOpTest, ConnectTimesOut) {
     EXPECT_EQ(result.error(), std::make_error_condition(std::errc::timed_out));
 
     ::close(client_fd);
+    close_unresponsive_listener(target);
 }
 
 // Many socket_handles pinned to the same reactor, recv'ing concurrently: checks the shared per-reactor
@@ -1016,6 +1092,38 @@ TEST_F(NetOpTest, HandlerOwnedSocketDestroyedFromWithinOwnRecvCompletion) {
     EXPECT_EQ(*result, 0u);
 }
 
+// Tearing down a socket with a parked recv must not push back an unrelated one-shot timer already
+// pending on the same reactor.
+TEST_F(NetOpTest, SocketTeardownDoesNotDelayOtherThreadTimers) {
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    std::optional< socket_handle > sock;
+    sock.emplace(fd0, thread_specifier{reactor});
+
+    std::array< uint8_t, 5 > read_buf{};
+    auto recv_done = std::make_shared< std::promise< io_result > >();
+    auto recv_fut = recv_done->get_future();
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle& s, std::span< uint8_t > buf,
+           std::shared_ptr< std::promise< io_result > > done) -> sisl::async::light_task< void > {
+            done->set_value(co_await async_recv(s, buf));
+        }(*sock, std::span< uint8_t >(read_buf), recv_done)
+                                                                     .detach();
+    });
+    ASSERT_EQ(recv_fut.wait_for(std::chrono::seconds(0)), std::future_status::timeout);
+
+    auto fired = std::make_shared< std::promise< void > >();
+    auto fired_fut = fired->get_future();
+    iomanager.run_on_wait(reactor, [&]() {
+        schedule_oneshot(std::chrono::milliseconds{100}, [fired]() { fired->set_value(); });
+        sock.reset(); // inline teardown on this reactor, with the recv still parked
+    });
+
+    ASSERT_EQ(recv_fut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_EQ(fired_fut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    ::close(fd1);
+}
+
 // Same as above, but a send is still parked on the socket too, so teardown() takes its cancel-and-wait
 // path instead of the "nothing parked" fast path.
 TEST_F(NetOpTest, HandlerOwnedSocketWithConcurrentParkedSendDestroyedFromWithinOwnRecvCompletion) {
@@ -1075,9 +1183,183 @@ TEST_F(NetOpTest, HandlerOwnedListenerDestroyedFromWithinOwnAcceptCompletion) {
     ::unlink(path.c_str());
 }
 
+// on_done may destroy the socket even when the recv completed on the await_ready fast path, where the op
+// itself is only destroyed after on_done returns.
+TEST_F(NetOpTest, DetachFastPathOnDoneMayDestroySocket) {
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    auto* const sock = new socket_handle(fd0, thread_specifier{reactor});
+    std::array< uint8_t, 5 > const payload{'h', 'e', 'l', 'l', 'o'};
+    ASSERT_EQ(::write(fd1, payload.data(), payload.size()), static_cast< ssize_t >(payload.size()));
+
+    std::array< uint8_t, 5 > read_buf{};
+    io_result result{0};
+    iomanager.run_on_wait(reactor, [&]() {
+        detach(async_recv(*sock, std::span< uint8_t >(read_buf)), [&result, sock](io_result r) {
+            result = std::move(r);
+            delete sock;
+        });
+    });
+
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, payload.size());
+    ::close(fd1);
+}
+
+// A coroutine resumed by a drive completion that goes on to park a recv: the recv's SQE is queued from
+// drive's sentinel, not net's, and must still reach the kernel.
+TEST_F(NetOpTest, RecvParkedFromInsideDriveCompletionResumes) {
+    auto const dev_path = make_temp_drive_file("park_from_drive");
+    auto drive = open_drive(dev_path, O_CREAT | O_RDWR);
+    ASSERT_TRUE(drive.has_value());
+    auto* const reactor = pick_a_worker_reactor();
+    auto const [fd0, fd1] = make_connected_pair();
+    {
+        socket_handle sock(fd0, thread_specifier{reactor});
+        std::array< char, 4096 > write_buf{};
+        std::array< uint8_t, 5 > read_buf{};
+        auto fut = start< io_result >(reactor, [&]() -> sisl::async::light_task< io_result > {
+            auto const w = co_await async_write(*drive, write_buf.data(), write_buf.size(), 0);
+            if (!w) { co_return w; }
+            co_return co_await async_recv(sock, std::span< uint8_t >(read_buf));
+        });
+        ASSERT_EQ(fut.wait_for(std::chrono::milliseconds{200}), std::future_status::timeout); // recv parked
+
+        std::array< uint8_t, 5 > const payload{'h', 'e', 'l', 'l', 'o'};
+        ASSERT_EQ(::write(fd1, payload.data(), payload.size()), static_cast< ssize_t >(payload.size()));
+        ASSERT_EQ(fut.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+        auto const result = fut.get();
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(*result, payload.size());
+    }
+    drive->reset();
+    ::close(fd1);
+    std::filesystem::remove(dev_path);
+}
+
+// An op that is created but never awaited may be destroyed after its handle is gone.
+TEST_F(NetOpTest, NeverAwaitedOpMayOutliveItsHandle) {
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    std::array< uint8_t, 5 > buf{};
+    iomanager.run_on_wait(reactor, [&]() {
+        auto* const sock = new socket_handle(fd0, thread_specifier{reactor});
+        auto op = async_recv(*sock, std::span< uint8_t >(buf));
+        delete sock; // nothing parked, so the impl is freed inline
+    });              // `op` destroyed here
+    EXPECT_TRUE(peer_sees_eof(fd1, std::chrono::seconds{5}));
+    ::close(fd1);
+}
+
+// Two reactors each dropping a handle owned by the other must not wait on each other.
+TEST_F(NetOpTest, CrossReactorHandleDropsDoNotDeadlock) {
+    auto reactors = two_distinct_worker_reactors();
+    ASSERT_GE(reactors.size(), 2u);
+    auto const [a0, a1] = make_connected_pair();
+    auto const [b0, b1] = make_connected_pair();
+    auto* const on_first = new socket_handle(a0, thread_specifier{reactors[0]});
+    auto* const on_second = new socket_handle(b0, thread_specifier{reactors[1]});
+
+    std::latch both_ready{2};
+    std::promise< void > first_done;
+    std::promise< void > second_done;
+    auto first_fut = first_done.get_future();
+    auto second_fut = second_done.get_future();
+    iomanager.run_on_forget(reactors[0], [&]() {
+        both_ready.arrive_and_wait();
+        delete on_second;
+        first_done.set_value();
+    });
+    iomanager.run_on_forget(reactors[1], [&]() {
+        both_ready.arrive_and_wait();
+        delete on_first;
+        second_done.set_value();
+    });
+
+    ASSERT_EQ(first_fut.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+    ASSERT_EQ(second_fut.wait_for(std::chrono::seconds{5}), std::future_status::ready);
+    EXPECT_TRUE(peer_sees_eof(a1, std::chrono::seconds{5}));
+    EXPECT_TRUE(peer_sees_eof(b1, std::chrono::seconds{5}));
+    ::close(a1);
+    ::close(b1);
+}
+
+// Covers both the raw accept4() fast path and the parked uring accept.
+TEST_F(NetOpTest, AcceptedFdIsCloseOnExec) {
+    auto* const reactor = pick_a_worker_reactor();
+    auto const [listen_fd, path] = make_listening_socket(2);
+    auto const addr = make_addr(path);
+    {
+        listener_handle listener(listen_fd, thread_specifier{reactor});
+
+        int const early_client = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        ASSERT_GE(early_client, 0);
+        ASSERT_EQ(::connect(early_client, reinterpret_cast< sockaddr const* >(&addr), sizeof(addr)), 0);
+        auto const fast = start< accept_result >(reactor, [&]() { return async_accept(listener); }).get();
+        ASSERT_TRUE(fast.has_value());
+        EXPECT_TRUE(is_cloexec(*fast));
+
+        auto fut = start< accept_result >(reactor, [&]() { return async_accept(listener); });
+        ASSERT_EQ(fut.wait_for(std::chrono::milliseconds{100}), std::future_status::timeout); // parked
+        int const late_client = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        ASSERT_GE(late_client, 0);
+        ASSERT_EQ(::connect(late_client, reinterpret_cast< sockaddr const* >(&addr), sizeof(addr)), 0);
+        auto const parked = fut.get();
+        ASSERT_TRUE(parked.has_value());
+        EXPECT_TRUE(is_cloexec(*parked));
+
+        ::close(*fast);
+        ::close(*parked);
+        ::close(early_client);
+        ::close(late_client);
+    }
+    ::unlink(path.c_str());
+}
+
+#ifdef _PRERELEASE
+// Forces the -EAGAIN that mainline 5.15-5.17 returns for IORING_OP_ACCEPT on an O_NONBLOCK listener: the
+// accept must still park (via poll) and complete once a client connects, rather than fail or spin.
+TEST_F(NetOpTest, AcceptFallsBackToPollWhenUringAcceptReturnsEagain) {
+    flip::FlipClient fc(iomgr_flip::instance());
+    flip::FlipFrequency freq;
+    freq.set_count(1);
+    freq.set_percent(100);
+    fc.inject_noreturn_flip("net_accept_uring_eagain", {}, freq);
+
+    auto* const reactor = pick_a_worker_reactor();
+    auto const [listen_fd, path] = make_listening_socket(2);
+    auto const addr = make_addr(path);
+    {
+        listener_handle listener(listen_fd, thread_specifier{reactor});
+        for (int round = 0; round < 2; ++round) { // second round: the uring path is back to normal
+            auto fut = start< accept_result >(reactor, [&]() { return async_accept(listener); });
+            ASSERT_EQ(fut.wait_for(std::chrono::milliseconds{100}), std::future_status::timeout) << round;
+            int const client = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            ASSERT_GE(client, 0);
+            ASSERT_EQ(::connect(client, reinterpret_cast< sockaddr const* >(&addr), sizeof(addr)), 0) << round;
+            ASSERT_EQ(fut.wait_for(std::chrono::seconds{5}), std::future_status::ready) << round;
+            auto const result = fut.get();
+            ASSERT_TRUE(result.has_value()) << round;
+            EXPECT_TRUE(is_cloexec(*result)) << round;
+            ::close(*result);
+            ::close(client);
+        }
+    }
+    EXPECT_FALSE(iomgr_flip::instance()->test_flip("net_accept_uring_eagain")); // the injection was consumed
+    ::unlink(path.c_str());
+}
+#endif
+
 // Not a NetOpTest fixture: exercises a caller that does NOT follow socket_handle's "destroy before the
 // reactor stops" contract, so it needs its own start/stop rather than NetOpTest::TearDown's.
-TEST(NetOpReactorStopTest, CancelsOutstandingRecvInstead) {
+class NetOpReactorStopTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!kernel_supports_cancel_any()) { GTEST_SKIP() << "needs io_uring cancel-any/all (kernel 5.19+)"; }
+    }
+};
+
+TEST_F(NetOpReactorStopTest, CancelsOutstandingRecvInstead) {
     ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
     auto const [fd0, fd1] = make_connected_pair();
     IOReactor* reactor{nullptr};
@@ -1111,7 +1393,7 @@ TEST(NetOpReactorStopTest, CancelsOutstandingRecvInstead) {
 
 // Same drain path as CancelsOutstandingRecvInstead, for a parked accept and a parked (no-timeout) connect,
 // since drain_outstanding_ops() cancels the whole ring in one shot and must cover every op kind.
-TEST(NetOpReactorStopTest, CancelsOutstandingAcceptAndConnectInstead) {
+TEST_F(NetOpReactorStopTest, CancelsOutstandingAcceptAndConnectInstead) {
     ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
     IOReactor* reactor{nullptr};
     iomanager.run_on_wait(reactor_regex::random_worker, [&reactor]() { reactor = iomanager.this_reactor(); });
@@ -1131,14 +1413,10 @@ TEST(NetOpReactorStopTest, CancelsOutstandingAcceptAndConnectInstead) {
     });
     ASSERT_FALSE(accept_completed);
 
-    // Same TEST-NET-1 target as ConnectTimesOut, with no timeout: genuinely still pending (not resolved
-    // by its own timeout) by the time stop() runs below.
+    // No timeout: still pending when stop() runs below.
+    auto target = make_unresponsive_listener();
     int const client_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     ASSERT_GE(client_fd, 0);
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(80);
-    ASSERT_EQ(::inet_pton(AF_INET, "192.0.2.1", &addr.sin_addr), 1);
 
     std::expected< void, std::error_condition > connect_res;
     bool connect_completed{false};
@@ -1147,7 +1425,7 @@ TEST(NetOpReactorStopTest, CancelsOutstandingAcceptAndConnectInstead) {
            bool& done) -> sisl::async::light_task< void > {
             out = co_await async_connect(fd, reinterpret_cast< sockaddr* >(&a), sizeof(a), thread_specifier{r});
             done = true;
-        }(client_fd, addr, reactor, connect_res, connect_completed)
+        }(client_fd, target.addr, reactor, connect_res, connect_completed)
                               .detach();
     });
     ASSERT_FALSE(connect_completed);
@@ -1158,18 +1436,18 @@ TEST(NetOpReactorStopTest, CancelsOutstandingAcceptAndConnectInstead) {
     EXPECT_FALSE(accept_res.has_value());
     EXPECT_TRUE(connect_completed);
     ASSERT_FALSE(connect_res.has_value());
-    // No timeout was armed on this connect -- cancelled only by the bulk cancel at reactor stop, not by its
-    // own (nonexistent) deadline, so this must be connection_aborted, not timed_out.
-    EXPECT_EQ(connect_res.error(), std::make_error_condition(std::errc::connection_aborted));
+    // No timeout was armed, so this was the reactor-stop cancel, not a timed_out.
+    EXPECT_EQ(connect_res.error(), std::make_error_condition(std::errc::operation_canceled));
 
     ::close(client_fd);
+    close_unresponsive_listener(target);
     ::unlink(path.c_str());
 }
 
 // A disk write and a net recv both outstanding on the same reactor when it stops. Checks only that
 // neither hangs: the net recv must resolve via cancellation (nothing ever unblocks it), while the disk
 // write may resolve via normal completion or cancellation depending on timing -- either is acceptable.
-TEST(NetOpReactorStopTest, CancelsOutstandingDiskAndNetIOInstead) {
+TEST_F(NetOpReactorStopTest, CancelsOutstandingDiskAndNetIOInstead) {
     ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
     std::string const dev_path = "/tmp/iomgr_net_op_test_drive_stop_" + std::to_string(::getpid());
     {
@@ -1180,7 +1458,10 @@ TEST(NetOpReactorStopTest, CancelsOutstandingDiskAndNetIOInstead) {
     std::filesystem::resize_file(dev_path, 1024 * 1024);
     auto drive_result = open_drive(dev_path, O_CREAT | O_RDWR);
     ASSERT_TRUE(drive_result.has_value());
-    auto drive = std::move(drive_result.value());
+    // Leaked like the socket below: a drive_handle must be released before iomanager.stop(), and this
+    // test needs the write still in flight when stop() runs.
+    auto* const drive = new drive_handle(std::move(drive_result.value()));
+    ignore_leak(drive);
 
     IOReactor* reactor{nullptr};
     iomanager.run_on_wait(reactor_regex::random_worker, [&reactor]() { reactor = iomanager.this_reactor(); });
@@ -1197,7 +1478,7 @@ TEST(NetOpReactorStopTest, CancelsOutstandingDiskAndNetIOInstead) {
     bool net_completed{false};
 
     iomanager.run_on_wait(reactor, [&]() {
-        detach(async_write(drive, write_buf.data(), write_buf.size(), 0), [&](io_result r) {
+        detach(async_write(*drive, write_buf.data(), write_buf.size(), 0), [&](io_result r) {
             drive_result_out = std::move(r);
             drive_completed = true;
         });
@@ -1215,8 +1496,258 @@ TEST(NetOpReactorStopTest, CancelsOutstandingDiskAndNetIOInstead) {
     EXPECT_FALSE(net_result_out.has_value()); // nothing ever wrote to fd1 to unblock it
 
     ::close(fd1);
-    drive.reset();
     std::filesystem::remove(dev_path);
+}
+
+// The handler owns its socket and destroys it once the drain cancels its recv, so teardown() runs while
+// the channel's own scope is already stopped. The fd must still get closed rather than leak.
+TEST_F(NetOpReactorStopTest, SocketDestroyedDuringDrainIsStillClosed) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    auto* const sock = new socket_handle(fd0, thread_specifier{reactor});
+
+    io_result result{0};
+    bool completed{false};
+    std::array< uint8_t, 5 > read_buf{};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle* s, std::span< uint8_t > buf, io_result& out, bool& done) -> sisl::async::light_task< void > {
+            out = co_await async_recv(*s, buf);
+            delete s;
+            done = true;
+        }(sock, std::span< uint8_t >(read_buf), result, completed)
+                                                                                          .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    iomanager.stop();
+
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), std::make_error_condition(std::errc::operation_canceled));
+    std::array< uint8_t, 1 > b{};
+    EXPECT_EQ(::recv(fd1, b.data(), b.size(), MSG_DONTWAIT), 0); // EOF: fd0 was actually closed
+    ::close(fd1);
+}
+
+// A handler resumed by net's drain that then does drive I/O and drops its socket: drive must still be up
+// for the write, and the socket teardown that follows runs after net has already stopped.
+TEST_F(NetOpReactorStopTest, DriveIOFromNetDrainCompletesAndSocketIsClosed) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
+    auto const dev_path = make_temp_drive_file("drive_from_drain");
+    auto drive_result = open_drive(dev_path, O_CREAT | O_RDWR);
+    ASSERT_TRUE(drive_result.has_value());
+    // Leaked; see CancelsOutstandingDiskAndNetIOInstead.
+    auto* const drive = new drive_handle(std::move(drive_result.value()));
+    ignore_leak(drive);
+
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    auto* const sock = new socket_handle(fd0, thread_specifier{reactor});
+
+    io_result recv_res{0};
+    io_result write_res{0};
+    bool completed{false};
+    std::array< uint8_t, 5 > read_buf{};
+    std::array< char, 4096 > write_buf{};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle* s, drive_handle* d, std::span< uint8_t > rbuf, std::span< char > wbuf, io_result& r1,
+           io_result& r2, bool& done) -> sisl::async::light_task< void > {
+            r1 = co_await async_recv(*s, rbuf);
+            r2 = co_await async_write(*d, wbuf.data(), static_cast< uint32_t >(wbuf.size()), 0);
+            delete s;
+            done = true;
+        }(sock, drive, std::span< uint8_t >(read_buf), std::span< char >(write_buf), recv_res, write_res, completed)
+                                             .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    iomanager.stop();
+
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(recv_res.has_value());
+    EXPECT_EQ(recv_res.error(), std::make_error_condition(std::errc::operation_canceled));
+    EXPECT_TRUE(write_res.has_value());
+    EXPECT_TRUE(peer_sees_eof(fd1, std::chrono::seconds{1}));
+    ::close(fd1);
+    std::filesystem::remove(dev_path);
+}
+
+#ifdef _PRERELEASE
+// An accept completion reaped by the drain itself that turns out retryable (-ECONNABORTED) must not be
+// resubmitted: the drain's one-shot bulk cancel has already run, so nothing would cancel the new SQE.
+TEST_F(NetOpReactorStopTest, InternalAcceptRetryDuringDrainIsCancelled) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
+
+    // A user reactor, so the test can stop it from inside a message handler with stop_io_loop(): no other
+    // message reaches it in between, so the drain -- not the normal net sentinel -- reaps the accept's CQE.
+    std::promise< IOReactor* > started;
+    auto started_fut = started.get_future();
+    std::thread user_thread([&started]() {
+        iomanager.become_user_reactor(INTERRUPT_LOOP, nullptr, [&started](bool is_started) {
+            if (is_started) { started.set_value(iomanager.this_reactor()); }
+        });
+    });
+    auto* const reactor = started_fut.get();
+
+    auto const [listen_fd, path] = make_listening_socket();
+    auto* const listener = new listener_handle(listen_fd, thread_specifier{reactor}); // leaked; see above
+    ignore_leak(listener);
+
+    accept_result result{-1};
+    bool completed{false};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](listener_handle& l, accept_result& out, bool& done) -> sisl::async::light_task< void > {
+            out = co_await async_accept(l);
+            done = true;
+        }(*listener, result, completed)
+                                                                      .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    flip::FlipClient fc(iomgr_flip::instance());
+    flip::FlipFrequency freq;
+    freq.set_count(1);
+    freq.set_percent(100);
+    fc.inject_noreturn_flip("net_accept_uring_connaborted", {}, freq);
+
+    int client_fd{-1};
+    auto const start = std::chrono::steady_clock::now();
+    iomanager.run_on_forget(reactor, [&]() {
+        using namespace std::chrono_literals;
+        client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        auto const addr = make_addr(path);
+        (void)::connect(client_fd, reinterpret_cast< sockaddr const* >(&addr), sizeof(addr));
+        auto* const ring = &UringNetInterface::this_channel()->m_ring;
+        auto const deadline = std::chrono::steady_clock::now() + 5s;
+        while ((::io_uring_cq_ready(ring) == 0) && (std::chrono::steady_clock::now() < deadline)) {
+            std::this_thread::sleep_for(1ms);
+        }
+        iomanager.stop_io_loop();
+    });
+    user_thread.join();
+    auto const elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_FALSE(iomgr_flip::instance()->test_flip("net_accept_uring_connaborted")); // the drain reaped it
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), std::make_error_condition(std::errc::operation_canceled));
+    EXPECT_LT(elapsed, std::chrono::seconds{3}); // well under the drain's 5 s give-up bound
+    ::close(client_fd);
+    ::unlink(path.c_str());
+    iomanager.stop();
+}
+#endif
+
+// A connect issued from a handler resumed by the drain (e.g. a reconnect loop) must fail fast rather
+// than leave its caller suspended forever.
+TEST_F(NetOpReactorStopTest, ConnectIssuedDuringDrainFailsFast) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    auto* const sock = new socket_handle(fd0, thread_specifier{reactor}); // leaked; see CancelsOutstandingRecvInstead
+    ignore_leak(sock);
+
+    auto const [listen_fd, path] = make_listening_socket();
+    int const client_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(client_fd, 0);
+
+    std::expected< void, std::error_condition > connect_res;
+    bool completed{false};
+    std::array< uint8_t, 5 > read_buf{};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle& s, std::span< uint8_t > buf, int fd, sockaddr_un a, IOReactor* r,
+           std::expected< void, std::error_condition >& out, bool& done) -> sisl::async::light_task< void > {
+            (void)co_await async_recv(s, buf);
+            out = co_await async_connect(fd, reinterpret_cast< sockaddr* >(&a), sizeof(a), thread_specifier{r});
+            done = true;
+        }(*sock, std::span< uint8_t >(read_buf), client_fd, make_addr(path), reactor, connect_res, completed)
+                                                                                .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    iomanager.stop();
+
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(connect_res.has_value());
+    EXPECT_EQ(connect_res.error(), std::make_error_condition(std::errc::operation_canceled));
+
+    ::close(client_fd);
+    ::close(listen_fd);
+    ::unlink(path.c_str());
+    ::close(fd1);
+}
+
+// A handler that retries its recv after the drain cancels it must get operation_canceled immediately,
+// not park again where the drain's one-shot bulk cancel can no longer reach it.
+TEST_F(NetOpReactorStopTest, RecvRetriedDuringDrainFailsFast) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
+    auto const [fd0, fd1] = make_connected_pair();
+    auto* const reactor = pick_a_worker_reactor();
+    auto* const sock = new socket_handle(fd0, thread_specifier{reactor}); // leaked; see CancelsOutstandingRecvInstead
+    ignore_leak(sock);
+
+    io_result first{0};
+    io_result retry{0};
+    bool completed{false};
+    std::array< uint8_t, 5 > read_buf{};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](socket_handle& s, std::span< uint8_t > buf, io_result& out1, io_result& out2,
+           bool& done) -> sisl::async::light_task< void > {
+            out1 = co_await async_recv(s, buf);
+            out2 = co_await async_recv(s, buf);
+            done = true;
+        }(*sock, std::span< uint8_t >(read_buf), first, retry, completed)
+                              .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    auto const start = std::chrono::steady_clock::now();
+    iomanager.stop();
+    auto const elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(first.has_value());
+    EXPECT_EQ(first.error(), std::make_error_condition(std::errc::operation_canceled));
+    ASSERT_FALSE(retry.has_value());
+    EXPECT_EQ(retry.error(), std::make_error_condition(std::errc::operation_canceled));
+    EXPECT_LT(elapsed, std::chrono::seconds{2}); // well under the drain's 5 s give-up bound
+    ::close(fd1);
+}
+
+// Same as RecvRetriedDuringDrainFailsFast, for an accept loop.
+TEST_F(NetOpReactorStopTest, AcceptRetriedDuringDrainFailsFast) {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 2});
+    auto* const reactor = pick_a_worker_reactor();
+    auto const [listen_fd, path] = make_listening_socket();
+    auto* const listener = new listener_handle(listen_fd, thread_specifier{reactor}); // leaked; see above
+    ignore_leak(listener);
+
+    accept_result first{-1};
+    accept_result retry{-1};
+    bool completed{false};
+    iomanager.run_on_wait(reactor, [&]() {
+        [](listener_handle& l, accept_result& out1, accept_result& out2,
+           bool& done) -> sisl::async::light_task< void > {
+            out1 = co_await async_accept(l);
+            out2 = co_await async_accept(l);
+            done = true;
+        }(*listener, first, retry, completed)
+                              .detach();
+    });
+    ASSERT_FALSE(completed);
+
+    auto const start = std::chrono::steady_clock::now();
+    iomanager.stop();
+    auto const elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_TRUE(completed);
+    ASSERT_FALSE(first.has_value());
+    EXPECT_EQ(first.error(), std::make_error_condition(std::errc::operation_canceled));
+    ASSERT_FALSE(retry.has_value());
+    EXPECT_EQ(retry.error(), std::make_error_condition(std::errc::operation_canceled));
+    EXPECT_LT(elapsed, std::chrono::seconds{2});
+    ::unlink(path.c_str());
 }
 
 namespace {
@@ -1251,6 +1782,24 @@ TEST(NetOpDeathTest, SecondConcurrentRecvOnSameSocketAborts) {
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     EXPECT_EXIT(trigger_second_concurrent_recv(), ::testing::KilledBySignal(SIGABRT), "");
 }
+
+#ifndef NDEBUG
+namespace {
+void use_moved_from_socket_handle() {
+    ioenvironment.with_iomgr(iomgr_params{.num_threads = 1});
+    auto const [fd0, fd1] = make_connected_pair();
+    socket_handle a(fd0, thread_specifier{pick_a_worker_reactor()});
+    socket_handle b(std::move(a));
+    (void)a.fd();
+    ::close(fd1);
+}
+} // namespace
+
+TEST(NetOpDeathTest, MovedFromSocketHandleAborts) {
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    EXPECT_EXIT(use_moved_from_socket_handle(), ::testing::KilledBySignal(SIGABRT), "");
+}
+#endif
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);

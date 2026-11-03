@@ -34,10 +34,11 @@ class net_op;
 // Owns one fd's reactor registration for its whole life; construct once per socket, never per operation.
 // Holds at most one parked recv waiter and one parked send waiter, so callers must serialize their own
 // recv and send loops. All net_op calls on a handle must run on the reactor it was constructed with;
-// construction and destruction may run on any thread and hop onto that reactor internally.
+// construction and destruction may run on any thread. Destruction off that reactor posts the teardown to
+// it and returns immediately, so the fd may still be open when the destructor returns.
 //
-// Must be destroyed before its owning reactor stops: destruction also hops onto that reactor, and once
-// the reactor has stopped there is nothing to hop onto. Doing so is undefined behavior -- it can corrupt
+// Must be destroyed before its owning reactor stops: destruction posts to that reactor, and once the
+// reactor has stopped there is nothing to post to. Doing so is undefined behavior -- it can corrupt
 // the reactor object mid-teardown (typically a pure-virtual-call crash), not just leak or hang. Callers
 // holding many handles must release them before IOManager::stop(), as with timers and other per-reactor
 // resources.
