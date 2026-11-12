@@ -13,6 +13,8 @@
  * specific language governing permissions and limitations under the License.
  **************************************************************************/
 #include <unordered_set>
+#include <chrono>
+#include <algorithm>
 
 #include <iomgr/iomgr.hpp>
 #include "iomgr_timer_impl.hpp"
@@ -133,7 +135,28 @@ void timer_epoll::on_timer_fd_notification(IODevice* iodev) {
     }
 
     if (exp_count > 1) {
-        LOGWARN("Timer fd={} expired {} times without being processed, invoking callback once", iodev->fd(), exp_count);
+        // A busy reactor regularly services its timer fds late, and with sub-millisecond recurring timers that
+        // happens thousands of times a second. Logging each occurrence floods the log (and costs the reactor more
+        // time), so aggregate per thread and report at most once a minute.
+        static thread_local uint64_t s_late_count{0};
+        static thread_local uint64_t s_missed_ticks{0};
+        static thread_local uint64_t s_max_exp_count{0};
+        static thread_local auto s_last_report{std::chrono::steady_clock::now()};
+
+        ++s_late_count;
+        s_missed_ticks += exp_count - 1;
+        s_max_exp_count = std::max(s_max_exp_count, exp_count);
+        auto const now = std::chrono::steady_clock::now();
+        if (now - s_last_report >= std::chrono::minutes(1)) {
+            LOGWARN("Timers on this thread were processed late {} times in the last {}s: {} expirations coalesced, "
+                    "up to {} at once (last: fd={} expired {} times); callbacks invoked once each time",
+                    s_late_count, std::chrono::duration_cast< std::chrono::seconds >(now - s_last_report).count(),
+                    s_missed_ticks, s_max_exp_count, iodev->fd(), exp_count);
+            s_late_count = 0;
+            s_missed_ticks = 0;
+            s_max_exp_count = 0;
+            s_last_report = now;
+        }
     }
     ((timer_epoll*)iodev->tinfo->parent_timer)->on_timer_armed(iodev, exp_count);
 }
